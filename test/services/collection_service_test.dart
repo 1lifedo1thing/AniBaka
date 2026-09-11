@@ -1,8 +1,9 @@
+import '../support/app_dependencies.dart';
 import 'dart:convert';
 
 import 'package:baka/instance.dart';
 import 'package:baka/models/collection.dart';
-import 'package:baka/services/collection_service.dart';
+import 'package:baka/services/collection/collection_repository.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -15,25 +16,26 @@ void main() {
       ]),
     });
     Instances.sp = await SharedPreferences.getInstance();
+    configureTestServices();
   });
 
   test('local indexes and cached stats follow mutations', () async {
-    expect((await CollectionService.getByBgmId(101))?.postId, 11);
-    expect((await CollectionService.getByPostId(12))?.bgmId, 102);
-    var stats = await CollectionService.getStats();
+    expect((await collections.getByBgmId(101))?.postId, 11);
+    expect((await collections.getByPostId(12))?.bgmId, 102);
+    var stats = await collections.getStats();
     expect(stats?.wish, 1);
     expect(stats?.doing, 1);
 
-    await CollectionService.addOrUpdate(
+    await collections.addOrUpdate(
       AnimeCollection(postId: 11, bgmId: 101, status: 2),
     );
-    stats = await CollectionService.getStats();
+    stats = await collections.getStats();
     expect(stats?.wish, 0);
     expect(stats?.collect, 1);
-    expect((await CollectionService.getByPostId(11))?.status, 2);
+    expect((await collections.getByPostId(11))?.status, 2);
 
-    expect(await CollectionService.deleteByBgmId(102), isTrue);
-    expect(await CollectionService.getByBgmId(102), isNull);
-    expect((await CollectionService.getStats())?.total, 1);
+    expect(await collections.deleteByBgmId(102), isTrue);
+    expect(await collections.getByBgmId(102), isNull);
+    expect((await collections.getStats())?.total, 1);
   });
 }

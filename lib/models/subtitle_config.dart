@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 const String _subtitleSettingsKey = 'subtitle_settings';
 
 /// 字幕设置数据模型
+@immutable
 class SubtitleConfig {
   final double fontSize;
   final double position; // 0.0 (顶部) ~ 100.0 (底部)
@@ -62,19 +63,17 @@ class SubtitleConfig {
     bool? bold,
     double? opacity,
     String? fontFamily,
-  }) {
-    return SubtitleConfig(
-      fontSize: fontSize ?? this.fontSize,
-      position: position ?? this.position,
-      fontColor: fontColor ?? this.fontColor,
-      backgroundColor: backgroundColor ?? this.backgroundColor,
-      borderWidth: borderWidth ?? this.borderWidth,
-      borderColor: borderColor ?? this.borderColor,
-      bold: bold ?? this.bold,
-      opacity: opacity ?? this.opacity,
-      fontFamily: fontFamily ?? this.fontFamily,
-    );
-  }
+  }) => SubtitleConfig(
+    fontSize: fontSize ?? this.fontSize,
+    position: position ?? this.position,
+    fontColor: fontColor ?? this.fontColor,
+    backgroundColor: backgroundColor ?? this.backgroundColor,
+    borderWidth: borderWidth ?? this.borderWidth,
+    borderColor: borderColor ?? this.borderColor,
+    bold: bold ?? this.bold,
+    opacity: opacity ?? this.opacity,
+    fontFamily: fontFamily ?? this.fontFamily,
+  );
 
   Map<String, dynamic> toJson() => {
     'fontSize': fontSize,
@@ -87,6 +86,40 @@ class SubtitleConfig {
     'opacity': opacity,
     'fontFamily': fontFamily,
   };
+
+  factory SubtitleConfig.fromJson(Map<String, dynamic> json) => SubtitleConfig(
+    fontSize: (json['fontSize'] as num?)?.toDouble() ?? defaultFontSize,
+    position: (json['position'] as num?)?.toDouble() ?? defaultPosition,
+    fontColor: _parseColor(json['fontColor'], defaultFontColor),
+    backgroundColor: _parseColor(
+      json['backgroundColor'],
+      defaultBackgroundColor,
+    ),
+    borderWidth:
+        (json['borderWidth'] as num?)?.toDouble() ?? defaultBorderWidth,
+    borderColor: _parseColor(json['borderColor'], defaultBorderColor),
+    bold: json['bold'] as bool? ?? defaultBold,
+    opacity: (json['opacity'] as num?)?.toDouble() ?? defaultOpacity,
+    fontFamily: json['fontFamily'] as String? ?? defaultFontFamily,
+  );
+
+  static Color _parseColor(dynamic value, Color fallback) {
+    if (value is String && value.isNotEmpty) {
+      final parsed = int.tryParse(value, radix: 16);
+      if (parsed != null) return Color(parsed);
+    }
+    return fallback;
+  }
+
+  static SubtitleConfig load() {
+    final raw = Instances.sp.getString(_subtitleSettingsKey);
+    return raw == null
+        ? const SubtitleConfig()
+        : SubtitleConfig.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+  }
+
+  Future<void> save() =>
+      Instances.sp.setString(_subtitleSettingsKey, jsonEncode(toJson()));
 
   @override
   bool operator ==(Object other) =>
@@ -114,49 +147,9 @@ class SubtitleConfig {
     opacity,
     fontFamily,
   );
-
-  factory SubtitleConfig.fromJson(Map<String, dynamic> json) {
-    return SubtitleConfig(
-      fontSize: (json['fontSize'] as num?)?.toDouble() ?? defaultFontSize,
-      position: (json['position'] as num?)?.toDouble() ?? defaultPosition,
-      fontColor: _parseColor(json['fontColor'], defaultFontColor),
-      backgroundColor: _parseColor(
-        json['backgroundColor'],
-        defaultBackgroundColor,
-      ),
-      borderWidth:
-          (json['borderWidth'] as num?)?.toDouble() ?? defaultBorderWidth,
-      borderColor: _parseColor(json['borderColor'], defaultBorderColor),
-      bold: json['bold'] as bool? ?? defaultBold,
-      opacity: (json['opacity'] as num?)?.toDouble() ?? defaultOpacity,
-      fontFamily: json['fontFamily'] as String? ?? defaultFontFamily,
-    );
-  }
-
-  static Color _parseColor(dynamic value, Color fallback) {
-    if (value is String && value.isNotEmpty) {
-      final parsed = int.tryParse(value, radix: 16);
-      if (parsed != null) return Color(parsed);
-    }
-    return fallback;
-  }
-
-  /// 从持久化加载
-  static SubtitleConfig load() {
-    final raw = Instances.sp.getString(_subtitleSettingsKey);
-    return raw == null
-        ? const SubtitleConfig()
-        : SubtitleConfig.fromJson(jsonDecode(raw));
-  }
-
-  /// 持久化保存
-  Future<void> save() =>
-      Instances.sp.setString(_subtitleSettingsKey, jsonEncode(toJson()));
 }
 
 extension SubtitleColorHex on Color {
-  /// ARGB 八位十六进制。四个通道先拼成一个 32 位整数再一次成串，
-  /// 取代每通道 `toRadixString + padLeft` 各产一对临时串的四段同构写法。
   String toSubtitleHex() {
     var packed = 0;
     for (final channel in [a, r, g, b]) {

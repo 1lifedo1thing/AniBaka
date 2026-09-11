@@ -1,6 +1,6 @@
 import 'package:baka/models/playback_state.dart';
-import 'package:baka/widgets/baka_player/controller.dart';
-import 'package:baka/widgets/baka_player/utils.dart';
+import '../controller.dart';
+import 'package:baka/utils/duration_utils.dart';
 import 'package:flutter/material.dart';
 
 const _indicatorAnimationDuration = Duration(milliseconds: 200);
@@ -55,6 +55,7 @@ class PlayerToastIndicators extends StatelessWidget {
         final showSpeed = overlay.doubleSpeed;
         final showProgress = timeline.seeking;
         final showBoth = showSpeed && showProgress;
+
         return IgnorePointer(
           child: Align(
             alignment: Alignment.topCenter,
@@ -111,10 +112,11 @@ class PlayerToastIndicators extends StatelessWidget {
 }
 
 String _formatLongPressRate(double rate) {
-  final value = rate.abs().toStringAsFixed(1).replaceFirst(RegExp(r'\.0$'), '');
-  if (rate < 0) return '\u5feb\u9000 ${value}x';
-  if (rate == 0) return '\u6682\u505c 0x';
-  return '\u5feb\u8fdb ${value}x';
+  final abs = rate.abs();
+  final value = abs % 1 == 0 ? abs.toInt().toString() : abs.toStringAsFixed(1);
+  if (rate < 0) return '快退 ${value}x';
+  if (rate == 0) return '暂停 0x';
+  return '快进 ${value}x';
 }
 
 class PlayerVolumeBrightnessIndicators extends StatelessWidget {
@@ -159,11 +161,15 @@ class PlayerErrorIndicator extends StatelessWidget {
   final PlaybackController controller;
   final bool canSearchSource;
   final VoidCallback onSearch;
+  final bool show;
+  final VoidCallback? onAiRepair;
 
   const PlayerErrorIndicator({
     required this.controller,
     required this.canSearchSource,
     required this.onSearch,
+    this.show = true,
+    this.onAiRepair,
     super.key,
   });
 
@@ -172,7 +178,7 @@ class PlayerErrorIndicator extends StatelessWidget {
     return ValueListenableBuilder<PlaybackCoreState>(
       valueListenable: controller.core,
       builder: (context, core, _) {
-        if (!core.failed) {
+        if (!core.failed || !show) {
           return const SizedBox.shrink();
         }
 
@@ -180,54 +186,74 @@ class PlayerErrorIndicator extends StatelessWidget {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Text(
-                '\u64ad\u653e\u5931\u8d25\uff0c\u8bf7\u6362\u6e90\u6216\u5230 BAKA \u62a5\u9519',
-                style: TextStyle(color: Colors.white),
+              Text(
+                onAiRepair == null
+                    ? '播放失败，请换源或到 BAKA 报错'
+                    : '播放失败，请换源或使用 AI 修复',
+                style: const TextStyle(color: Colors.white),
               ),
               const SizedBox(height: 10),
-              if (canSearchSource &&
-                  controller.mediaInfo.value.title.isNotEmpty)
-                InkWell(
-                  onTap: onSearch,
-                  borderRadius: BorderRadius.circular(20),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.2),
-                        width: 1,
-                      ),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                alignment: WrapAlignment.center,
+                children: [
+                  if (canSearchSource &&
+                      controller.mediaInfo.value.title.isNotEmpty)
+                    _errorAction(
+                      icon: Icons.search_rounded,
+                      label: '搜索番剧源',
+                      onTap: onSearch,
                     ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 10,
+                  if (onAiRepair != null)
+                    _errorAction(
+                      icon: Icons.auto_awesome_rounded,
+                      label: 'AI 修复当前源',
+                      onTap: onAiRepair!,
                     ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.search_rounded,
-                          color: Colors.white,
-                          size: 18,
-                        ),
-                        SizedBox(width: 8),
-                        Text(
-                          '\u641c\u7d22\u756a\u5267\u6e90',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+                ],
+              ),
             ],
           ),
         );
       },
+    );
+  }
+
+  Widget _errorAction({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.2),
+            width: 1,
+          ),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: Colors.white, size: 18),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -279,9 +305,6 @@ class _SeekFeedback extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final icon = isBackward
-        ? Icons.fast_rewind_rounded
-        : Icons.fast_forward_rounded;
     return Container(
       decoration: _indicatorDecoration,
       height: 36.0,
@@ -290,7 +313,11 @@ class _SeekFeedback extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.center,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, color: Colors.white, size: 16),
+          Icon(
+            isBackward ? Icons.fast_rewind_rounded : Icons.fast_forward_rounded,
+            color: Colors.white,
+            size: 16,
+          ),
           const SizedBox(width: 4),
           Text(
             '${isBackward ? '快退' : '快进'} $seconds 秒',
@@ -423,13 +450,6 @@ class _VerticalIndicator extends StatelessWidget {
                         decoration: BoxDecoration(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(3),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.white.withValues(alpha: 0.3),
-                              blurRadius: 5,
-                              spreadRadius: 1,
-                            ),
-                          ],
                         ),
                       ),
                     ),
@@ -456,3 +476,4 @@ final _indicatorDecoration = BoxDecoration(
     ),
   ],
 );
+

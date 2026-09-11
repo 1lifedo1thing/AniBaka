@@ -1,8 +1,11 @@
+import '../support/app_dependencies.dart';
+import 'package:baka/core/account_session.dart';
+import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:baka/instance.dart';
-import 'package:baka/services/network_service.dart';
+import 'package:baka/core/api_transport.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -12,16 +15,21 @@ void main() {
 
   setUpAll(() {
     HttpOverrides.global = null;
-    NetUtils.resetHttpClientForTesting();
   });
   tearDownAll(() {
     HttpOverrides.global = testHttpOverrides;
-    NetUtils.resetHttpClientForTesting();
   });
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
     Instances.sp = await SharedPreferences.getInstance();
+    configureTestServices();
+    apiTransport = ApiTransport(
+      session: AccountSession(Instances.sp, refreshTokens: (_) async => null),
+      client: http.Client(),
+      version: 'test',
+    );
+    addTearDown(apiTransport.close);
   });
 
   test('POST timeout is bounded and aborts the in-flight request', () async {
@@ -40,7 +48,7 @@ void main() {
     });
 
     final elapsed = Stopwatch()..start();
-    final result = await NetUtils.post(
+    final result = await apiTransport.post(
       'http://${server.address.address}:${server.port}/slow',
       const {'value': 1},
       timeout: const Duration(milliseconds: 50),
@@ -62,7 +70,7 @@ void main() {
       await request.response.close();
     });
 
-    final result = await NetUtils.postJson<Map<String, dynamic>>(
+    final result = await apiTransport.postJson<Map<String, dynamic>>(
       'http://${server.address.address}:${server.port}/echo',
       const {'value': 7},
       timeout: const Duration(seconds: 1),

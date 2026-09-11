@@ -1,13 +1,13 @@
+import 'package:baka/core/account_session.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:get/get.dart';
+import 'package:get/get.dart' hide ContextExtensionss;
 
-import 'package:baka/app_state.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/pages/mine/mine_profile.dart';
-import 'package:baka/services/app_storage.dart';
-import 'package:baka/services/navigation_service.dart';
-import 'package:baka/services/version_service.dart';
+import 'package:baka/core/app_storage.dart';
+import 'package:baka/app/navigation.dart';
+import 'package:baka/app/update_presenter.dart';
 import 'package:baka/widgets/platform/tv/tv_focusable.dart';
 import 'package:baka/widgets/platform/tv/tv_theme_util.dart';
 import 'package:baka/widgets/platform/tv/tv_log_export_dialog.dart';
@@ -26,7 +26,6 @@ class _TvSettingsPageState extends State<TvSettingsPage> {
   String _cacheSize = '计算中...';
   bool _isCheckingUpdate = false;
   bool _isClearingCache = false;
-  late final AppState _app = Get.find<AppState>();
 
   final List<String> _categories = ['常规偏好', '缓存与数据', '关于与更新'];
 
@@ -83,9 +82,9 @@ class _TvSettingsPageState extends State<TvSettingsPage> {
   }
 
   void _switchHost() {
-    _app.switchHost();
+    Get.find<AccountSession>().switchHost();
     setState(() {});
-    showSnackBar('线路已切换至 ${_app.currentHost}，重启APP后生效');
+    showSnackBar('线路已切换至 ${Get.find<AccountSession>().currentHost}，重启APP后生效');
   }
 
   @override
@@ -221,7 +220,7 @@ class _TvSettingsPageState extends State<TvSettingsPage> {
         _buildSettingCard(
           icon: Icons.alt_route_rounded,
           title: 'APP线路切换',
-          subtitle: '当前线路: ${_app.currentHost}',
+          subtitle: '当前线路: ${Get.find<AccountSession>().currentHost}',
           onPressed: _switchHost,
         ),
       ],

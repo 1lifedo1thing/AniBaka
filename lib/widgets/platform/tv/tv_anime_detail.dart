@@ -7,9 +7,8 @@ import 'package:baka/api/anibaka_api.dart';
 import 'package:baka/models/anime_detail_view_data.dart';
 import 'package:baka/models/collection.dart';
 import 'package:baka/models/playback_episode.dart';
-import 'package:baka/services/bgm_service.dart';
-import 'package:baka/services/collection_service.dart';
-import 'package:baka/services/navigation_service.dart';
+import 'package:baka/services/collection/collection_repository.dart';
+import 'package:baka/app/navigation.dart';
 import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:baka/widgets/anime_detail/video_source_search_sheet.dart';
@@ -67,7 +66,7 @@ class _TvAnimeDetailPlaceholderState extends State<TvAnimeDetailPlaceholder> {
   Future<void> _fetchBgmData() async {
     try {
       if (_bgmInfo.subjectId == null) {
-        _bgmInfo = await BgmService.resolveFromData(_data);
+        _bgmInfo = await resolveBgmFromData(_data);
       }
 
       final subjectId = _subjectId;
@@ -114,12 +113,12 @@ class _TvAnimeDetailPlaceholderState extends State<TvAnimeDetailPlaceholder> {
     try {
       final bgmId = _subjectId;
       if (bgmId != null) {
-        collection = await CollectionService.getByBgmId(bgmId);
+        collection = await collections.getByBgmId(bgmId);
       }
       if (collection == null) {
         final postId = _validPostId;
         if (postId != null) {
-          collection = await CollectionService.getByPostId(postId);
+          collection = await collections.getByPostId(postId);
         }
       }
     } catch (e) {
@@ -149,7 +148,7 @@ class _TvAnimeDetailPlaceholderState extends State<TvAnimeDetailPlaceholder> {
         bgmImage: _bgmInfo.imageUrl,
         bgmTitle: _detail.title,
       );
-      final result = await CollectionService.addOrUpdate(col);
+      final result = await collections.addOrUpdate(col);
       if (result != null && mounted) {
         setState(() => _collection = result);
         showSnackBar('已标记为「${status.label}」');
@@ -166,11 +165,11 @@ class _TvAnimeDetailPlaceholderState extends State<TvAnimeDetailPlaceholder> {
       final bgmId = _collection!.bgmId ?? _subjectId;
       bool success = false;
       if (bgmId != null) {
-        success = await CollectionService.deleteByBgmId(bgmId);
+        success = await collections.deleteByBgmId(bgmId);
       } else {
         final postId = _validPostId;
         if (postId != null) {
-          success = await CollectionService.delete(postId);
+          success = await collections.delete(postId);
         }
       }
       if (success && mounted) {
@@ -702,8 +701,10 @@ class _TvAnimeDetailPlaceholderState extends State<TvAnimeDetailPlaceholder> {
       crossAxisAlignment: CrossAxisAlignment.end,
       mainAxisSize: MainAxisSize.min,
       children: [
-        _buildRatingHistogram(),
-        const SizedBox(width: 24),
+        if (_detail.hasScoreDistribution) ...[
+          _buildRatingHistogram(),
+          const SizedBox(width: 24),
+        ],
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,

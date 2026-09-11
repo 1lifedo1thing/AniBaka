@@ -16,8 +16,6 @@ enum CollectionStatus {
 
   const CollectionStatus(this.value, this.label);
 
-  /// value 与声明顺序一一对应（1..5），直接下标定位后再核对一次，
-  /// 既是 O(1) 也不会因日后调整枚举顺序而失准。
   static CollectionStatus? fromValue(int? value) {
     if (value == null || value < 1 || value > values.length) return null;
     final status = values[value - 1];
@@ -38,6 +36,7 @@ class AnimeCollection {
   final int? epTotal;
   final int? epWatched;
   final String? tags;
+  final List<String>? bangumiTags;
   final bool isPrivate;
   final String? postTitle;
   final String? postCover;
@@ -57,6 +56,7 @@ class AnimeCollection {
     this.epTotal,
     this.epWatched,
     this.tags,
+    this.bangumiTags,
     this.isPrivate = false,
     this.postTitle,
     this.postCover,
@@ -65,57 +65,52 @@ class AnimeCollection {
     this.bgmTitle,
   });
 
-  String get displayTitle {
-    if (postTitle != null && postTitle!.isNotEmpty) return postTitle!;
-    if (bgmTitle != null && bgmTitle!.isNotEmpty) return bgmTitle!;
-    return '';
-  }
+  String get displayTitle =>
+      (postTitle != null && postTitle!.isNotEmpty)
+          ? postTitle!
+          : (bgmTitle ?? '');
 
   String get displayCover => bgmImage ?? postCover ?? '';
 
-  factory AnimeCollection.fromJson(Map<String, dynamic> json) {
-    return AnimeCollection(
-      id: BgmUtils.toInt(json['id']),
-      userId: BgmUtils.toInt(json['user_id']),
-      postId: BgmUtils.toInt(json['post_id']),
-      bgmId: BgmUtils.toInt(json['bgm_id']),
-      status: BgmUtils.toInt(json['status']) ?? 1,
-      statusText: json['status_text']?.toString(),
-      rating: BgmUtils.toInt(json['rating']) ?? 0,
-      comment: json['comment']?.toString(),
-      epTotal: BgmUtils.toInt(json['ep_total']),
-      epWatched: BgmUtils.toInt(json['ep_watched']),
-      tags: json['tags']?.toString(),
-      isPrivate: json['is_private'] as bool? ?? false,
-      postTitle: json['post_title']?.toString(),
-      postCover: json['post_cover']?.toString(),
-      bgmRating: BgmUtils.toDouble(json['bgm_rating']),
-      bgmImage: json['bgm_image']?.toString(),
-      bgmTitle: json['bgm_title']?.toString(),
-    );
-  }
+  factory AnimeCollection.fromJson(Map<String, dynamic> json) => AnimeCollection(
+    id: BgmUtils.toInt(json['id']),
+    userId: BgmUtils.toInt(json['user_id']),
+    postId: BgmUtils.toInt(json['post_id']),
+    bgmId: BgmUtils.toInt(json['bgm_id']),
+    status: BgmUtils.toInt(json['status']) ?? 1,
+    statusText: json['status_text']?.toString(),
+    rating: BgmUtils.toInt(json['rating']) ?? 0,
+    comment: json['comment']?.toString(),
+    epTotal: BgmUtils.toInt(json['ep_total']),
+    epWatched: BgmUtils.toInt(json['ep_watched']),
+    tags: json['tags']?.toString(),
+    isPrivate: json['is_private'] as bool? ?? false,
+    postTitle: json['post_title']?.toString(),
+    postCover: json['post_cover']?.toString(),
+    bgmRating: BgmUtils.toDouble(json['bgm_rating']),
+    bgmImage: json['bgm_image']?.toString(),
+    bgmTitle: json['bgm_title']?.toString(),
+  );
 
-  Map<String, dynamic> toJson({bool includeLocalFields = false}) {
-    return {
-      if (includeLocalFields && id != null) 'id': id,
-      if (includeLocalFields && userId != null) 'user_id': userId,
-      if (postId != null) 'post_id': postId,
-      if (bgmId != null) 'bgm_id': bgmId,
-      'status': status,
-      if (includeLocalFields && statusText != null) 'status_text': statusText,
-      if (rating > 0) 'rating': rating,
-      if (comment != null && comment!.isNotEmpty) 'comment': comment,
-      if (epTotal != null) 'ep_total': epTotal,
-      if (epWatched != null) 'ep_watched': epWatched,
-      if (tags != null && tags!.isNotEmpty) 'tags': tags,
-      'is_private': isPrivate,
-      if (postTitle != null && postTitle!.isNotEmpty) 'post_title': postTitle,
-      if (postCover != null && postCover!.isNotEmpty) 'post_cover': postCover,
-      if (bgmImage != null && bgmImage!.isNotEmpty) 'bgm_image': bgmImage,
-      if (bgmTitle != null && bgmTitle!.isNotEmpty) 'bgm_title': bgmTitle,
-      if (includeLocalFields && bgmRating != null) 'bgm_rating': bgmRating,
-    };
-  }
+  Map<String, dynamic> toJson({bool includeLocalFields = false}) => {
+    if (includeLocalFields && id != null) 'id': id,
+    if (includeLocalFields && userId != null) 'user_id': userId,
+    if (postId != null) 'post_id': postId,
+    if (bgmId != null) 'bgm_id': bgmId,
+    'status': status,
+    if (includeLocalFields && statusText != null) 'status_text': statusText,
+    if (rating > 0) 'rating': rating,
+    if (comment != null && comment!.isNotEmpty) 'comment': comment,
+    if (epTotal != null) 'ep_total': epTotal,
+    if (epWatched != null) 'ep_watched': epWatched,
+    if (tags != null && tags!.isNotEmpty) 'tags': tags,
+    'is_private': isPrivate,
+    if (postTitle != null && postTitle!.isNotEmpty) 'post_title': postTitle,
+    if (postCover != null && postCover!.isNotEmpty) 'post_cover': postCover,
+    if (bgmImage != null && bgmImage!.isNotEmpty) 'bgm_image': bgmImage,
+    if (bgmTitle != null && bgmTitle!.isNotEmpty) 'bgm_title': bgmTitle,
+    if (includeLocalFields && bgmRating != null) 'bgm_rating': bgmRating,
+  };
 }
 
 /// 追番收藏列表响应
@@ -132,17 +127,16 @@ class CollectionListResponse {
     required this.pageSize,
   });
 
-  factory CollectionListResponse.fromJson(Map<String, dynamic> json) {
-    return CollectionListResponse(
-      list: (json['list'] as List<dynamic>)
-          .cast<Map<String, dynamic>>()
-          .map(AnimeCollection.fromJson)
-          .toList(growable: false),
-      total: BgmUtils.toInt(json['total']) ?? 0,
-      page: BgmUtils.toInt(json['page']) ?? 1,
-      pageSize: BgmUtils.toInt(json['page_size']) ?? 20,
-    );
-  }
+  factory CollectionListResponse.fromJson(Map<String, dynamic> json) =>
+      CollectionListResponse(
+        list: (json['list'] as List<dynamic>? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(AnimeCollection.fromJson)
+            .toList(growable: false),
+        total: BgmUtils.toInt(json['total']) ?? 0,
+        page: BgmUtils.toInt(json['page']) ?? 1,
+        pageSize: BgmUtils.toInt(json['page_size']) ?? 20,
+      );
 }
 
 /// 收藏统计
@@ -154,7 +148,7 @@ class CollectionStats {
   final int dropped;
   final int total;
 
-  CollectionStats({
+  const CollectionStats({
     this.wish = 0,
     this.collect = 0,
     this.doing = 0,
@@ -163,16 +157,14 @@ class CollectionStats {
     this.total = 0,
   });
 
-  factory CollectionStats.fromJson(Map<String, dynamic> json) {
-    return CollectionStats(
-      wish: BgmUtils.toInt(json['wish']) ?? 0,
-      collect: BgmUtils.toInt(json['collect']) ?? 0,
-      doing: BgmUtils.toInt(json['do']) ?? 0,
-      onHold: BgmUtils.toInt(json['on_hold']) ?? 0,
-      dropped: BgmUtils.toInt(json['dropped']) ?? 0,
-      total: BgmUtils.toInt(json['total']) ?? 0,
-    );
-  }
+  factory CollectionStats.fromJson(Map<String, dynamic> json) => CollectionStats(
+    wish: BgmUtils.toInt(json['wish']) ?? 0,
+    collect: BgmUtils.toInt(json['collect']) ?? 0,
+    doing: BgmUtils.toInt(json['do']) ?? 0,
+    onHold: BgmUtils.toInt(json['on_hold']) ?? 0,
+    dropped: BgmUtils.toInt(json['dropped']) ?? 0,
+    total: BgmUtils.toInt(json['total']) ?? 0,
+  );
 
   int countForStatus(CollectionStatus status) => switch (status) {
     CollectionStatus.wish => wish,

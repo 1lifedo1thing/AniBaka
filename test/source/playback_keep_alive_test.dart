@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:baka/source/model/source_rule.dart';
+import 'package:baka/source/models/source_rule.dart';
 import 'package:baka/source/pipeline_source_adapter.dart';
 import 'package:test/test.dart';
 

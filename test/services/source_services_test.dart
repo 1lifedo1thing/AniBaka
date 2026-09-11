@@ -1,11 +1,12 @@
+import '../support/app_dependencies.dart';
 import 'dart:io';
 
 import 'package:baka/instance.dart';
 import 'package:baka/models/custom_source_config.dart';
 import 'package:baka/models/rule_hub.dart';
-import 'package:baka/services/app_storage.dart';
+import 'package:baka/core/app_storage.dart';
 import 'package:baka/services/source/rule_repository_service.dart';
-import 'package:baka/services/source_adapter_service.dart';
+import 'package:baka/services/source/source_repository.dart';
 import 'package:baka/source/source_registry.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
@@ -21,14 +22,15 @@ void main() {
   setUpAll(() async {
     SharedPreferences.setMockInitialValues({});
     Instances.sp = await SharedPreferences.getInstance();
+    configureTestServices();
 
     hiveDirectory = await Directory.systemTemp.createTemp('baka-source-test-');
     Hive.init(hiveDirectory.path);
     await Hive.openBox<List>(AppStorage.customSourcesBoxName);
 
-    service = SourceAdapterService.instance;
+    service = sourceRepository;
     await service.init();
-    catalog = SourceCatalog.instance;
+    catalog = sourceCatalog;
     await catalog.clearCustomSources();
   });
 
@@ -56,7 +58,7 @@ void main() {
     await Instances.sp.setStringList('rule_hub_subscriptions', const [
       RuleRepositoryService.directSubscription,
     ]);
-    expect(RuleRepositoryService.instance.subscriptions, const [
+    expect(ruleRepository.subscriptions, const [
       RuleRepositoryService.mirrorSubscription,
     ]);
     await Instances.sp.remove('rule_hub_subscriptions');
@@ -66,19 +68,10 @@ void main() {
     await Instances.sp.remove('rule_hub_subscriptions');
     const custom = 'https://example.test/rules/index.json';
 
-    expect(
-      await RuleRepositoryService.instance.addSubscription(custom),
-      isTrue,
-    );
-    expect(RuleRepositoryService.instance.subscriptions, contains(custom));
-    expect(
-      await RuleRepositoryService.instance.removeSubscription(custom),
-      isTrue,
-    );
-    expect(
-      RuleRepositoryService.instance.subscriptions,
-      isNot(contains(custom)),
-    );
+    expect(await ruleRepository.addSubscription(custom), isTrue);
+    expect(ruleRepository.subscriptions, contains(custom));
+    expect(await ruleRepository.removeSubscription(custom), isTrue);
+    expect(ruleRepository.subscriptions, isNot(contains(custom)));
   });
 
   test('custom adapter cache follows the current rule revision', () async {
@@ -141,10 +134,7 @@ void main() {
       file: 'missing.json',
     );
 
-    final result = RuleRepositoryService.instance.inspectItems(const [
-      byId,
-      missing,
-    ]);
+    final result = ruleRepository.inspectItems(const [byId, missing]);
 
     expect(result[byId]!.source?.id, source.id);
     expect(result[byId]!.status, InstallStatus.updateAvailable);
@@ -170,43 +160,36 @@ void main() {
       );
 
       await Instances.sp.remove('rule_hub_version:akianime');
-      final initial = RuleRepositoryService.instance.inspectItems(const [
-        current,
-        newer,
-      ]);
+      final initial = ruleRepository.inspectItems(const [current, newer]);
       expect(initial[current]!.source?.id, 'akianime');
       expect(initial[current]!.status, InstallStatus.upToDate);
       expect(initial[newer]!.status, InstallStatus.updateAvailable);
 
       final previousAdapter = service.adapterFor('akianime');
-      final result = await RuleRepositoryService.instance.install(
+      final result = await ruleRepository.install(
         newer,
         indexUrl: 'asset://assets/rules/index.json',
       );
 
       expect(result, RuleInstallResult.updated);
-      expect(SourceCatalog.instance.customSourceById('akianime'), isNull);
+      expect(sourceCatalog.customSourceById('akianime'), isNull);
       expect(
-        SourceCatalog.instance.customSources.where(
-          (source) => source.id == 'akianime',
-        ),
+        sourceCatalog.customSources.where((source) => source.id == 'akianime'),
         isEmpty,
       );
       expect(
-        SourceCatalog.instance.builtinSourceById('akianime')?.baseUrl,
+        sourceCatalog.builtinSourceById('akianime')?.baseUrl,
         'https://www.akianime.com',
       );
       expect(
-        SourceCatalog.instance.builtinSourceById('akianime')?.iconUrl,
+        sourceCatalog.builtinSourceById('akianime')?.iconUrl,
         'https://www.akianime.com/template/dsn2/static/img/ico.png',
       );
       final updatedAdapter = service.adapterFor('akianime');
       expect(updatedAdapter, isNot(same(previousAdapter)));
       expect(updatedAdapter?.baseUrl, 'https://www.akianime.com');
       expect(
-        RuleRepositoryService.instance.inspectItems(const [
-          newer,
-        ])[newer]!.status,
+        ruleRepository.inspectItems(const [newer])[newer]!.status,
         InstallStatus.upToDate,
       );
 

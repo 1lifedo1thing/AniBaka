@@ -8,7 +8,7 @@ import 'package:baka/utils/reg_utils.dart';
 import 'package:baka/widgets/common/scale_button.dart';
 import 'package:baka/widgets/player/bgm_follow_pill.dart';
 
-import 'package:baka/widgets/danmaku/controller.dart';
+import 'package:baka/services/playback/danmaku_controller.dart';
 import 'package:baka/widgets/danmaku/danmaku_list_sheet.dart';
 
 /// 播放页视频详情卡片

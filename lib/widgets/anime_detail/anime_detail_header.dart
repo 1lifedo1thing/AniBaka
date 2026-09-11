@@ -19,6 +19,7 @@ class AnimeDetailHeader extends StatelessWidget {
   final AnimeCollection? collection;
   final bool isCollectionLoading;
   final VoidCallback onCollectionTap;
+  final bool collectionEnabled;
   final VoidCallback? onSearchTap;
 
   const AnimeDetailHeader({
@@ -27,6 +28,7 @@ class AnimeDetailHeader extends StatelessWidget {
     required this.collection,
     required this.isCollectionLoading,
     required this.onCollectionTap,
+    this.collectionEnabled = true,
     this.enableCoverEffects = true,
     this.onSearchTap,
     this.updateTime,
@@ -62,14 +64,14 @@ class AnimeDetailHeader extends StatelessWidget {
         );
         Widget actionsRow({required bool expand}) => Row(
           children: [
-            if (expand)
+            if (collectionEnabled && expand)
               Expanded(
                 child: _CollectionButton(
                   collection: collection,
                   onTap: onCollectionTap,
                 ),
               )
-            else
+            else if (collectionEnabled)
               SizedBox(
                 width: 160,
                 child: _CollectionButton(

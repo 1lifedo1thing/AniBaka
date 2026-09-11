@@ -1,8 +1,12 @@
+import '../support/app_dependencies.dart';
+import 'package:baka/instance.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:baka/core/account_session.dart';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:baka/models/watch_party.dart';
-import 'package:baka/services/watch_party_service.dart';
+import 'package:baka/services/playback/watch_party.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const _invite = WatchPartyInvite(
@@ -20,7 +24,12 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   final testHttpOverrides = HttpOverrides.current;
 
-  setUpAll(() => HttpOverrides.global = null);
+  setUpAll(() async {
+    HttpOverrides.global = null;
+    SharedPreferences.setMockInitialValues({});
+    Instances.sp = await SharedPreferences.getInstance();
+    configureTestServices();
+  });
   tearDownAll(() => HttpOverrides.global = testHttpOverrides);
 
   test('connection actively requests the initial room snapshot', () async {
@@ -38,6 +47,7 @@ void main() {
     });
 
     final service = WatchPartyService(
+      session: AccountSession(Instances.sp, refreshTokens: (_) async => null),
       getInviteRequest: (_) async => _invite,
       joinRoomRequest: (_, _) async =>
           'ws://${server.address.address}:${server.port}/room',
@@ -74,6 +84,7 @@ void main() {
       });
 
       final service = WatchPartyService(
+        session: AccountSession(Instances.sp, refreshTokens: (_) async => null),
         getInviteRequest: (_) async => _invite,
         joinRoomRequest: (_, _) async =>
             'ws://${server.address.address}:${server.port}/room',

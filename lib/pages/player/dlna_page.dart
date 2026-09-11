@@ -5,7 +5,7 @@ import 'package:dlna_dart/dlna.dart';
 import 'package:flutter/material.dart';
 import 'package:baka/models/playback_episode.dart';
 import 'package:flutter/services.dart';
-import 'package:get/get.dart';
+import 'package:get/get.dart' hide ContextExtensionss;
 
 /// DLNA 投屏下一集 URL 解析回调
 typedef DlnaEpisodeUrlResolver = Future<String?> Function(int episodeIndex);
@@ -300,11 +300,10 @@ class DlnaCastPanel extends StatelessWidget {
 
     final theme = Theme.of(context);
 
-    return Container(
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+    return Material(
+      color: theme.colorScheme.surface,
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      clipBehavior: Clip.antiAlias,
       child: SafeArea(
         top: false,
         child: Column(

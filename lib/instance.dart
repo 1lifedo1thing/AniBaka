@@ -21,14 +21,9 @@ class Instances {
 
   static String appVersion = '0.0.0';
 
-  /// 获取用户认证 token（封装 SP 访问）
-  static String get userToken => sp.getString('usertoken') ?? '';
-
   static bool isTV = false;
 
   static bool get isDesktopPlatform => Platform.isWindows || Platform.isMacOS;
-
-  static bool get isWindows => isDesktopPlatform;
 
   static Future<void> init() async {
     final preferences = SharedPreferences.getInstance();

@@ -6,12 +6,11 @@ import 'package:baka/api/bgm.dart';
 import 'package:baka/api/anibaka_api.dart';
 import 'package:baka/models/anime_detail_view_data.dart';
 import 'package:baka/models/collection.dart';
-import 'package:baka/services/bgm_service.dart';
-import 'package:baka/services/collection_service.dart';
+import 'package:baka/services/collection/collection_repository.dart';
 import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:baka/widgets/anime/post_card.dart';
-import 'package:baka/services/navigation_service.dart';
+import 'package:baka/app/navigation.dart';
 
 import 'dart:async';
 import 'package:url_launcher/url_launcher_string.dart';
@@ -42,7 +41,7 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
   late int _initialCommentTotal;
 
   AnimeCollection? _collection;
-  bool _isCollectionLoading = false;
+  bool _isCollectionLoading = true;
   bool _isStatusUpdating = false;
 
   late BgmInfo _bgmInfo;
@@ -50,7 +49,6 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
   Map<String, dynamic>? _anibakaData;
   List<Map<String, dynamic>> _characters = const [];
   bool _charactersLoading = false;
-  bool _charactersLoaded = false;
   late AnimeDetailViewData _detail;
 
   int? get _subjectId => _bgmInfo.subjectId;
@@ -63,10 +61,6 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
   void _rebuildDetail() {
     _bgmInfo = BgmUtils.readFromData(widget.data);
     _detailData = BgmUtils.asMap(widget.data['bgmDetailData']);
-    if (!_charactersLoaded) {
-      _characters = BgmUtils.asMapList(_detailData?['characters']);
-      _charactersLoaded = _characters.isNotEmpty;
-    }
     _detail = AnimeDetailViewData.from(
       source: widget.data,
       bgmInfo: _bgmInfo,
@@ -86,7 +80,6 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
         _initialComments.length;
     _rebuildDetail();
 
-    _isCollectionLoading = _subjectId != null;
     _loadInitialData();
   }
 
@@ -141,7 +134,7 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
     // Phase 1: 解析 bgmId（若未知）
     if (_subjectId == null) {
       try {
-        await BgmService.resolveFromData(widget.data);
+        await resolveBgmFromData(widget.data);
         _updateInitialState(() {
           _bgmInfo = BgmUtils.readFromData(widget.data);
           _rebuildDetail();
@@ -184,7 +177,8 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
     }
 
     // Phase 3: 收藏状态独立加载
-    CollectionService.getByBgmId(bgmId)
+    collections
+        .getByBgmId(bgmId)
         .then((collection) {
           _updateInitialState(() {
             _collection = collection;
@@ -210,14 +204,15 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
 
   Future<void> _loadCharacters() async {
     final subjectId = _subjectId;
-    if (subjectId == null || _charactersLoaded || _charactersLoading) return;
+    if (subjectId == null || _characters.isNotEmpty || _charactersLoading) {
+      return;
+    }
     setState(() => _charactersLoading = true);
     try {
       final characters = await getBgmCharacters(subjectId);
       if (!mounted) return;
       setState(() {
         _characters = characters;
-        _charactersLoaded = true;
         _charactersLoading = false;
         _rebuildDetail();
       });
@@ -238,7 +233,7 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
       }
 
       HapticFeedback.mediumImpact();
-      final result = await CollectionService.addOrUpdate(
+      final result = await collections.addOrUpdate(
         _buildCollection(status.value),
       );
       if (result != null && mounted) {
@@ -262,11 +257,11 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
       final bgmId = _collection!.bgmId ?? _subjectId;
       bool success = false;
       if (bgmId != null) {
-        success = await CollectionService.deleteByBgmId(bgmId);
+        success = await collections.deleteByBgmId(bgmId);
       } else {
         final postId = _validPostId;
         if (postId != null) {
-          success = await CollectionService.delete(postId);
+          success = await collections.delete(postId);
         }
       }
       if (success && mounted) {
@@ -905,11 +900,7 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
   }
 
   List<Widget> _buildExternalLinks() {
-    final bgmId =
-        _detail.bgmId ??
-        _subjectId ??
-        BgmUtils.toInt(widget.data['bgmId']) ??
-        BgmUtils.toInt(widget.data['id']);
+    final bgmId = _subjectId ?? _detail.bgmId;
     final imdbId = _detail.imdbId;
     final tmdbId = _detail.tmdbId;
     final tvdbId = _detail.tvdbId;

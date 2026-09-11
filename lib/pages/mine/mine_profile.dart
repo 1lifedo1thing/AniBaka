@@ -1,6 +1,7 @@
-import 'package:baka/app_state.dart';
+import 'package:baka/api/bangumi_account_api.dart';
+import 'package:baka/services/account/bangumi_session.dart';
+import 'package:baka/core/account_session.dart';
 import 'package:baka/instance.dart';
-import 'package:baka/services/bangumi_sync_service.dart';
 import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/utils/reg_utils.dart';
 
@@ -8,10 +9,10 @@ const tronUsdtAddress = 'TB26auGFvm6DWkHm166a3zTtTDJuX7LZpH';
 const communityGroupNumber = 'anibakabaka';
 const communityGroupUrl = 'https://t.me/bakabakatv';
 
-extension MineProfile on AppState {
-  bool get isBangumiLogin => BangumiSyncService.instance.isConnected;
+extension MineProfile on AccountSession {
+  bool get isBangumiLogin => bangumiSession.isConnected;
 
-  BangumiAccount? get bangumiAccount => BangumiSyncService.instance.account;
+  BangumiAccount? get bangumiAccount => bangumiSession.account;
 
   bool get hasIdentity => isLoggedIn || isBangumiLogin;
 

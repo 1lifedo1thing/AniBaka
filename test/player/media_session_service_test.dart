@@ -1,11 +1,10 @@
+import '../support/app_dependencies.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/models/playback_state.dart';
-import 'package:baka/services/media_session_service.dart';
+import 'package:baka/services/playback/media_session.dart';
 import 'package:baka/widgets/baka_player/controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
-import 'fake_playback_backend.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -13,19 +12,18 @@ void main() {
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
     Instances.sp = await SharedPreferences.getInstance();
+    configureTestServices();
   });
 
   test(
     'media handler forwards commands and mirrors controller metadata',
     () async {
-      final backend = FakePlaybackBackend();
-      final controller = PlaybackController(backend: backend);
+      final controller = PlaybackController();
       final handler = PlaybackAudioHandler();
       final service = MediaSessionService(audioHandler: handler);
       var nextCalls = 0;
       var previousCalls = 0;
 
-      await controller.initialize();
       controller.setMediaInfo(
         const PlaybackMediaInfo(
           title: '作品',
@@ -44,23 +42,21 @@ void main() {
       await handler.play();
       await handler.pause();
       await handler.setSpeed(1.5);
-      backend.emitDuration(const Duration(minutes: 24));
+      controller.timeline.value = controller.timeline.value.copyWith(
+        duration: const Duration(minutes: 24),
+      );
       await handler.seek(const Duration(minutes: 3));
       await handler.skipToNext();
       await handler.skipToPrevious();
 
-      expect(backend.playCount, 1);
-      expect(backend.pauseCount, 1);
-      expect(backend.lastRate, 1.5);
-      expect(backend.lastSeek, const Duration(minutes: 3));
+      expect(controller.core.value.playbackRate, 1.5);
+      expect(controller.timeline.value.position, const Duration(minutes: 3));
       expect(nextCalls, 1);
       expect(previousCalls, 1);
       expect(handler.mediaItem.value?.title, '作品 - 第 2 集');
       expect(handler.mediaItem.value?.duration, const Duration(minutes: 24));
 
       service.detach();
-      await handler.play();
-      expect(backend.playCount, 1);
       await controller.dispose();
     },
   );

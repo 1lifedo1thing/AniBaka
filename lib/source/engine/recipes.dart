@@ -1,4 +1,4 @@
-import 'package:baka/source/model/source_rule.dart';
+import 'package:baka/source/models/source_rule.dart';
 
 /// 预置配方（管线宏）。
 ///

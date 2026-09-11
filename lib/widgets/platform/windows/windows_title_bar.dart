@@ -1,7 +1,7 @@
+import 'package:baka/app/app_runtime.dart';
+import 'package:get/get.dart';
 import 'package:flutter/material.dart';
 import 'package:bitsdojo_window/bitsdojo_window.dart';
-import 'package:baka/services/app_storage.dart';
-import 'package:baka/services/playback_settings_service.dart';
 
 class WindowsTitleBar extends StatelessWidget {
   final Color? backgroundColor;
@@ -48,9 +48,7 @@ class WindowsTitleBar extends StatelessWidget {
             _WindowButton(
               icon: Icons.close,
               onPressed: () async {
-                if (PlaybackSettingsService.getClearCacheOnExit()) {
-                  await AppStorage.clearAllCache();
-                }
+                await Get.find<AppRuntime>().close();
                 appWindow.close();
               },
               color: fgColor,
@@ -84,17 +82,13 @@ class _WindowButton extends StatelessWidget {
         hoverColor: isCloseButton
             ? Colors.redAccent
             : (Theme.of(context).brightness == Brightness.dark
-                ? Colors.white10
-                : Colors.black12),
+                  ? Colors.white10
+                  : Colors.black12),
         onTap: onPressed,
         child: SizedBox(
           width: 46,
           height: 32,
-          child: Icon(
-            icon,
-            size: 15,
-            color: color,
-          ),
+          child: Icon(icon, size: 15, color: color),
         ),
       ),
     );

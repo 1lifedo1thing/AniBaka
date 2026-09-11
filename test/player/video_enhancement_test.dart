@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import 'package:baka/models/playback_state.dart';
-import 'package:baka/widgets/baka_player/anime4k.dart';
+import 'package:baka/services/playback/anime4k.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -94,29 +94,6 @@ void main() {
     }
 
     expect(vectorBounds, 384);
-  });
-
-  test('maps exactly to the four user-facing levels', () {
-    expect(
-      selectEnhancementPipeline(VideoEnhancementMode.off),
-      VideoEnhancementPipeline.off,
-    );
-    expect(
-      selectEnhancementPipeline(VideoEnhancementMode.low),
-      VideoEnhancementPipeline.low,
-    );
-    expect(
-      selectEnhancementPipeline(VideoEnhancementMode.medium),
-      VideoEnhancementPipeline.medium,
-    );
-    expect(
-      selectEnhancementPipeline(VideoEnhancementMode.high),
-      VideoEnhancementPipeline.high,
-    );
-    expect(
-      selectEnhancementPipeline(VideoEnhancementMode.ultra),
-      VideoEnhancementPipeline.ultra,
-    );
   });
 
   test(

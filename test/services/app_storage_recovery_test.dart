@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:baka/services/app_storage.dart';
+import 'package:baka/core/app_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
 

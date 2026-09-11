@@ -1,7 +1,6 @@
 import 'dart:io';
 
-import 'package:baka/services/remote_media_redirect_resolver.dart';
-import 'package:baka/source/model/source_rule.dart';
+import 'package:baka/source/models/source_rule.dart';
 import 'package:baka/source/pipeline_source_adapter.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -38,7 +37,7 @@ void main() {
     try {
       final finalUrl = await resolver.resolve(
         'http://127.0.0.1:${entry.port}/redirect',
-        headers: const {HttpHeaders.refererHeader: 'https://source/'},
+        headers: {HttpHeaders.refererHeader: 'https://source/'},
       );
 
       expect(finalUrl, 'http://127.0.0.1:${target.port}/video.mp4');
@@ -99,7 +98,7 @@ void main() {
     try {
       final prepared = await adapter.preparePlaybackMedia((
         url: 'http://127.0.0.1:${entry.port}/redirect',
-        httpHeaders: const {HttpHeaders.refererHeader: 'https://source/'},
+        httpHeaders: {HttpHeaders.refererHeader: 'https://source/'},
       ));
 
       expect(prepared.url, 'http://127.0.0.1:${target.port}/video.mp4');

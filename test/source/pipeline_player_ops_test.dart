@@ -9,7 +9,7 @@ import 'package:baka/source/models/source.dart';
 import 'package:baka/source/engine/pipeline_host.dart';
 import 'package:baka/source/engine/pipeline_interpreter.dart';
 import 'package:baka/source/engine/rule_validator.dart';
-import 'package:baka/source/model/source_rule.dart';
+import 'package:baka/source/models/source_rule.dart';
 import 'package:baka/source/runtime/request_scheduler.dart';
 
 class _PlayerOpsHost implements PipelineHost {

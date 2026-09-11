@@ -1,3 +1,5 @@
+import 'package:baka/utils/bgm_utils.dart';
+
 /// 播放历史数据模型
 class PlayHistory {
   final int? id;
@@ -36,45 +38,41 @@ class PlayHistory {
     this.isFinished = false,
   });
 
-  factory PlayHistory.fromJson(Map<String, dynamic> json) {
-    return PlayHistory(
-      id: (json['id'] as num?)?.toInt(),
-      userId: (json['user_id'] as num?)?.toInt(),
-      videoId: (json['video_id'] as num?)?.toInt() ?? 0,
-      videoTitle: json['video_title'] as String? ?? '',
-      videoCover: json['video_cover'] as String?,
-      videoDuration: (json['video_duration'] as num?)?.toInt() ?? 0,
-      playProgress: (json['play_progress'] as num?)?.toInt() ?? 0,
-      playPercentage: (json['play_percentage'] as num?)?.toDouble(),
-      episodeId: (json['episode_id'] as num?)?.toInt(),
-      episodeTitle: json['episode_title'] as String?,
-      videoType: (json['video_type'] as num?)?.toInt(),
-      platform: json['platform'] as String?,
-      bgmId: (json['bgm_id'] as num?)?.toInt(),
-      createdAt: json['created_at'] != null
-          ? DateTime.tryParse(json['created_at'] as String)
-          : null,
-      updatedAt: json['updated_at'] != null
-          ? DateTime.tryParse(json['updated_at'] as String)
-          : null,
-      isFinished: json['is_finished'] as bool? ?? false,
-    );
-  }
+  factory PlayHistory.fromJson(Map<String, dynamic> json) => PlayHistory(
+    id: BgmUtils.toInt(json['id']),
+    userId: BgmUtils.toInt(json['user_id']),
+    videoId: BgmUtils.toInt(json['video_id']) ?? 0,
+    videoTitle: json['video_title']?.toString() ?? '',
+    videoCover: json['video_cover']?.toString(),
+    videoDuration: BgmUtils.toInt(json['video_duration']) ?? 0,
+    playProgress: BgmUtils.toInt(json['play_progress']) ?? 0,
+    playPercentage: BgmUtils.toDouble(json['play_percentage']),
+    episodeId: BgmUtils.toInt(json['episode_id']),
+    episodeTitle: json['episode_title']?.toString(),
+    videoType: BgmUtils.toInt(json['video_type']),
+    platform: json['platform']?.toString(),
+    bgmId: BgmUtils.toInt(json['bgm_id']),
+    createdAt: json['created_at'] != null
+        ? DateTime.tryParse(json['created_at'].toString())
+        : null,
+    updatedAt: json['updated_at'] != null
+        ? DateTime.tryParse(json['updated_at'].toString())
+        : null,
+    isFinished: json['is_finished'] as bool? ?? false,
+  );
 
-  Map<String, dynamic> toJson() {
-    return {
-      'video_id': videoId,
-      'video_title': videoTitle,
-      if (videoCover != null) 'video_cover': videoCover,
-      'video_duration': videoDuration,
-      'play_progress': playProgress,
-      if (episodeId != null) 'episode_id': episodeId,
-      if (episodeTitle != null) 'episode_title': episodeTitle,
-      if (videoType != null) 'video_type': videoType,
-      if (platform != null) 'platform': platform,
-      if (bgmId != null) 'bgm_id': bgmId,
-    };
-  }
+  Map<String, dynamic> toJson() => {
+    'video_id': videoId,
+    'video_title': videoTitle,
+    if (videoCover != null) 'video_cover': videoCover,
+    'video_duration': videoDuration,
+    'play_progress': playProgress,
+    if (episodeId != null) 'episode_id': episodeId,
+    if (episodeTitle != null) 'episode_title': episodeTitle,
+    if (videoType != null) 'video_type': videoType,
+    if (platform != null) 'platform': platform,
+    if (bgmId != null) 'bgm_id': bgmId,
+  };
 }
 
 /// 播放历史列表响应
@@ -85,8 +83,8 @@ class PlayHistoryListResponse {
 
   factory PlayHistoryListResponse.fromJson(Map<String, dynamic> json) =>
       PlayHistoryListResponse(
-        list: (json['list'] as List<dynamic>)
-            .cast<Map<String, dynamic>>()
+        list: (json['list'] as List<dynamic>? ?? const [])
+            .whereType<Map<String, dynamic>>()
             .map(PlayHistory.fromJson)
             .toList(growable: false),
       );

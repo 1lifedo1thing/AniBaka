@@ -267,18 +267,17 @@ jobs:
             exit 1
           fi
 
+          bash .github/scripts/sign-macos-app.sh \
+            "$app_path" \
+            "$SIGNING_IDENTITY" \
+            "$SIGNING_KEYCHAIN" \
+            "$USE_TIMESTAMP" \
+            macos/Runner/Release.entitlements
+
           timestamp_option=
           if [ "$USE_TIMESTAMP" = "true" ]; then
             timestamp_option=--timestamp
           fi
-          for directory in "$app_path/Contents/Frameworks" "$app_path/Contents/PlugIns"; do
-            [ -d "$directory" ] || continue
-            while IFS= read -r -d '' item; do
-              codesign --force --deep --verbose --options runtime ${timestamp_option:+"$timestamp_option"} --keychain "$SIGNING_KEYCHAIN" --sign "$SIGNING_IDENTITY" "$item"
-            done < <(find "$directory" -mindepth 1 -maxdepth 1 -print0)
-          done
-          codesign --force --deep --verbose --options runtime ${timestamp_option:+"$timestamp_option"} --keychain "$SIGNING_KEYCHAIN" --sign "$SIGNING_IDENTITY" "$app_path"
-          codesign --verify --deep --strict --verbose "$app_path"
 
           version=$RELEASE_VERSION
           mkdir -p release-stage
@@ -485,7 +484,7 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libasound2-dev libmpv-dev mpv appstream
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libasound2-dev libmpv-dev mpv appstream libsecret-1-dev libsecret-1-0
           curl --fail --location --retry 3 \
             https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage \
             --output "$RUNNER_TEMP/appimagetool"

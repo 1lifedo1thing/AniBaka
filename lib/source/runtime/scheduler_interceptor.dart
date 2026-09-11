@@ -22,8 +22,26 @@ class SchedulerInterceptor extends Interceptor {
     final host = options.uri.host;
     final p = options.extra[priorityKey];
     final priority = p is RequestPriority ? p : RequestPriority.search;
-    await scheduler.acquire(host, priority: priority);
+    final cancel = options.cancelToken;
+    final queuedCancel = cancel == null ? null : RequestCancelToken();
+    if (cancel?.isCancelled ?? false) queuedCancel!.cancel();
+    cancel?.whenCancel.then((_) => queuedCancel!.cancel());
+    try {
+      await scheduler.acquire(
+        host,
+        priority: priority,
+        cancelToken: queuedCancel,
+      );
+    } on RequestCancelledException {
+      handler.reject(cancel!.cancelError!);
+      return;
+    }
     options.extra['anx.acquired'] = host;
+    if (cancel?.isCancelled ?? false) {
+      _release(options);
+      handler.reject(cancel!.cancelError!);
+      return;
+    }
     handler.next(options);
   }
 

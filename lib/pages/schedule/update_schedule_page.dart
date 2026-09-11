@@ -1,10 +1,10 @@
-import 'package:baka/services/home_service.dart';
+import 'package:baka/pages/home/home_controller.dart';
 import 'package:baka/widgets/anime/post_card.dart';
 import 'package:baka/widgets/common/refresh.dart';
 import 'package:baka/app_state.dart';
 import 'package:baka/instance.dart';
 import 'package:flutter/material.dart';
-import 'package:get/get.dart';
+import 'package:get/get.dart' hide ContextExtensionss;
 
 class UpdateSchedulePage extends StatefulWidget {
   const UpdateSchedulePage({super.key});
@@ -26,7 +26,7 @@ class _UpdateSchedulePageState extends State<UpdateSchedulePage> {
   @override
   void initState() {
     super.initState();
-    if (!Instances.isWindows && !Instances.isTV) {
+    if (!Instances.isDesktopPlatform && !Instances.isTV) {
       _appState = Get.find<AppState>();
       _scrollController.addListener(_onScroll);
     }
@@ -52,7 +52,7 @@ class _UpdateSchedulePageState extends State<UpdateSchedulePage> {
   Future<void> _loadSchedule() async {
     List<HomeItems>? data;
     try {
-      data = await HomeDataService.loadSharedXinfan();
+      data = await HomeController.loadSharedXinfan();
     } catch (error) {
       debugPrint('加载更新时间表失败: $error');
     }

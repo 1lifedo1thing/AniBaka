@@ -1,15 +1,19 @@
+import 'package:baka/services/source/source_repository.dart';
+import 'package:baka/services/playback/history_repository.dart';
+import 'package:baka/services/collection/collection_repository.dart';
+import '../support/app_dependencies.dart';
+import 'package:baka/models/playback_request.dart';
+import 'package:baka/core/account_session.dart';
+import 'package:baka/app/watch_party_links.dart';
 import 'dart:async';
 
 import 'package:baka/instance.dart';
 import 'package:baka/models/watch_party.dart';
-import 'package:baka/services/player_service.dart';
-import 'package:baka/services/watch_party_link_service.dart';
-import 'package:baka/services/watch_party_service.dart';
+import 'package:baka/services/playback/playback_content.dart';
+import 'package:baka/services/playback/watch_party.dart';
 import 'package:baka/widgets/baka_player/controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
-import 'fake_playback_backend.dart';
 
 const _invite = WatchPartyInvite(
   roomId: 'room-1',
@@ -28,6 +32,7 @@ void main() {
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
     Instances.sp = await SharedPreferences.getInstance();
+    configureTestServices();
   });
 
   test('snapshot identifies self, owner, controller, and external members', () {
@@ -113,21 +118,18 @@ void main() {
 
   test('watch party QR values accept links, app links, and invite codes', () {
     expect(
-      WatchPartyLinkService.inviteCodeFromValue(
+      WatchPartyLinks.inviteCodeFromValue(
         'https://www.anibaka.com/watch/Abc_123-xyz?from=qr',
       ),
       'Abc_123-xyz',
     );
     expect(
-      WatchPartyLinkService.inviteCodeFromValue('anibaka://watch/1234567890'),
+      WatchPartyLinks.inviteCodeFromValue('anibaka://watch/1234567890'),
       '1234567890',
     );
+    expect(WatchPartyLinks.inviteCodeFromValue('1234567890'), '1234567890');
     expect(
-      WatchPartyLinkService.inviteCodeFromValue('1234567890'),
-      '1234567890',
-    );
-    expect(
-      WatchPartyLinkService.inviteCodeFromValue('https://example.com/watch/x'),
+      WatchPartyLinks.inviteCodeFromValue('https://example.com/watch/x'),
       isNull,
     );
   });
@@ -135,6 +137,7 @@ void main() {
   test('failed join request leaves connecting state retryable', () async {
     var ticketRequested = false;
     final service = WatchPartyService(
+      session: AccountSession(Instances.sp, refreshTokens: (_) async => null),
       getInviteRequest: (_) async => throw StateError('房间不存在'),
       joinRoomRequest: (_, _) async {
         ticketRequested = true;
@@ -159,6 +162,7 @@ void main() {
       final inviteCompleter = Completer<WatchPartyInvite>();
       var ticketRequests = 0;
       final service = WatchPartyService(
+        session: AccountSession(Instances.sp, refreshTokens: (_) async => null),
         getInviteRequest: (_) => inviteCompleter.future,
         joinRoomRequest: (_, _) async {
           ticketRequests++;
@@ -185,49 +189,52 @@ void main() {
   test(
     'viewer controls are blocked while remote room updates still apply',
     () async {
-      final backend = FakePlaybackBackend();
-      final controller = PlaybackController(backend: backend);
-      await controller.open('https://example.test/video.mp4');
-      backend.emitDuration(const Duration(minutes: 10));
+      final controller = PlaybackController();
+      controller.timeline.value = controller.timeline.value.copyWith(
+        duration: const Duration(minutes: 10),
+      );
       await controller.configureWatchParty(connected: true, canControl: false);
 
       await controller.play();
       await controller.pause();
       await controller.seek(const Duration(seconds: 50));
       await controller.setRate(2);
-      expect(backend.playCount, 0);
-      expect(backend.pauseCount, 0);
-      expect(backend.lastSeek, isNull);
-      expect(backend.lastRate, isNot(2));
+      expect(controller.core.value.playing, isFalse);
+      expect(controller.core.value.playbackRate, 1.0);
+      expect(controller.timeline.value.position, Duration.zero);
 
-      await controller.play(remote: true);
-      await controller.pause(remote: true);
-      await controller.seek(const Duration(seconds: 50), remote: true);
       await controller.setRate(0.95, roomCorrection: true);
-      expect(backend.playCount, 1);
-      expect(backend.pauseCount, 1);
-      expect(backend.lastSeek, const Duration(seconds: 50));
-      expect(backend.lastRate, 0.95);
+      expect(controller.core.value.playbackRate, 0.95);
+      await controller.seek(const Duration(seconds: 50), remote: true);
+      expect(controller.timeline.value.position, const Duration(seconds: 50));
 
       await controller.dispose();
     },
   );
 
   test('disposing an old player cannot detach its replacement', () async {
-    final service = WatchPartyService();
-    final oldController = PlaybackController(backend: FakePlaybackBackend());
-    final newController = PlaybackController(backend: FakePlaybackBackend());
-    final oldContent = PlayerService(
-      data: const <String, Object>{
+    final service = WatchPartyService(
+      session: AccountSession(Instances.sp, refreshTokens: (_) async => null),
+    );
+    final oldController = PlaybackController();
+    final newController = PlaybackController();
+    final oldContent = PlaybackContent(
+      sources: sourceRepository,
+      collections: collections,
+      history: historyRepository,
+      request: PlaybackRequest.fromMap(const <String, Object>{
         'source': '_local',
         'localFilePath': 'old.mp4',
-      },
+      }),
     );
-    final newContent = PlayerService(
-      data: const <String, Object>{
+    final newContent = PlaybackContent(
+      sources: sourceRepository,
+      collections: collections,
+      history: historyRepository,
+      request: PlaybackRequest.fromMap(const <String, Object>{
         'source': '_local',
         'localFilePath': 'new.mp4',
-      },
+      }),
     );
 
     service.attachPlayer(

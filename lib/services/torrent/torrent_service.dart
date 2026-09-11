@@ -7,9 +7,7 @@ import 'package:baka/services/torrent/torrent_model.dart';
 
 /// Owns the single active BT session and exposes one shared UI snapshot.
 class TorrentService {
-  TorrentService._();
-
-  static final TorrentService instance = TorrentService._();
+  TorrentService();
   static const Duration defaultBufferTimeout = Duration(seconds: 30);
   static const Duration _statsPublishInterval = Duration(milliseconds: 500);
 

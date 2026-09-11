@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:baka/services/tv_log_export_service.dart';
+import 'package:baka/core/tv_log_export.dart';
 import 'package:baka/utils/app_logger.dart';
 import 'package:baka/widgets/platform/tv/tv_focusable.dart';
 import 'package:baka/widgets/platform/tv/tv_theme_util.dart';

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:baka/models/collection.dart';
-import 'package:baka/services/collection_service.dart';
+import 'package:baka/services/collection/collection_repository.dart';
 import 'package:baka/widgets/platform/tv/tv_focusable.dart';
 import 'package:baka/widgets/platform/tv/tv_theme_util.dart';
 import 'package:baka/widgets/anime/post_card.dart';
@@ -36,7 +36,7 @@ class _TvFavoritesPageState extends State<TvFavoritesPage> {
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
     try {
-      final data = await CollectionService.getAll(refreshBangumi: true);
+      final data = await collections.getAll(refreshBangumi: true);
       if (mounted) {
         setState(() {
           _allCollections = data;
@@ -120,7 +120,10 @@ class _TvFavoritesPageState extends State<TvFavoritesPage> {
                   onPressed: _loadData,
                   borderRadius: BorderRadius.circular(20),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
                     decoration: BoxDecoration(
                       color: context.tvHighlightColor(0.08),
                       borderRadius: BorderRadius.circular(20),
@@ -169,28 +172,31 @@ class _TvFavoritesPageState extends State<TvFavoritesPage> {
               child: _isLoading
                   ? _buildSkeletonGrid()
                   : filtered.isEmpty
-                      ? _buildEmptyView()
-                      : FocusTraversalGroup(
-                          policy: ReadingOrderTraversalPolicy(),
-                          child: GridView.builder(
-                            physics: const BouncingScrollPhysics(),
-                            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  ? _buildEmptyView()
+                  : FocusTraversalGroup(
+                      policy: ReadingOrderTraversalPolicy(),
+                      child: GridView.builder(
+                        physics: const BouncingScrollPhysics(),
+                        gridDelegate:
+                            const SliverGridDelegateWithFixedCrossAxisCount(
                               crossAxisCount: 6,
                               childAspectRatio: 0.55,
                               crossAxisSpacing: 16,
                               mainAxisSpacing: 24,
                             ),
-                            itemCount: filtered.length,
-                            itemBuilder: (context, index) {
-                              final item = filtered[index];
-                              return _TvFavoriteCard(
-                                key: ValueKey('fav_${item.bgmId ?? item.postId ?? index}'),
-                                item: item,
-                                onPressed: () => _openDetail(item),
-                              );
-                            },
-                          ),
-                        ),
+                        itemCount: filtered.length,
+                        itemBuilder: (context, index) {
+                          final item = filtered[index];
+                          return _TvFavoriteCard(
+                            key: ValueKey(
+                              'fav_${item.bgmId ?? item.postId ?? index}',
+                            ),
+                            item: item,
+                            onPressed: () => _openDetail(item),
+                          );
+                        },
+                      ),
+                    ),
             ),
           ],
         ),
@@ -232,10 +238,7 @@ class _TvFavoritesPageState extends State<TvFavoritesPage> {
           const SizedBox(height: 16),
           Text(
             '这里空空如也，快去添加收藏吧',
-            style: TextStyle(
-              color: context.tvTextHintColor,
-              fontSize: 16,
-            ),
+            style: TextStyle(color: context.tvTextHintColor, fontSize: 16),
           ),
         ],
       ),
@@ -279,7 +282,10 @@ class _TvFavoriteCard extends StatelessWidget {
                       top: 8,
                       right: 8,
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 3,
+                        ),
                         decoration: BoxDecoration(
                           color: context.tvShadowColor(0.8),
                           borderRadius: BorderRadius.circular(6),
@@ -299,7 +305,10 @@ class _TvFavoriteCard extends StatelessWidget {
                       bottom: 8,
                       left: 8,
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 3,
+                        ),
                         decoration: BoxDecoration(
                           color: context.tvShadowColor(0.8),
                           borderRadius: BorderRadius.circular(6),

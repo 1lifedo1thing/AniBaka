@@ -1,11 +1,13 @@
-import 'package:get/get.dart';
+import 'package:baka/models/playback_request.dart';
+import 'package:baka/core/app_storage.dart';
+import 'package:baka/app/watch_party_links.dart';
+import 'package:get/get.dart' hide ContextExtensionss;
 import 'package:baka/app_state.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/models/watch_party.dart';
 import 'package:baka/pages/login/qr_scanner_page.dart';
 import 'package:baka/pages/player/player_page.dart';
-import 'package:baka/services/thread_service.dart';
-import 'package:baka/services/watch_party_link_service.dart';
+import 'package:baka/pages/thread/thread_controller.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:baka/widgets/comment/comment_card.dart';
 import 'package:baka/widgets/comment/comment_widget.dart';
@@ -34,7 +36,7 @@ class _ThreadPageState extends State<ThreadPage>
   static final _gvRegex = RegExp(r'gv(\d+)');
   static const int _watchPartyIndex = 2;
 
-  final ThreadService _svc = ThreadService();
+  final ThreadController _svc = ThreadController();
   late final PageController _pageController;
   late final List<_TabUi> _uis;
   late final Worker _commentWorker;
@@ -78,6 +80,8 @@ class _ThreadPageState extends State<ThreadPage>
   }
 
   Future<void> _ensureLoaded(int i) async {
+    await AppStorage.open(AppStorage.threadCommentsBoxName);
+    if (!mounted) return;
     final hasCache = _svc.loadCached(i, ignoreExpiry: true);
     if (hasCache) {
       if (mounted) setState(() {});
@@ -119,7 +123,7 @@ class _ThreadPageState extends State<ThreadPage>
     }
 
     // 仅当前页、非 Windows 上报滚动方向
-    if (_pageIndex(i) != _index || Instances.isWindows) return;
+    if (_pageIndex(i) != _index || Instances.isDesktopPlatform) return;
     final offset = c.offset;
     final ui = _uis[i];
     if ((offset - ui.lastOffset).abs() <= 50) return;
@@ -190,9 +194,11 @@ class _ThreadPageState extends State<ThreadPage>
     try {
       final data = await _svc.resolveGvLink(match.group(1)!);
       if (data != null && mounted) {
-        Navigator.of(
-          context,
-        ).push(MaterialPageRoute(builder: (_) => PlayerPage(data: data)));
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => PlayerPage(request: PlaybackRequest.fromMap(data)),
+          ),
+        );
       } else {
         showSnackBar('无法获取视频信息');
       }
@@ -469,7 +475,7 @@ class _ThreadPageState extends State<ThreadPage>
     if (_joiningRoomCode.isNotEmpty) return;
     setState(() => _joiningRoomCode = room.inviteCode);
     try {
-      await WatchPartyLinkService.joinInvite(room.inviteCode);
+      await Get.find<WatchPartyLinks>().joinInviteLink(room.inviteCode);
     } finally {
       if (mounted) setState(() => _joiningRoomCode = '');
     }

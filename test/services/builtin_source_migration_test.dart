@@ -1,8 +1,9 @@
+import '../support/app_dependencies.dart';
 import 'dart:io';
 
 import 'package:baka/instance.dart';
-import 'package:baka/services/app_storage.dart';
-import 'package:baka/services/source_adapter_service.dart';
+import 'package:baka/core/app_storage.dart';
+import 'package:baka/services/source/source_repository.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -15,6 +16,7 @@ void main() {
   setUpAll(() async {
     SharedPreferences.setMockInitialValues({'rule_hub_version:xifanacg': 3});
     Instances.sp = await SharedPreferences.getInstance();
+    configureTestServices();
     hiveDirectory = await Directory.systemTemp.createTemp(
       'baka-builtin-migration-test-',
     );
@@ -78,17 +80,17 @@ void main() {
         },
       ]);
 
-      final service = SourceAdapterService.instance;
+      final service = sourceRepository;
       await service.init();
 
-      expect(SourceCatalog.instance.customSourceById('akianime'), isNull);
-      expect(SourceCatalog.instance.customSourceById('custom-only'), isNotNull);
+      expect(sourceCatalog.customSourceById('akianime'), isNull);
+      expect(sourceCatalog.customSourceById('custom-only'), isNotNull);
       expect(
-        SourceCatalog.instance.builtinSourceById('akianime')?.baseUrl,
+        sourceCatalog.builtinSourceById('akianime')?.baseUrl,
         'https://migrated.akianime.example',
       );
       expect(
-        SourceCatalog.instance.builtinSourceById('xifanacg')?.baseUrl,
+        sourceCatalog.builtinSourceById('xifanacg')?.baseUrl,
         'https://next.xifanacg.com',
       );
 

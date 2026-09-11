@@ -1,7 +1,7 @@
+import 'package:baka/core/api_transport.dart';
+import 'package:baka/api/bangumi_account_api.dart';
+import 'package:baka/services/account/bangumi_session.dart';
 import 'package:baka/api/bgm.dart';
-import 'package:baka/instance.dart';
-import 'package:baka/services/bangumi_sync_service.dart';
-import 'package:baka/services/bgm_service.dart';
 import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/utils/date_util.dart';
 import 'package:baka/utils/toast_utils.dart';
@@ -484,10 +484,7 @@ class CIslandCommentWidgetState extends State<CIslandCommentWidget>
     }
 
     try {
-      final episode = await BgmService.resolveEpisodeByIndex(
-        subjectId,
-        episodeIndex,
-      );
+      final episode = await resolveBgmEpisodeByIndex(subjectId, episodeIndex);
       if (episode?.episodeId == null) {
         return (episodeName: fallbackName, comments: const <_BgmComment>[]);
       }
@@ -508,11 +505,11 @@ class CIslandCommentWidgetState extends State<CIslandCommentWidget>
   Future<void> sendComment(String rawText) async {
     final text = rawText.trim();
     if (text.isEmpty) return;
-    if (Instances.userToken.isNotEmpty) {
+    if (apiTransport.session.token.isNotEmpty) {
       await _commentKey.currentState?.sendComment(text, 0, '');
       return;
     }
-    if (!BangumiSyncService.instance.isConnected) {
+    if (!bangumiSession.isConnected) {
       await _commentKey.currentState?.sendComment(text, 0, '');
       return;
     }
@@ -535,10 +532,7 @@ class CIslandCommentWidgetState extends State<CIslandCommentWidget>
     if (!action || !mounted) return;
 
     try {
-      final episode = await BgmService.resolveEpisodeByIndex(
-        subjectId,
-        episodeIndex,
-      );
+      final episode = await resolveBgmEpisodeByIndex(subjectId, episodeIndex);
       final episodeId = episode?.episodeId;
       if (episodeId == null) {
         throw const BangumiSyncException('无法定位 Bangumi 剧集页面');

@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:baka/services/tv_log_export_service.dart';
+import 'package:baka/core/tv_log_export.dart';
 import 'package:baka/utils/app_logger.dart';
 import 'package:flutter_test/flutter_test.dart';
 

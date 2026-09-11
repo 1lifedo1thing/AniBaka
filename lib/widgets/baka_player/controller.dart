@@ -1,30 +1,29 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:baka/models/playback_state.dart';
-import 'package:baka/models/subtitle_config.dart';
-import 'package:baka/services/playback_settings_service.dart';
-import 'package:baka/utils/app_logger.dart';
-import 'package:baka/utils/date_util.dart';
-import 'package:baka/widgets/baka_player/anime4k.dart';
-import 'package:baka/widgets/baka_player/mpv_config.dart';
-import 'package:baka/widgets/baka_player/playback_backend.dart';
-import 'package:baka/widgets/baka_player/utils.dart';
-import 'package:baka/widgets/danmaku/controller.dart';
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
+import 'package:baka/models/playback_state.dart';
+import 'package:baka/models/subtitle_config.dart';
+import 'package:baka/services/playback/anime4k.dart';
+import 'package:baka/services/playback/danmaku_controller.dart';
+import 'package:baka/services/playback/playback_settings.dart';
+import 'package:baka/utils/app_logger.dart';
+import 'package:baka/utils/duration_utils.dart';
+
+const String mediacodecEmbedRenderer = 'mediacodec_embed';
+
 class PlaybackController {
-  PlaybackController({PlaybackBackend? backend})
-    : _backend = backend ?? MediaKitPlaybackBackend();
+  PlaybackController();
 
   static const videoFitTypes = <({BoxFit fit, String description})>[
-    (fit: BoxFit.contain, description: '\u753b\u9762'),
-    (fit: BoxFit.cover, description: '\u8986\u76d6'),
-    (fit: BoxFit.fill, description: '\u586b\u5145'),
-    (fit: BoxFit.fitHeight, description: '\u9ad8\u5ea6\u9002\u5e94'),
-    (fit: BoxFit.fitWidth, description: '\u5bbd\u5ea6\u9002\u5e94'),
+    (fit: BoxFit.contain, description: '画面'),
+    (fit: BoxFit.cover, description: '覆盖'),
+    (fit: BoxFit.fill, description: '填充'),
+    (fit: BoxFit.fitHeight, description: '高度适应'),
+    (fit: BoxFit.fitWidth, description: '宽度适应'),
   ];
 
   static const _timelineIntervalMs = 250;
@@ -33,7 +32,9 @@ class PlaybackController {
   static const _longPressPixelsPerRate = 32.0;
   static const _maxLongPressRate = 5.0;
 
-  final PlaybackBackend _backend;
+  Player? _player;
+  VideoController? _internalVideoController;
+
   final core = ValueNotifier<PlaybackCoreState>(const PlaybackCoreState());
   final timeline = ValueNotifier<PlaybackTimelineState>(
     const PlaybackTimelineState(),
@@ -47,10 +48,6 @@ class PlaybackController {
   final enhancement = ValueNotifier<VideoEnhancementState>(
     const VideoEnhancementState(),
   );
-
-  /// 当前后端持有的 [VideoController]。渲染器切换（Android 全量重建）时
-  /// 实例会整体替换，UI 通过监听此 notifier 挂载/卸载 [Video] 组件，
-  /// 确保视频 Surface 在媒体打开前就已创建。
   final videoController = ValueNotifier<VideoController?>(null);
 
   final List<StreamSubscription<dynamic>> _subscriptions = [];
@@ -64,18 +61,17 @@ class PlaybackController {
   Timer? _reversePlaybackTimer;
 
   Future<void>? _initializeFuture;
+  Future<void>? _disposeFuture;
   Future<void> _settingsWrites = Future<void>.value();
   PlaybackPreferences _persistedPreferences = const PlaybackPreferences();
   DanmakuController? _danmakuController;
+
   double _lastPlaybackRate = 1.0;
   double _longPressStartRate = 1.0;
   double _reversePlaybackRate = 0.0;
   bool _playingBeforeLongPress = false;
   bool _reverseSeekInFlight = false;
-  Future<void>? _longPressTask;
-  int _longPressRevision = 0;
   int _lastTimelineBucket = -1;
-  bool _listenersBound = false;
   bool _disposed = false;
   bool _roomConnected = false;
   bool _roomCanControl = true;
@@ -84,18 +80,18 @@ class PlaybackController {
   String? _lastOpenUri;
   Map<String, String>? _lastOpenHeaders;
 
-  String? get currentMediaUri => _backend.currentMediaUri;
-  List<SubtitleTrack> get subtitleTracks => _backend.subtitleTracks;
-  SubtitleTrack get currentSubtitleTrack => _backend.currentSubtitleTrack;
+  String? get currentMediaUri => _player?.state.playlist.medias.firstOrNull?.uri;
+  List<SubtitleTrack> get subtitleTracks =>
+      _player?.state.tracks.subtitle ?? const <SubtitleTrack>[];
+  SubtitleTrack get currentSubtitleTrack =>
+      _player?.state.track.subtitle ?? SubtitleTrack.no();
   DanmakuController get danmakuController =>
       _danmakuController ??
       (throw StateError('Danmaku controller is not attached'));
   Stream<void> get completed => _completed.stream;
   Stream<Duration> get seekEvents => _seekEvents.stream;
 
-  Future<void> initialize() {
-    return _initializeFuture ??= _initialize();
-  }
+  Future<void> initialize() => _initializeFuture ??= _initialize();
 
   Future<void> _initialize() async {
     final stored = PlaybackSettingsService.loadAll();
@@ -103,22 +99,66 @@ class PlaybackController {
     if (Platform.isAndroid &&
         loaded.videoRenderer == mediacodecEmbedRenderer &&
         loaded.videoEnhancementMode != VideoEnhancementMode.off) {
-      // Direct MediaCodec rendering bypasses mpv's GPU shader pipeline. Keep
-      // the explicitly selected compatibility renderer and disable the stale
-      // enhancement flag instead of claiming Anime4K was applied.
       loaded = loaded.copyWith(videoEnhancementMode: VideoEnhancementMode.off);
       await PlaybackSettingsService.saveChanges(stored, loaded);
     }
     if (_disposed) return;
     _persistedPreferences = loaded;
-    preferences.value = loaded;
+    if (preferences.value == const PlaybackPreferences()) {
+      preferences.value = loaded;
+    }
     overlay.value = overlay.value.copyWith(
-      showDanmaku: !loaded.defaultDanmakuOff,
+      showDanmaku: !preferences.value.defaultDanmakuOff,
     );
-    await _backend.initialize(videoRenderer: loaded.videoRenderer);
-    if (_disposed) return;
-    videoController.value = _backend.videoController;
-    _bindBackend();
+
+    MediaKit.ensureInitialized();
+    final player = Player(
+      configuration: const PlayerConfiguration(
+        bufferSize: 8 * 1024 * 1024,
+        title: 'BAKA Player',
+      ),
+    );
+    _player = player;
+
+    final isAndroid = Platform.isAndroid;
+    String? vo;
+    if (isAndroid) {
+      vo = loaded.videoRenderer == mediacodecEmbedRenderer
+          ? mediacodecEmbedRenderer
+          : null;
+    }
+    final vController = VideoController(
+      player,
+      configuration: VideoControllerConfiguration(
+        vo: vo,
+        hwdec: isAndroid && loaded.videoRenderer == mediacodecEmbedRenderer
+            ? 'mediacodec'
+            : null,
+      ),
+    );
+    _internalVideoController = vController;
+    if (_disposed) {
+      await player.dispose();
+      return;
+    }
+    videoController.value = vController;
+    _bindPlayerListeners(player);
+  }
+
+  void _bindPlayerListeners(Player player) {
+    _subscriptions.addAll([
+      player.stream.playing.listen(_onPlayingChanged),
+      player.stream.position.listen(_onPositionChanged),
+      player.stream.duration.listen(_onDurationChanged),
+      player.stream.buffer.listen(_onBufferedChanged),
+      player.stream.buffering.listen(_onBufferingChanged),
+      player.stream.error.listen(_onError),
+      player.stream.completed.listen((completed) {
+        _eofReached = completed;
+        if (!_disposed && completed) _completed.add(null);
+      }),
+      player.stream.tracks.listen(_onTracksChanged),
+    ]);
   }
 
   Future<void> open(
@@ -131,9 +171,14 @@ class PlaybackController {
     try {
       _resetPlaybackState();
       await initialize();
-      if (_backend.currentMediaUri != null) await _backend.stop();
+      final player = _player;
+      if (player == null) return;
+      if (currentMediaUri != null) await player.stop();
       await _configurePlayer(preferences.value.defaultPlaybackSpeed);
-      await _backend.open(uri, autoplay: autoplay, httpHeaders: httpHeaders);
+      await player.open(
+        Media(uri, httpHeaders: httpHeaders ?? const <String, String>{}),
+        play: autoplay,
+      );
       await _reapplyHwdec();
       if (!_disposed) core.value = core.value.copyWith(loading: false);
     } catch (error) {
@@ -150,20 +195,25 @@ class PlaybackController {
     }
   }
 
-  /// 重新固定 hwdec：AndroidVideoController 初始化会覆盖它，必须在媒体
-  /// 打开（其初始化已完成）之后再设一次。硬解直通强制 mediacodec。
-  Future<void> _reapplyHwdec() async {
-    try {
-      await _backend.setNativeProperty(
-        'hwdec',
-        effectiveHwdec(
-          preferences.value.hwdecMode,
-          preferences.value.videoRenderer,
-        ),
-      );
-    } catch (error) {
-      debugPrint('重新应用 hwdec 失败: $error');
+  Future<void> _setNativeProperty(String name, String value) async {
+    final platform = _player?.platform;
+    if (platform is NativePlayer) {
+      try {
+        await platform.setProperty(name, value);
+      } catch (e) {
+        debugPrint('setNativeProperty $name failed: $e');
+      }
     }
+  }
+
+  Future<void> _reapplyHwdec() async {
+    await _setNativeProperty(
+      'hwdec',
+      effectiveHwdec(
+        preferences.value.hwdecMode,
+        preferences.value.videoRenderer,
+      ),
+    );
   }
 
   void attachDanmaku(DanmakuController controller) {
@@ -173,9 +223,6 @@ class PlaybackController {
     _syncDanmakuActivity();
   }
 
-  /// 弹幕滚动与播放状态的唯一同步点：仅「播放中、未缓冲、未失败」时滚动。
-  /// 各状态回调更新 core.value 后统一调用，替代散落各处、条件各写各的
-  /// pause/resume。
   void _syncDanmakuActivity() {
     final controller = _danmakuController;
     if (controller == null) return;
@@ -192,34 +239,6 @@ class PlaybackController {
     _danmakuController = null;
   }
 
-  void _bindBackend() {
-    if (_listenersBound || _disposed) return;
-    _listenersBound = true;
-    _subscriptions.addAll([
-      _backend.playing.listen(_onPlayingChanged),
-      _backend.position.listen(_onPositionChanged),
-      _backend.duration.listen(_onDurationChanged),
-      _backend.buffered.listen(_onBufferedChanged),
-      _backend.buffering.listen(_onBufferingChanged),
-      _backend.errors.listen(_onError),
-      _backend.completed.listen((completed) {
-        _eofReached = completed;
-        if (!_disposed && completed) _completed.add(null);
-      }),
-      _backend.tracks.listen(_onTracksChanged),
-    ]);
-  }
-
-  /// 取消全部后端订阅，供 Android 渲染器切换时重建 Player 前后使用。
-  Future<void> _unbindBackend() async {
-    if (!_listenersBound) return;
-    _listenersBound = false;
-    for (final subscription in _subscriptions) {
-      await subscription.cancel();
-    }
-    _subscriptions.clear();
-  }
-
   void _onPlayingChanged(bool playing) {
     if (_disposed) return;
     final current = core.value;
@@ -227,13 +246,13 @@ class PlaybackController {
     final buffering = playing ? false : current.buffering;
     final failed = playing ? false : current.failed;
     final errorMessage = playing ? '' : current.errorMessage;
-    final changed =
-        current.playing != playing ||
-        current.loading != loading ||
-        current.buffering != buffering ||
-        current.failed != failed ||
-        current.errorMessage != errorMessage;
-    if (!changed) return;
+    if (current.playing == playing &&
+        current.loading == loading &&
+        current.buffering == buffering &&
+        current.failed == failed &&
+        current.errorMessage == errorMessage) {
+      return;
+    }
     core.value = current.copyWith(
       playing: playing,
       loading: loading,
@@ -269,9 +288,6 @@ class PlaybackController {
     }
     _lastTimelineBucket = bucket;
 
-    // Danmaku owns a frame clock and only needs a bounded media-time anchor.
-    // Keeping this behind the same 250 ms bucket avoids rescheduling its wake
-    // timer for every raw backend position sample.
     _danmakuController?.syncTime(position);
     _updateSkipState(position);
     final current = timeline.value;
@@ -305,9 +321,7 @@ class PlaybackController {
   }
 
   void _onBufferingChanged(bool buffering) {
-    if (_disposed || core.value.buffering == buffering) {
-      return;
-    }
+    if (_disposed || core.value.buffering == buffering) return;
     core.value = core.value.copyWith(buffering: buffering);
     _syncDanmakuActivity();
   }
@@ -316,11 +330,7 @@ class PlaybackController {
     if (_disposed) return;
     final safeError = sanitizePlaybackError(error);
     AppLogger.instance.warning('Playback error: $safeError', tag: 'Playback');
-    // Audio may keep mpv's playing state true after the video decoder has
-    // failed. Treat codec initialization failures as fatal regardless, so the
-    // broken native decode pipeline is stopped instead of freezing the app.
-    if (_backend.isPlaying && !isFatalPlaybackError(safeError)) {
-      debugPrint('播放中忽略非致命错误: $safeError');
+    if ((_player?.state.playing ?? false) && !isFatalPlaybackError(safeError)) {
       return;
     }
     _setPlaybackFailed(safeError);
@@ -334,24 +344,24 @@ class PlaybackController {
       failed: true,
       errorMessage: error,
     );
-    unawaited(_backend.pause());
+    unawaited(_player?.pause());
     _syncDanmakuActivity();
   }
 
   Future<void> play({bool remote = false}) async {
     if (_disposed || (!_roomCanControl && _roomConnected && !remote)) return;
-    await _backend.play();
+    await _player?.play();
   }
 
   Future<void> pause({bool remote = false}) async {
     if (_disposed || (!_roomCanControl && _roomConnected && !remote)) return;
-    await _backend.pause();
+    await _player?.pause();
     _danmakuController?.pause();
   }
 
   Future<void> stop() async {
     if (_disposed) return;
-    await _backend.stop();
+    await _player?.stop();
     _danmakuController?.pause();
   }
 
@@ -373,8 +383,6 @@ class PlaybackController {
     if (overlay.value.skipState == SkipState.waiting) {
       _setSkipState(SkipState.idle);
     }
-    // 播放完成后（mpv keep-open 会暂停在结尾）再拖动进度条：seek 之后
-    // 后端仍处于暂停，必须显式恢复播放，否则再次拖拽没有效果。
     final resumeAfterSeek = _eofReached;
     await _performSeek(target, updatePreview: !fromSlider);
     if (resumeAfterSeek) {
@@ -396,7 +404,7 @@ class PlaybackController {
     );
     _lastTimelineBucket = clamped.inMilliseconds ~/ _timelineIntervalMs;
     try {
-      await _backend.seek(clamped);
+      await _player?.seek(clamped);
       _danmakuController?.syncTime(clamped);
     } catch (error) {
       debugPrint('播放跳转失败: $error');
@@ -408,7 +416,7 @@ class PlaybackController {
     final normalized = rate > 0 ? rate : 1.0;
     core.value = core.value.copyWith(playbackRate: normalized);
     _danmakuController?.playbackRate = normalized;
-    await _backend.setRate(normalized);
+    await _player?.setRate(normalized);
   }
 
   void setDoubleSpeed(bool enabled) {
@@ -430,14 +438,14 @@ class PlaybackController {
         longPressRate: _longPressStartRate,
       );
       _notifyToastChanged();
-      _scheduleLongPressState();
+      _applyLongPressRate(_longPressStartRate);
       return;
     }
 
     _stopReversePlayback();
     overlay.value = overlay.value.copyWith(doubleSpeed: false);
     _notifyToastChanged();
-    _scheduleLongPressState();
+    _restorePlaybackAfterLongPress();
   }
 
   void updateDoubleSpeedOffset(double horizontalOffset) {
@@ -450,11 +458,9 @@ class PlaybackController {
     if (overlay.value.longPressRate == steppedRate) return;
     overlay.value = overlay.value.copyWith(longPressRate: steppedRate);
     _notifyToastChanged();
-    _scheduleLongPressState();
+    _applyLongPressRate(steppedRate);
   }
 
-  /// Applies room permissions at the player boundary so every platform layout
-  /// observes the same control and playback-rate policy.
   Future<void> configureWatchParty({
     required bool connected,
     required bool canControl,
@@ -467,29 +473,6 @@ class PlaybackController {
     }
   }
 
-  void _scheduleLongPressState() {
-    _longPressRevision++;
-    _longPressTask ??= _drainLongPressState();
-  }
-
-  Future<void> _drainLongPressState() async {
-    while (!_disposed) {
-      final revision = _longPressRevision;
-      final state = overlay.value;
-      try {
-        if (state.doubleSpeed) {
-          await _applyLongPressRate(state.longPressRate);
-        } else {
-          await _restorePlaybackAfterLongPress();
-        }
-      } catch (error) {
-        debugPrint('长按变速失败: $error');
-      }
-      if (revision == _longPressRevision) break;
-    }
-    _longPressTask = null;
-  }
-
   Future<void> _applyLongPressRate(double rate) async {
     if (_disposed || !overlay.value.doubleSpeed) return;
     if (rate > 0) {
@@ -497,7 +480,6 @@ class PlaybackController {
       await setRate(rate);
       if (_playingBeforeLongPress &&
           overlay.value.doubleSpeed &&
-          overlay.value.longPressRate > 0 &&
           !core.value.playing) {
         await play();
       }
@@ -506,10 +488,7 @@ class PlaybackController {
 
     _stopReversePlayback();
     if (core.value.playing) await pause();
-    if (rate < 0 &&
-        !_disposed &&
-        overlay.value.doubleSpeed &&
-        overlay.value.longPressRate == rate) {
+    if (rate < 0 && !_disposed && overlay.value.doubleSpeed) {
       _reversePlaybackRate = rate.abs();
       _reversePlaybackTimer = Timer.periodic(
         _reverseTickInterval,
@@ -528,9 +507,9 @@ class PlaybackController {
     _reverseSeekInFlight = true;
     try {
       final rewind = Duration(
-        milliseconds:
-            (_reverseTickInterval.inMilliseconds * _reversePlaybackRate)
-                .round(),
+        milliseconds: (_reverseTickInterval.inMilliseconds *
+                _reversePlaybackRate)
+            .round(),
       );
       await _performSeek(timeline.value.position - rewind);
     } finally {
@@ -578,6 +557,7 @@ class PlaybackController {
 
   void setControlsVisible(bool visible) {
     if (_disposed) return;
+    if (overlay.value.controlsLocked && visible) return;
     if (overlay.value.controlsVisible != visible) {
       overlay.value = overlay.value.copyWith(controlsVisible: visible);
     }
@@ -635,7 +615,7 @@ class PlaybackController {
     overlay.value = overlay.value.copyWith(
       showJumpPrompt: true,
       jumpPosition: position,
-      jumpPromptText: '继续播放${position.toTimeString()}？',
+      jumpPromptText: '继续播放${position.label()}？',
     );
     _jumpPromptTimer?.cancel();
     _jumpPromptTimer = Timer(const Duration(seconds: 15), hideJumpPrompt);
@@ -742,8 +722,6 @@ class PlaybackController {
   }) async {
     if (_disposed) return;
     final previous = preferences.value;
-    // TV 上不允许 auto：选择「自动」立即归一化为 mediacodec-copy，
-    // 保证会话内应用值与持久化值一致（resetPreferences 同样受益）。
     final hwdec = PlaybackSettingsService.normalizeHwdecMode(next.hwdecMode);
     if (hwdec != next.hwdecMode) next = next.copyWith(hwdecMode: hwdec);
     if (Platform.isAndroid) {
@@ -753,12 +731,10 @@ class PlaybackController {
       if (rendererChanged &&
           next.videoRenderer == mediacodecEmbedRenderer &&
           next.videoEnhancementMode != VideoEnhancementMode.off) {
-        // Choosing the direct compatibility renderer takes precedence.
         next = next.copyWith(videoEnhancementMode: VideoEnhancementMode.off);
       } else if (enhancementChanged &&
           next.videoEnhancementMode != VideoEnhancementMode.off &&
           next.videoRenderer == mediacodecEmbedRenderer) {
-        // Enabling Anime4K is an explicit request for the GPU shader path.
         next = next.copyWith(videoRenderer: 'gpu');
       }
     }
@@ -775,33 +751,26 @@ class PlaybackController {
       await _syncSubtitleConfig();
     }
     if (previous.showSubtitle != next.showSubtitle) {
-      await _backend.setNativeProperty(
+      await _setNativeProperty(
         'sub-visibility',
         next.showSubtitle ? 'yes' : 'no',
       );
     }
     if (previous.hwdecMode != next.hwdecMode) {
-      await _backend.setNativeProperty(
+      await _setNativeProperty(
         'hwdec',
         effectiveHwdec(next.hwdecMode, next.videoRenderer),
       );
     }
     if (previous.videoRenderer != next.videoRenderer) {
       if (Platform.isAndroid) {
-        // Android 的 vo 切换不能对运行中的实例热设置：gpu-next 不在当前
-        // mpv 构建中，且反复 set vo 会残留损坏的 GPU 上下文与 MediaCodec
-        // Surface（日志中的 vo=null、textureId=0、MediaCodec start failed）。
-        // 完整重建 Player + VideoController，在全新 Surface 上按新渲染器
-        // 重新打开当前媒体。
-        await _rebuildBackendForRenderer(next.videoRenderer);
+        await _rebuildForRenderer(next.videoRenderer);
       } else {
-        await syncMpvProperties(
-          _backend.setNativeProperty,
+        await _syncProperties(
           buildRendererSwitchProperties(
             renderer: next.videoRenderer,
             hwdecMode: next.hwdecMode,
           ),
-          debugLabel: 'video renderer',
         );
       }
     }
@@ -815,28 +784,21 @@ class PlaybackController {
     }
   }
 
-  Future<void> setVideoFit(BoxFit fit, String description) {
-    return updatePreferences(
-      preferences.value.copyWith(
-        videoFit: fit,
-        videoFitDescription: description,
-      ),
-      persist: false,
-    );
-  }
+  Future<void> setVideoFit(BoxFit fit, String description) => updatePreferences(
+    preferences.value.copyWith(videoFit: fit, videoFitDescription: description),
+    persist: false,
+  );
 
   Future<bool> toggleVideoEnhancement() async {
     final current = preferences.value;
     final enabling = current.videoEnhancementMode == VideoEnhancementMode.off;
-    final mode = enabling
-        ? current.lastVideoEnhancementMode
-        : VideoEnhancementMode.off;
+    final mode =
+        enabling ? current.lastVideoEnhancementMode : VideoEnhancementMode.off;
     await updatePreferences(
       current.copyWith(
         videoEnhancementMode: mode,
-        lastVideoEnhancementMode: enabling
-            ? mode
-            : current.videoEnhancementMode,
+        lastVideoEnhancementMode:
+            enabling ? mode : current.videoEnhancementMode,
       ),
     );
     return enabling;
@@ -858,28 +820,83 @@ class PlaybackController {
   Future<void> updateSubtitleConfig(
     SubtitleConfig config, {
     bool persist = true,
-  }) {
-    return updatePreferences(
-      preferences.value.copyWith(subtitleConfig: config),
-      persist: persist,
-    );
-  }
+  }) => updatePreferences(
+    preferences.value.copyWith(subtitleConfig: config),
+    persist: persist,
+  );
 
-  Future<void> toggleSubtitle() {
-    return updatePreferences(
-      preferences.value.copyWith(showSubtitle: !preferences.value.showSubtitle),
-    );
-  }
+  Future<void> toggleSubtitle() => updatePreferences(
+    preferences.value.copyWith(showSubtitle: !preferences.value.showSubtitle),
+  );
 
-  Future<void> setSubtitleTrack(SubtitleTrack track) =>
-      _backend.setSubtitleTrack(track);
+  Future<void> setSubtitleTrack(SubtitleTrack track) async {
+    await _player?.setSubtitleTrack(track);
+  }
 
   Future<PlaybackTechnicalInfo> loadTechnicalInfo() async {
-    await initialize();
-    final info = await _backend.getTechnicalInfo();
+    try {
+      await initialize();
+    } catch (_) {}
+    final player = _player;
+    final state = player?.state;
+    final properties = (player != null && state != null && state.duration > Duration.zero)
+        ? await _readNativeProperties(player)
+        : const <String, String>{};
+    final video = state != null ? _activeVideoTrack(state) : null;
+    final audio = state != null ? _activeAudioTrack(state) : null;
+    final params = state?.videoParams;
+    final audioParams = state?.audioParams;
+    final outputRect = _internalVideoController?.rect.value;
     final settings = preferences.value;
     final actual = enhancement.value;
-    return info.copyWith(
+
+    return PlaybackTechnicalInfo(
+      width: params?.w ?? state?.width ?? video?.w,
+      height: params?.h ?? state?.height ?? video?.h,
+      framesPerSecond:
+          _parseDouble(properties['estimated-vf-fps']) ??
+          _parseDouble(properties['container-fps']) ??
+          video?.fps,
+      videoBitrate: _parseInt(properties['video-bitrate']) ?? video?.bitrate,
+      videoCodec: _firstValue([
+        properties['video-codec-name'],
+        video?.codec,
+        properties['video-codec'],
+      ]),
+      videoDecoder: _firstValue([video?.decoder, properties['video-codec']]),
+      hardwareDecoder: properties['hwdec-current'],
+      videoOutput: properties['current-vo'],
+      graphicsApi: properties['gpu-api'],
+      graphicsContext: properties['current-gpu-context'],
+      pixelFormat: _firstValue([params?.pixelformat, params?.hwPixelformat]),
+      colorSpace: _joinedValues([
+        params?.primaries,
+        params?.gamma,
+        params?.colormatrix,
+      ]),
+      containerFormat: properties['file-format'],
+      audioBitrate:
+          _parseInt(properties['audio-bitrate']) ??
+          state?.audioBitrate?.round() ??
+          audio?.bitrate,
+      audioSampleRate: audioParams?.sampleRate ?? audio?.samplerate,
+      audioChannels: audioParams?.channelCount ?? audio?.channelscount,
+      audioCodec: _firstValue([
+        properties['audio-codec-name'],
+        audio?.codec,
+        properties['audio-codec'],
+      ]),
+      audioDecoder: _firstValue([audio?.decoder, properties['audio-codec']]),
+      audioFormat: audioParams?.format,
+      audioChannelLayout: _firstValue([
+        audioParams?.hrChannels,
+        audioParams?.channels,
+        audio?.channels,
+      ]),
+      outputWidth: outputRect?.width.round(),
+      outputHeight: outputRect?.height.round(),
+      frameDropCount: _parseInt(properties['frame-drop-count']) ?? 0,
+      delayedFrameCount: _parseInt(properties['vo-delayed-frame-count']) ?? 0,
       rendererProfile: settings.videoRenderer,
       hardwareDecodeMode: settings.hwdecMode,
       requestedEnhancementMode: actual.requestedMode,
@@ -895,8 +912,7 @@ class PlaybackController {
   }
 
   Future<void> _configurePlayer(double rate) async {
-    await syncMpvProperties(
-      _backend.setNativeProperty,
+    await _syncProperties(
       buildPlayerProperties(
         hwdecMode: preferences.value.hwdecMode,
         videoRenderer: preferences.value.videoRenderer,
@@ -905,56 +921,82 @@ class PlaybackController {
         lowMemoryMode: PlaybackSettingsService.getLowMemoryMode(),
         mediaUri: _lastOpenUri,
       ),
-      debugLabel: 'player',
     );
     await _syncVideoEnhancement();
     await _syncSubtitleConfig();
-    await _backend.setNativeProperty(
+    await _setNativeProperty(
       'sub-visibility',
       preferences.value.showSubtitle ? 'yes' : 'no',
     );
     await setRate(rate);
   }
 
-  /// Android 渲染器切换：整体重建 Player 与 VideoController。
-  ///
-  /// 旧实例连同其 GPU 上下文 / MediaCodec Surface 一起释放，再按新渲染器
-  /// 创建全新实例，最后在当前位置恢复播放，避免热切换 vo 后残留损坏的
-  /// 视频输出链路。
-  Future<void> _rebuildBackendForRenderer(String renderer) async {
-    final wasPlaying = _backend.isPlaying;
-    final position = _backend.currentPosition;
-    final mediaUri = _backend.currentMediaUri;
-    final subtitleTrack = _backend.currentSubtitleTrack;
+  Future<void> _syncProperties(Map<String, String> properties) async {
+    for (final entry in properties.entries) {
+      await _setNativeProperty(entry.key, entry.value);
+    }
+  }
+
+  Future<void> _rebuildForRenderer(String renderer) async {
+    final player = _player;
+    if (player == null) return;
+    final wasPlaying = player.state.playing;
+    final position = player.state.position;
+    final mediaUri = currentMediaUri;
+    final subtitleTrack = currentSubtitleTrack;
     final rate = core.value.playbackRate;
 
-    await _unbindBackend();
+    for (final sub in _subscriptions) {
+      await sub.cancel();
+    }
+    _subscriptions.clear();
+
     videoController.value = null;
-    await _backend.dispose();
+    await player.dispose();
+    _player = null;
+    _internalVideoController = null;
     if (_disposed) return;
-    await _backend.initialize(videoRenderer: renderer);
-    if (_disposed) return;
-    videoController.value = _backend.videoController;
-    _bindBackend();
+
+    final newPlayer = Player(
+      configuration: const PlayerConfiguration(
+        bufferSize: 8 * 1024 * 1024,
+        title: 'BAKA Player',
+      ),
+    );
+    _player = newPlayer;
+
+    final isAndroid = Platform.isAndroid;
+    String? vo;
+    if (isAndroid) {
+      vo = renderer == mediacodecEmbedRenderer ? mediacodecEmbedRenderer : null;
+    }
+    final vController = VideoController(
+      newPlayer,
+      configuration: VideoControllerConfiguration(
+        vo: vo,
+        hwdec: isAndroid && renderer == mediacodecEmbedRenderer
+            ? 'mediacodec'
+            : null,
+      ),
+    );
+    _internalVideoController = vController;
+    videoController.value = vController;
+    _bindPlayerListeners(newPlayer);
     _resetPlaybackState();
     await _configurePlayer(rate);
-    if (mediaUri == null) return;
-    await _backend.open(
-      mediaUri,
-      autoplay: wasPlaying,
-      httpHeaders: _lastOpenHeaders,
-    );
-    if (_disposed) return;
-    // 新 VideoController 创建后会重置 hwdec，因此重新应用。
-    await _reapplyHwdec();
-    if (position > Duration.zero) {
-      await _backend.seek(position);
-    }
-    if (subtitleTrack.id != 'auto' && subtitleTrack.id != 'no') {
-      try {
-        await _backend.setSubtitleTrack(subtitleTrack);
-      } catch (error) {
-        debugPrint('重建后恢复字幕轨道失败: $error');
+
+    if (mediaUri != null) {
+      await newPlayer.open(
+        Media(mediaUri, httpHeaders: _lastOpenHeaders ?? const {}),
+        play: wasPlaying,
+      );
+      if (_disposed) return;
+      await _reapplyHwdec();
+      if (position > Duration.zero) await newPlayer.seek(position);
+      if (subtitleTrack.id != 'auto' && subtitleTrack.id != 'no') {
+        try {
+          await newPlayer.setSubtitleTrack(subtitleTrack);
+        } catch (_) {}
       }
     }
   }
@@ -965,7 +1007,7 @@ class PlaybackController {
     if (Platform.isAndroid &&
         preferences.value.videoRenderer == mediacodecEmbedRenderer &&
         pipeline != VideoEnhancementPipeline.off) {
-      await _backend.setNativeProperty('glsl-shaders', '');
+      await _setNativeProperty('glsl-shaders', '');
       if (_disposed) return;
       enhancement.value = enhancement.value.copyWith(
         requestedMode: mode,
@@ -979,20 +1021,18 @@ class PlaybackController {
       enabled: pipeline != VideoEnhancementPipeline.off,
     );
     if (pipeline == VideoEnhancementPipeline.off) {
-      // Clear signed CNN passes before returning Android to an unsigned 8-bit
-      // framebuffer, otherwise one transition frame can contain bad residuals.
-      await _backend.setNativeProperty('glsl-shaders', '');
+      await _setNativeProperty('glsl-shaders', '');
       for (final entry in framebuffer.entries) {
-        await _backend.setNativeProperty(entry.key, entry.value);
+        await _setNativeProperty(entry.key, entry.value);
       }
     } else {
       for (final entry in framebuffer.entries) {
-        await _backend.setNativeProperty(entry.key, entry.value);
+        await _setNativeProperty(entry.key, entry.value);
       }
     }
     final shaderPath = await Anime4K.shaderPath(pipeline);
     if (pipeline != VideoEnhancementPipeline.off) {
-      await _backend.setNativeProperty('glsl-shaders', shaderPath);
+      await _setNativeProperty('glsl-shaders', shaderPath);
     }
     if (_disposed) return;
     enhancement.value = enhancement.value.copyWith(
@@ -1002,13 +1042,8 @@ class PlaybackController {
     );
   }
 
-  Future<void> _syncSubtitleConfig() {
-    return syncMpvProperties(
-      _backend.setNativeProperty,
-      buildSubtitleProperties(preferences.value.subtitleConfig),
-      debugLabel: 'subtitle',
-    );
-  }
+  Future<void> _syncSubtitleConfig() =>
+      _syncProperties(buildSubtitleProperties(preferences.value.subtitleConfig));
 
   void _resetPlaybackState() {
     _stopReversePlayback();
@@ -1036,15 +1071,15 @@ class PlaybackController {
     _eofReached = false;
   }
 
-  Future<void> dispose() async {
+  Future<void> dispose() => _disposeFuture ??= _dispose();
+
+  Future<void> _dispose() async {
     if (_disposed) return;
     _disposed = true;
     _hideControlsTimer?.cancel();
     _skipCancelHideTimer?.cancel();
     _jumpPromptTimer?.cancel();
     _reversePlaybackTimer?.cancel();
-    _longPressRevision++;
-    await _longPressTask;
     for (final subscription in _subscriptions) {
       await subscription.cancel();
     }
@@ -1052,10 +1087,15 @@ class PlaybackController {
     _danmakuController?.pause();
     _danmakuController = null;
     await _settingsWrites;
-    try {
-      await _backend.pause();
-    } catch (_) {}
-    await _backend.dispose();
+    final player = _player;
+    _player = null;
+    _internalVideoController = null;
+    if (player != null) {
+      try {
+        await player.pause();
+      } catch (_) {}
+      await player.dispose();
+    }
     await _completed.close();
     await _seekEvents.close();
     core.dispose();
@@ -1068,3 +1108,288 @@ class PlaybackController {
     videoController.dispose();
   }
 }
+
+// ---------------- MPV 配置与诊断辅助工具 ---------------- //
+
+const playerProperties = <String, String>{
+  'volume-max': '100',
+  'hwdec': 'auto',
+  'hwdec-codecs': 'all',
+  'cache': 'auto',
+  'cache-secs': '12',
+  'demuxer-max-bytes': '16777216',
+  'demuxer-max-back-bytes': '4194304',
+  'demuxer-hysteresis-secs': '3',
+  'network-timeout': '30',
+  'tls-verify': 'no',
+  'user-agent':
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+};
+
+const localDemuxerLavfOptions =
+    'seg_max_retry=5,strict=experimental,allowed_extensions=ALL,'
+    'protocol_whitelist=[file,http,https,tcp,udp,tls,data,crypto,ftp,rtp,rtsp,rtmp,srt]';
+
+const networkDemuxerLavfOptions =
+    'reconnect=1,multiple_requests=1,retry_open=3,hls_wrap=0,hls_allow_cache=1,'
+    'fflags=+igndts+ignidx,tls_verify=0';
+
+const lowMemoryPlayerProperties = <String, String>{
+  'cache-secs': '5',
+  'demuxer-max-bytes': '8388608',
+  'demuxer-max-back-bytes': '2097152',
+  'demuxer-hysteresis-secs': '2',
+};
+
+Map<String, String> buildPlayerProperties({
+  String hwdecMode = 'auto',
+  String videoRenderer = 'gpu',
+  bool videoEnhancementEnabled = false,
+  bool lowMemoryMode = false,
+  bool? android,
+  String? mediaUri,
+}) {
+  final isNetwork =
+      mediaUri != null &&
+      (mediaUri.startsWith('http://') || mediaUri.startsWith('https://'));
+  return <String, String>{
+    ...playerProperties,
+    if (lowMemoryMode) ...lowMemoryPlayerProperties,
+    'hwdec': effectiveHwdec(hwdecMode, videoRenderer, android: android),
+    ...buildVideoRendererProperties(
+      videoRenderer,
+      android: android,
+      videoEnhancementEnabled: videoEnhancementEnabled,
+    ),
+    'demuxer-lavf-o': isNetwork
+        ? networkDemuxerLavfOptions
+        : localDemuxerLavfOptions,
+  };
+}
+
+String effectiveHwdec(String hwdecMode, String videoRenderer, {bool? android}) {
+  final isAndroid = android ?? Platform.isAndroid;
+  if (!isAndroid) return hwdecMode;
+  if (videoRenderer == mediacodecEmbedRenderer) return 'mediacodec';
+  return hwdecMode == 'auto' ? 'auto-safe' : hwdecMode;
+}
+
+bool isFatalPlaybackError(String error) {
+  final message = error.toLowerCase();
+  return message.contains('could not open codec') ||
+      message.contains('failed to open codec');
+}
+
+Map<String, String> buildRendererSwitchProperties({
+  required String renderer,
+  required String hwdecMode,
+  bool? android,
+}) {
+  final isAndroid = android ?? Platform.isAndroid;
+  if (isAndroid) return const <String, String>{};
+  return buildVideoRendererProperties(renderer, android: false);
+}
+
+Map<String, String> buildVideoRendererProperties(
+  String renderer, {
+  bool? android,
+  bool videoEnhancementEnabled = false,
+}) {
+  final isAndroid = android ?? Platform.isAndroid;
+  if (isAndroid) {
+    return <String, String>{
+      'gpu-context': 'android',
+      'profile': 'fast',
+      'fbo-format': videoEnhancementEnabled ? 'rgba16f' : 'rgba8',
+      'deband': 'no',
+      'interpolation': 'no',
+      'scale': 'bilinear',
+      'cscale': 'bilinear',
+      'dscale': 'bilinear',
+      'correct-downscaling': 'no',
+      'linear-downscaling': 'no',
+      'sigmoid-upscaling': 'no',
+    };
+  }
+
+  if (renderer == 'gpu-next') {
+    return const <String, String>{
+      'scale': 'ewa_lanczossharp',
+      'cscale': 'ewa_lanczossharp',
+      'dscale': 'mitchell',
+      'correct-downscaling': 'yes',
+      'linear-downscaling': 'yes',
+      'sigmoid-upscaling': 'yes',
+    };
+  }
+  return const <String, String>{
+    'scale': 'bilinear',
+    'cscale': 'bilinear',
+    'dscale': 'bilinear',
+    'correct-downscaling': 'no',
+    'linear-downscaling': 'no',
+    'sigmoid-upscaling': 'no',
+  };
+}
+
+Map<String, String> buildVideoEnhancementFramebufferProperties({
+  required bool enabled,
+  bool? android,
+}) {
+  final isAndroid = android ?? Platform.isAndroid;
+  if (!isAndroid) return const <String, String>{};
+  return <String, String>{'fbo-format': enabled ? 'rgba16f' : 'rgba8'};
+}
+
+String sanitizePlaybackError(Object error) {
+  var message = error.toString();
+  message = message.replaceAllMapped(
+    RegExp(r'(https?:\/\/)([^\/\s?#@]+@)', caseSensitive: false),
+    (match) => match.group(1)!,
+  );
+  message = message.replaceAll(
+    RegExp(r'Authorization:\s*Basic\s+[A-Za-z0-9+/=]+', caseSensitive: false),
+    'Authorization: Basic ***',
+  );
+  message = message.replaceAllMapped(
+    RegExp(
+      r'([?&](?:password|passwd|token|access_token|auth|authorization)=)[^&\s]+',
+      caseSensitive: false,
+    ),
+    (match) => '${match.group(1)}***',
+  );
+  message = message.replaceAll(
+    RegExp(r'[A-Za-z]:\\Users\\[^\\]+', caseSensitive: false),
+    r'C:\Users\***',
+  );
+  message = message.replaceAll(
+    RegExp(r'/(?:Users|home)/[^/]+', caseSensitive: false),
+    '/Users/***',
+  );
+  return message;
+}
+
+Map<String, String> buildSubtitleProperties(SubtitleConfig config) {
+  final subPos = config.position.round().clamp(0, 150);
+  final subFontSize = config.fontSize.round().clamp(10, 100);
+
+  return {
+    'sub-pos': '$subPos',
+    'sub-font-size': '$subFontSize',
+    'sub-color': colorToMpv(
+      config.fontColor.withValues(alpha: config.opacity * config.fontColor.a),
+    ),
+    'sub-border-size': config.borderWidth.toStringAsFixed(1),
+    'sub-border-color': colorToMpv(config.borderColor),
+    'sub-back-color': colorToMpv(config.backgroundColor),
+    'sub-bold': config.bold ? 'yes' : 'no',
+    'sub-visibility': 'no',
+    if (config.fontFamily.isNotEmpty) 'sub-font': config.fontFamily,
+    'sub-ass-override': 'force',
+  };
+}
+
+String colorToMpv(Color color) {
+  String byte(double value) {
+    return (value * 255.0)
+        .round()
+        .clamp(0, 255)
+        .toRadixString(16)
+        .padLeft(2, '0');
+  }
+
+  return '#${byte(color.a)}${byte(color.r)}${byte(color.g)}${byte(color.b)}';
+}
+
+const _technicalPropertyNames = <String>[
+  'current-vo',
+  'gpu-api',
+  'current-gpu-context',
+  'hwdec-current',
+  'video-codec',
+  'video-codec-name',
+  'file-format',
+  'estimated-vf-fps',
+  'container-fps',
+  'video-bitrate',
+  'audio-codec',
+  'audio-codec-name',
+  'audio-bitrate',
+  'frame-drop-count',
+  'vo-delayed-frame-count',
+];
+
+Future<Map<String, String>> _readNativeProperties(Player player) async {
+  final platform = player.platform;
+  if (platform is! NativePlayer) return const <String, String>{};
+
+  final result = <String, String>{};
+  for (final name in _technicalPropertyNames) {
+    try {
+      final value = (await platform.getProperty(name)).trim();
+      if (value.isNotEmpty && value.toLowerCase() != 'n/a') {
+        result[name] = value;
+      }
+    } catch (_) {}
+  }
+  return result;
+}
+
+VideoTrack? _activeVideoTrack(PlayerState state) {
+  final selected = state.track.video;
+  if (selected.id != 'auto' && selected.id != 'no') {
+    for (final track in state.tracks.video) {
+      if (track.id == selected.id) return track;
+    }
+    return selected;
+  }
+  VideoTrack? fallback;
+  for (final track in state.tracks.video) {
+    if (track.id == 'auto' || track.id == 'no') continue;
+    if (track.isDefault == true) return track;
+    fallback ??= track;
+  }
+  return fallback;
+}
+
+AudioTrack? _activeAudioTrack(PlayerState state) {
+  final selected = state.track.audio;
+  if (selected.id != 'auto' && selected.id != 'no') {
+    for (final track in state.tracks.audio) {
+      if (track.id == selected.id) return track;
+    }
+    return selected;
+  }
+  AudioTrack? fallback;
+  for (final track in state.tracks.audio) {
+    if (track.id == 'auto' || track.id == 'no') continue;
+    if (track.isDefault == true) return track;
+    fallback ??= track;
+  }
+  return fallback;
+}
+
+String? _firstValue(Iterable<String?> values) {
+  for (final value in values) {
+    if (value != null && value.trim().isNotEmpty) return value.trim();
+  }
+  return null;
+}
+
+String? _joinedValues(Iterable<String?> values) {
+  final result = <String>[];
+  for (final value in values) {
+    final normalized = value?.trim();
+    if (normalized != null &&
+        normalized.isNotEmpty &&
+        !result.contains(normalized)) {
+      result.add(normalized);
+    }
+  }
+  return result.isEmpty ? null : result.join(' / ');
+}
+
+double? _parseDouble(String? value) =>
+    value == null ? null : double.tryParse(value);
+
+int? _parseInt(String? value) => _parseDouble(value)?.round();

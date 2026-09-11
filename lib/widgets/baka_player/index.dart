@@ -1,3 +1,3 @@
-﻿export './controller.dart';
+export './controller.dart';
 export './view.dart';
-export './utils.dart';
+export 'package:baka/utils/duration_utils.dart';

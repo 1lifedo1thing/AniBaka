@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:collection';
 
 /// 请求优先级：用户直接触发的播放解析优先于搜索。
 enum RequestPriority { search, play }
@@ -7,7 +6,7 @@ enum RequestPriority { search, play }
 /// 取消令牌。切页 / 换关键词时取消整棵请求树，避免慢源继续占用配额。
 class RequestCancelToken {
   bool _cancelled = false;
-  final _listeners = <void Function()>[];
+  final _listeners = <void Function()>{};
 
   bool get isCancelled => _cancelled;
 
@@ -50,7 +49,7 @@ class RequestCancelledException implements Exception {
 ///
 /// 单例，进程内共享一份配额。
 class RequestScheduler {
-  RequestScheduler({this.maxConcurrent = 6, this.maxPerHost = 2});
+  RequestScheduler({this.maxConcurrent = 12, this.maxPerHost = 4});
 
   static final RequestScheduler instance = RequestScheduler();
 
@@ -62,7 +61,7 @@ class RequestScheduler {
 
   int _active = 0;
   final Map<String, int> _hostActive = <String, int>{};
-  final _PriorityQueue _queue = _PriorityQueue();
+  final _queues = <String, List<Map<int, _ScheduledTask>>>{};
 
   /// 申请一个请求槽位。返回的 Future 在槽位可用时完成；
   /// 调用方**必须**在请求结束后调用 [release] 归还槽位。
@@ -76,8 +75,10 @@ class RequestScheduler {
     }
 
     final completer = Completer<void>();
+    final queues = _queues.putIfAbsent(host, () => [{}, {}]);
+    final queue = queues[priority.index];
     void Function()? unregisterCancel;
-    final scheduled = _ScheduledTask(
+    final scheduled = (
       host: host,
       priority: priority,
       seq: _seq++,
@@ -88,12 +89,13 @@ class RequestScheduler {
     );
 
     unregisterCancel = cancelToken?.onCancel(() {
-      if (_queue.remove(scheduled) && !completer.isCompleted) {
+      if (queue.remove(scheduled.seq) != null) {
+        if (queues.every((q) => q.isEmpty)) _queues.remove(host);
         completer.completeError(const RequestCancelledException());
       }
     });
 
-    _queue.add(scheduled);
+    queue[scheduled.seq] = scheduled;
     _pump();
     return completer.future;
   }
@@ -119,6 +121,7 @@ class RequestScheduler {
   }) async {
     await acquire(host, priority: priority, cancelToken: cancelToken);
     try {
+      cancelToken?.throwIfCancelled();
       return await task();
     } finally {
       release(host);
@@ -128,10 +131,23 @@ class RequestScheduler {
   int _seq = 0;
 
   void _pump() {
-    while (_queue.isNotEmpty && _active < maxConcurrent) {
-      final next = _queue.peekWithHostBudget(_hostActive, maxPerHost);
-      if (next == null) break; // 队首都受 host 限流阻塞
-      _queue.remove(next);
+    while (_active < maxConcurrent) {
+      _ScheduledTask? next;
+      for (final entry in _queues.entries) {
+        if ((_hostActive[entry.key] ?? 0) >= maxPerHost) continue;
+        final queues = entry.value;
+        final head =
+            (queues[1].isNotEmpty ? queues[1] : queues[0]).values.first;
+        if (next == null ||
+            head.priority.index > next.priority.index ||
+            (head.priority == next.priority && head.seq < next.seq)) {
+          next = head;
+        }
+      }
+      if (next == null) return;
+      final queues = _queues[next.host]!;
+      queues[next.priority.index].remove(next.seq);
+      if (queues.every((q) => q.isEmpty)) _queues.remove(next.host);
       _active++;
       _hostActive.update(next.host, (v) => v + 1, ifAbsent: () => 1);
       next.start();
@@ -139,50 +155,9 @@ class RequestScheduler {
   }
 }
 
-class _ScheduledTask {
-  final String host;
-  final RequestPriority priority;
-  final int seq;
-  final void Function() start;
-
-  _ScheduledTask({
-    required this.host,
-    required this.priority,
-    required this.seq,
-    required this.start,
-  });
-}
-
-/// 按 (priority desc, seq asc) 排序，并支持 host 预算感知出队。
-class _PriorityQueue {
-  final SplayTreeSet<_ScheduledTask> _items = SplayTreeSet<_ScheduledTask>(
-    _compare,
-  );
-
-  bool get isNotEmpty => _items.isNotEmpty;
-
-  void add(_ScheduledTask item) => _items.add(item);
-
-  bool remove(_ScheduledTask item) => _items.remove(item);
-
-  /// 返回优先级最高、且其 host 未超预算的任务；没有则返回 null。
-  _ScheduledTask? peekWithHostBudget(
-    Map<String, int> hostActive,
-    int maxPerHost,
-  ) {
-    _ScheduledTask? best;
-    for (final item in _items) {
-      if ((hostActive[item.host] ?? 0) >= maxPerHost) continue;
-      best = item;
-      break;
-    }
-    return best;
-  }
-
-  static int _compare(_ScheduledTask a, _ScheduledTask b) {
-    if (a.priority.index != b.priority.index) {
-      return b.priority.index.compareTo(a.priority.index);
-    }
-    return a.seq.compareTo(b.seq);
-  }
-}
+typedef _ScheduledTask = ({
+  String host,
+  RequestPriority priority,
+  int seq,
+  void Function() start,
+});

@@ -1,4 +1,4 @@
-import 'package:baka/widgets/danmaku/controller.dart';
+import 'package:baka/services/playback/danmaku_controller.dart';
 import 'package:baka/widgets/danmaku/view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';

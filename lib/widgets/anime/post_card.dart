@@ -1,7 +1,7 @@
 import 'package:baka/source/source_registry.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:baka/instance.dart';
-import 'package:baka/services/navigation_service.dart';
+import 'package:baka/app/navigation.dart';
 import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/utils/reg_utils.dart';
 import 'package:baka/widgets/platform/windows/windows_post_card.dart';
@@ -29,7 +29,7 @@ PostCardMeta resolvePostCardMeta(Map data) {
     'bgm' => _episodeTag(data['info'] as String?),
     _ when AdapterRegistry.isAdapterSource(source) =>
       data['tag']?.toString() ?? '番剧',
-    _ => '',
+    _ => data['tag']?.toString() ?? '',
   };
 
   return (tagText: tagText, scoreText: scoreText);
@@ -180,7 +180,7 @@ class PostCard extends StatelessWidget {
 
     return GestureDetector(
       onTap: onTap ?? () => navigateToDetail(context, data),
-      child: Instances.isWindows
+      child: Instances.isDesktopPlatform
           ? WindowsCard(
               data: data,
               tagText: meta.tagText,

@@ -93,7 +93,6 @@ class SettingsGroup extends StatelessWidget {
     final reduceVisualEffects = context.reduceMotion;
     return Container(
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
         borderRadius: BorderRadius.circular(16),
         boxShadow: reduceVisualEffects
             ? null
@@ -105,7 +104,12 @@ class SettingsGroup extends StatelessWidget {
                 ),
               ],
       ),
-      child: Column(children: children),
+      child: Material(
+        color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        clipBehavior: Clip.antiAlias,
+        child: Column(children: children),
+      ),
     );
   }
 }

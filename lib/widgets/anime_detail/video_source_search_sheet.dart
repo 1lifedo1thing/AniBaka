@@ -3,8 +3,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'package:baka/source/source_registry.dart';
-import 'package:baka/services/navigation_service.dart';
-import 'package:baka/services/source_adapter_service.dart';
+import 'package:baka/app/navigation.dart';
+import 'package:baka/services/source/source_repository.dart';
 import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/widgets/anime_detail/controller/video_source_search_controller.dart';
 
@@ -65,6 +65,7 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
   late final VideoSourceSearchController _controller;
   final _selectedFilterNotifier = ValueNotifier<String>('all');
   late final ValueNotifier<List<String>> _sourceKeysNotifier;
+  final _meta = SourceMetaLookup();
 
   late final Set<String> _currentIds;
   late final String _title;
@@ -131,8 +132,8 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
   List<String> _currentSourceKeys() => [
     'all',
     'internal',
-    for (final s in SourceCatalog.instance.quickSearchSources) s.key,
-    for (final s in SourceCatalog.instance.enabledCustomSources)
+    for (final s in sourceCatalog.quickSearchSources) s.key,
+    for (final s in sourceCatalog.enabledCustomSources)
       AdapterRegistry.customSourceKey(s.id),
   ];
 
@@ -809,7 +810,7 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
     bool isInProgress,
     bool isDarkMode,
   ) {
-    final meta = _getSourceMeta(key);
+    final meta = _meta[key];
     final color = isCompleted
         ? meta.color
         : isInProgress
@@ -867,14 +868,14 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
                     ),
                     decoration: BoxDecoration(
                       color: selectedFilter == key
-                          ? _getSourceMeta(key).color
+                          ? _meta[key].color
                           : (isDarkMode
                                 ? Colors.white.withValues(alpha: 0.05)
                                 : Colors.black.withValues(alpha: 0.04)),
                       borderRadius: BorderRadius.circular(14),
                     ),
                     child: Text(
-                      _getSourceMeta(key).label,
+                      _meta[key].label,
                       style: TextStyle(
                         fontSize: 12,
                         color: selectedFilter == key
@@ -982,7 +983,7 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
               );
             }
             if (entry is String) {
-              final m = _getSourceMeta(entry);
+              final m = _meta[entry];
               return _buildSectionHeader(m.label, m.icon, m.color, isDarkMode);
             }
             return RepaintBoundary(
@@ -1253,7 +1254,7 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
   }
 
   Widget _buildResultTile(SearchResultItem item, bool isDark) {
-    final meta = _getSourceMeta(item.sourceType);
+    final meta = _meta[item.sourceType];
     final img = _cover.isNotEmpty ? _cover : item.coverUrl;
 
     return _buildTile(
@@ -1371,23 +1372,28 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
     ),
   );
 
-  static String _sourceLabel(SearchResultItem item) {
+  String _sourceLabel(SearchResultItem item) {
     if (item.sourceType == 'internal') {
       return '站内';
     }
-    final descriptor = AdapterRegistry.descriptorFor(item.sourceType);
-    if (descriptor != null) {
-      return descriptor.displayName;
-    }
-    final name = item.data['sourceDisplayName']?.toString().trim();
-    if (name == null || name.isEmpty) {
-      return '自定义源';
-    }
-    return name;
+    final displayName = item.data['sourceDisplayName']?.toString().trim();
+    if (displayName != null && displayName.isNotEmpty) return displayName;
+    return _meta[item.sourceType].label;
   }
 }
 
-({String label, IconData icon, Color color}) _getSourceMeta(String key) {
+typedef SourceMeta = ({String label, IconData icon, Color color});
+
+/// 来源标签解析结果按 sheet 生命周期记忆化：一次构建会重复查询
+/// descriptor / 自定义源列表十余次。
+class SourceMetaLookup {
+  final Map<String, SourceMeta> _cache = {};
+
+  SourceMeta operator [](String key) =>
+      _cache.putIfAbsent(key, () => _resolveSourceMeta(key));
+}
+
+SourceMeta _resolveSourceMeta(String key) {
   if (key == 'all') {
     return (
       label: '全部',
@@ -1414,7 +1420,7 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
 
   if (AdapterRegistry.isCustomSource(key)) {
     final id = key.substring(AdapterRegistry.customSourcePrefix.length);
-    for (final s in SourceCatalog.instance.enabledCustomSources) {
+    for (final s in sourceCatalog.enabledCustomSources) {
       if (s.id == id) {
         const colors = [
           Color(0xFF7C4DFF),

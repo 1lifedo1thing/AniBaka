@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 
 import 'package:baka/instance.dart';
 import 'package:baka/models/playback_episode.dart';
-import 'package:baka/models/playback_state.dart';
 import 'package:baka/pages/setting/player_settings_page.dart';
 import 'package:baka/services/torrent/torrent_engine.dart';
 import 'package:baka/services/torrent/torrent_service.dart';
@@ -12,11 +11,12 @@ import 'package:baka/utils/format_utils.dart';
 import 'package:baka/widgets/baka_player/controller.dart';
 import 'package:baka/widgets/baka_player/view.dart';
 import 'package:baka/widgets/comment/comment_widget.dart';
-import 'package:baka/widgets/danmaku/controller.dart';
+import 'package:baka/services/playback/danmaku_controller.dart';
 import 'package:baka/widgets/platform/windows/windows_episode_list.dart';
 import 'package:baka/widgets/platform/windows/windows_title_bar.dart';
 
 class WindowsPlayerLayout extends StatefulWidget {
+  final TorrentService torrent;
   final Map data;
   final List<PlaybackEpisode> videoList;
   final int currPlayIndex;
@@ -43,9 +43,12 @@ class WindowsPlayerLayout extends StatefulWidget {
   final VoidCallback onDownloadPressed;
   final VoidCallback onFollowPressed;
   final bool isSearching;
+  final bool terminalPlaybackFailure;
+  final VoidCallback onAiRepair;
 
   const WindowsPlayerLayout({
     required this.data,
+    required this.torrent,
     required this.videoList,
     required this.currPlayIndex,
     required this.currUrl,
@@ -68,7 +71,9 @@ class WindowsPlayerLayout extends StatefulWidget {
     required this.onCommentLinkTap,
     required this.onDownloadPressed,
     required this.onFollowPressed,
+    required this.onAiRepair,
     this.isSearching = false,
+    this.terminalPlaybackFailure = false,
     this.sourceNames,
     this.bgmInfo = const BgmInfo(),
     super.key,
@@ -150,17 +155,10 @@ class _WindowsPlayerLayoutState extends State<WindowsPlayerLayout> {
                 setState(() => _isFullScreen = full);
                 widget.onFullScreenChanged(full);
               },
+              showPlaybackError: false,
             ),
           if (!widget.inited) _buildLoadingState(context),
-          ValueListenableBuilder<PlaybackCoreState>(
-            valueListenable: widget.controller.core,
-            builder: (context, core, _) {
-              if (core.failed) {
-                return _buildErrorState(context);
-              }
-              return const SizedBox.shrink();
-            },
-          ),
+          if (widget.terminalPlaybackFailure) _buildErrorState(context),
         ],
       ),
     );
@@ -246,7 +244,7 @@ class _WindowsPlayerLayoutState extends State<WindowsPlayerLayout> {
   }
 
   Widget _buildNetworkSpeedBadge() {
-    final torrent = TorrentService.instance;
+    final torrent = widget.torrent;
     final primaryColor = Theme.of(context).colorScheme.primary;
 
     return ValueListenableBuilder<TorrentStats?>(
@@ -368,21 +366,44 @@ class _WindowsPlayerLayoutState extends State<WindowsPlayerLayout> {
                   style: TextStyle(color: Colors.white, fontSize: 13.5),
                 ),
                 const SizedBox(height: 14),
-                ElevatedButton.icon(
-                  onPressed: widget.onSourceTap,
-                  icon: const Icon(Icons.swap_horiz_rounded, size: 17),
-                  label: const Text('切换播放源'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: primaryColor,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 8,
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  alignment: WrapAlignment.center,
+                  children: [
+                    ElevatedButton.icon(
+                      onPressed: widget.onSourceTap,
+                      icon: const Icon(Icons.swap_horiz_rounded, size: 17),
+                      label: const Text('切换播放源'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: primaryColor,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 8,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                      ),
                     ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(6),
+                    OutlinedButton.icon(
+                      onPressed: widget.onAiRepair,
+                      icon: const Icon(Icons.auto_awesome_rounded, size: 17),
+                      label: const Text('AI 修复当前源'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        side: const BorderSide(color: Colors.white54),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 8,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
               ],
             ),

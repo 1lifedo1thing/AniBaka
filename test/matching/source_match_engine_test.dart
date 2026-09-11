@@ -110,19 +110,16 @@ void main() {
       expect(ranked.first.severeEpisodeConflict, isTrue);
       expect(ranked.first.confidence, lessThanOrEqualTo(0.32));
       expect(ranked.first.shouldProbeImmediately, isFalse);
-      expect(ranked.first.shouldProbeOnFinalPass, isFalse);
     },
   );
 
-  test('exposes early and final probe tiers', () {
+  test('exposes a single probe admission tier', () {
     final context = SourceMatchContext(primaryTitle: 'Example 第二季');
     final ranked = engine.rank([
       candidate('exact', 'Example 第二季', source: 's1', episodes: 12),
     ], context);
 
     expect(ranked.first.shouldProbeImmediately, isTrue);
-    expect(ranked.first.shouldProbeOnFinalPass, isTrue);
-    expect(ranked.first.isHighConfidenceTitle, isTrue);
   });
 
   test('counts video rows without allocating split substrings', () {
@@ -134,5 +131,51 @@ void main() {
     );
 
     expect(item.episodeCount, 3);
+  });
+
+  test('auto match searches the primary title only', () {
+    final plan = SourceMatchEngine.planKeywords(
+      autoMatch: true,
+      titles: const ['Example', 'Example 第二季', 'Example 2', 'ignored'],
+    );
+
+    // 只竞速主标题，没有任何回退轮次。
+    expect(plan.race, ['Example']);
+    expect(plan.fallback, isEmpty);
+  });
+
+  test('auto match without aliases does not invent a fallback pass', () {
+    final plan = SourceMatchEngine.planKeywords(
+      autoMatch: true,
+      titles: const ['Example'],
+    );
+
+    expect(plan.race, ['Example']);
+    expect(plan.fallback, isEmpty);
+  });
+
+  test('manual search races several keywords and keeps the rest in reserve', () {
+    final plan = SourceMatchEngine.planKeywords(
+      autoMatch: false,
+      titles: const ['Example', 'Example 2', 'Example 3', 'Example 4'],
+    );
+
+    expect(
+      plan.race,
+      hasLength(SourceMatchEngine.keywordsPerSourceManual),
+    );
+    expect(plan.fallback, ['Example 3', 'Example 4']);
+  });
+
+  test('an empty title list produces no keyword work', () {
+    expect(
+      SourceMatchEngine.planKeywords(autoMatch: true, titles: const []).isEmpty,
+      isTrue,
+    );
+    expect(
+      SourceMatchEngine.planKeywords(autoMatch: false, titles: const [])
+          .isEmpty,
+      isTrue,
+    );
   });
 }

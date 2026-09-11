@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 
 import 'package:baka/source/engine/rule_validator.dart';
-import 'package:baka/source/model/source_rule.dart';
+import 'package:baka/source/models/source_rule.dart';
 
 /// Loads the former built-in sources from bundled `anx-rule/2` assets.
 ///

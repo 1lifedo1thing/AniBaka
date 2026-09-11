@@ -12,10 +12,9 @@ import 'package:baka/source/engine/pipeline_host.dart';
 import 'package:baka/source/engine/pipeline_interpreter.dart';
 import 'package:baka/source/engine/recipes.dart';
 import 'package:baka/source/engine/rule_validator.dart';
-import 'package:baka/source/model/source_rule.dart';
+import 'package:baka/source/models/source_rule.dart';
 import 'package:baka/source/pipeline_source_adapter.dart';
 import 'package:baka/source/runtime/request_scheduler.dart';
-import 'package:baka/source/store/rule_migrator.dart';
 
 /// 可控的宿主替身：fetch 从预置表返回，解析类方法给出可预测的最小实现。
 class FakeHost implements PipelineHost {
@@ -1070,8 +1069,6 @@ void main() {
       }),
     );
 
-    final recipeFirst = rule.play[1];
-    expect(identical(recipeFirst.branches, recipeFirst.branches), isTrue);
     final roundTrip = SourceRule.fromJson(
       Map<String, dynamic>.from(jsonDecode(jsonEncode(rule.toJson())) as Map),
     );
@@ -1195,9 +1192,17 @@ void main() {
     expect(rule.toJson()['mediaValidationTimeoutMs'], 6000);
   });
 
-  test('a longer media probe retries a cached short timeout', () async {
+  test('a timed-out media probe keeps the url instead of convicting it',
+      () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final subscription = server.listen((request) async {
+      if (request.uri.path == '/missing.m3u8') {
+        request.response.statusCode = HttpStatus.notFound;
+        try {
+          await request.response.close();
+        } catch (_) {}
+        return;
+      }
       await Future<void>.delayed(const Duration(milliseconds: 150));
       request.response
         ..statusCode = HttpStatus.ok
@@ -1211,14 +1216,15 @@ void main() {
       await subscription.cancel();
       await server.close(force: true);
     });
-    final url = 'http://${server.address.address}:${server.port}/slow.m3u8';
+    final base = 'http://${server.address.address}:${server.port}';
+    final url = '$base/slow.m3u8';
 
     PipelineSourceAdapter adapterWithTimeout(int timeoutMs) =>
         PipelineSourceAdapter(
           SourceRule(
             id: 'slow-$timeoutMs',
             name: 'Slow source',
-            baseUrl: 'http://${server.address.address}:${server.port}',
+            baseUrl: base,
             mediaValidationTimeoutMs: timeoutMs,
           ),
         );
@@ -1228,8 +1234,14 @@ void main() {
     addTearDown(shortAdapter.dispose);
     addTearDown(longAdapter.dispose);
 
-    expect(await shortAdapter.isPlaybackUrlReachable(url), isFalse);
+    // 50ms 探不完 150ms 的响应：结论只能是「未知」。冷 CDN 和整集大文件
+    // 的首包常常超出竞速预算，把它当死链会丢掉能播的直链。
+    expect(await shortAdapter.isPlaybackUrlReachable(url), isTrue);
+    // 「未知」不入负缓存，预算给够后仍能拿到真实结论。
     expect(await longAdapter.isPlaybackUrlReachable(url), isTrue);
+    // 明确被服务器拒绝的地址仍然判死。
+    expect(await longAdapter.isPlaybackUrlReachable('$base/missing.m3u8'),
+        isFalse);
   });
 
   test('custom source persistence keeps directConnection', () {
@@ -1245,6 +1257,6 @@ void main() {
     });
 
     expect(config.pipeline?['directConnection'], isTrue);
-    expect(RuleMigrator.ruleForConfig(config).directConnection, isTrue);
+    expect(config.toSourceRule().directConnection, isTrue);
   });
 }

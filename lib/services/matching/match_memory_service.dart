@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'package:baka/instance.dart';
 
-import 'title_matcher.dart';
+import 'package:baka/utils/title_matcher.dart';
 
 class MatchMemoryEntry {
   const MatchMemoryEntry({
@@ -76,13 +76,15 @@ class MatchMemoryService {
   }
 
   static MatchMemoryEntry? read({required String title, int? bgmId}) {
-    final entry = _readAll()[keyFor(bgmId: bgmId, title: title)];
+    final map = _readAll();
+    final key = keyFor(bgmId: bgmId, title: title);
+    final entry = map[key];
     if (entry == null) return null;
     if (entry.isFreshAt(DateTime.now().millisecondsSinceEpoch) &&
         entry.isValid) {
       return entry;
     }
-    _readAll().remove(keyFor(bgmId: bgmId, title: title));
+    map.remove(key);
     return null;
   }
 
@@ -105,13 +107,13 @@ class MatchMemoryService {
       updatedAtMs: DateTime.now().millisecondsSinceEpoch,
     );
     _prune(map);
-    await _persist(map);
+    await Instances.sp.setString(_storageKey, jsonEncode(map));
   }
 
   static Future<void> remove({required String title, int? bgmId}) async {
     final map = _readAll();
     if (map.remove(keyFor(bgmId: bgmId, title: title)) != null) {
-      await _persist(map);
+      await Instances.sp.setString(_storageKey, jsonEncode(map));
     }
   }
 
@@ -129,12 +131,26 @@ class MatchMemoryService {
 
     try {
       final decoded = jsonDecode(raw);
-      return _cache = (decoded as Map<String, dynamic>).map(
+      final map = (decoded as Map<String, dynamic>).map(
         (key, value) => MapEntry(
           key,
           MatchMemoryEntry.fromJson(value as Map<String, dynamic>),
         ),
       );
+      // Old persisted data is bounded once on load. Each subsequent write
+      // adds at most one entry, so eviction needs only one minimum scan.
+      if (map.length > maxEntries) {
+        final now = DateTime.now().millisecondsSinceEpoch;
+        map.removeWhere((_, entry) => !entry.isFreshAt(now) || !entry.isValid);
+        final entries = map.entries.toList();
+        entries.sort(
+          (a, b) => b.value.updatedAtMs.compareTo(a.value.updatedAtMs),
+        );
+        map
+          ..clear()
+          ..addEntries(entries.take(maxEntries));
+      }
+      return _cache = map;
     } catch (_) {
       return _cache = {};
     }
@@ -154,18 +170,16 @@ class MatchMemoryService {
 
   static void _prune(Map<String, MatchMemoryEntry> map) {
     final now = DateTime.now().millisecondsSinceEpoch;
-    map.removeWhere((_, entry) => !entry.isFreshAt(now) || !entry.isValid);
-    if (map.length <= maxEntries) return;
-
-    final entries = map.entries.toList()
-      ..sort((a, b) => b.value.updatedAtMs.compareTo(a.value.updatedAtMs));
-    map
-      ..clear()
-      ..addEntries(entries.take(maxEntries));
-  }
-
-  static Future<void> _persist(Map<String, MatchMemoryEntry> map) {
-    _cache = map;
-    return Instances.sp.setString(_storageKey, jsonEncode(map));
+    String? oldestKey;
+    var oldestTime = now + 1;
+    map.removeWhere((key, entry) {
+      if (!entry.isFreshAt(now) || !entry.isValid) return true;
+      if (entry.updatedAtMs < oldestTime) {
+        oldestKey = key;
+        oldestTime = entry.updatedAtMs;
+      }
+      return false;
+    });
+    if (map.length > maxEntries) map.remove(oldestKey);
   }
 }

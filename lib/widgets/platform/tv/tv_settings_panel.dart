@@ -6,9 +6,8 @@ import 'package:flutter/services.dart';
 
 import 'package:baka/widgets/baka_player/controller.dart';
 import 'package:baka/widgets/baka_player/widgets/player_info_hud.dart';
-import 'package:baka/widgets/danmaku/controller.dart';
-import 'package:baka/services/danmaku_service.dart';
-import 'package:baka/services/playback_settings_service.dart';
+import 'package:baka/services/playback/danmaku_controller.dart';
+import 'package:baka/services/playback/playback_settings.dart';
 import 'package:baka/widgets/platform/tv/tv_focusable.dart';
 
 class TvSettingsPanel extends StatefulWidget {
@@ -46,7 +45,7 @@ class _TvSettingsPanelState extends State<TvSettingsPanel> {
 
   @override
   void dispose() {
-    if (_optionChanged) DanmakuService.saveSettings(_danmaku);
+    if (_optionChanged) DanmakuController.saveSettings(_danmaku);
     super.dispose();
   }
 

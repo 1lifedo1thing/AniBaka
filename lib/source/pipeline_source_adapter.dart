@@ -19,11 +19,11 @@ import 'package:baka/source/webview_adapter.dart';
 import 'package:baka/source/engine/pipeline_host.dart';
 import 'package:baka/source/engine/pipeline_interpreter.dart';
 import 'package:baka/source/engine/recipes.dart';
-import 'package:baka/source/model/source_rule.dart';
+import 'package:baka/source/models/source_rule.dart';
 import 'package:baka/source/runtime/request_scheduler.dart';
 import 'package:baka/source/runtime/scheduler_interceptor.dart';
-import 'package:baka/services/bgm_service.dart';
-import 'package:baka/services/remote_media_redirect_resolver.dart';
+import 'package:baka/core/system_proxy.dart';
+import 'package:baka/api/bgm.dart';
 
 /// Connects a source rule to the adapter and pipeline host contracts.
 class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
@@ -88,12 +88,15 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
   bool get validatesOwnUrls => _playFeatures.validatesWithCookies;
 
   @override
-  Future<bool> isPlaybackUrlReachable(String url, {Duration? timeout}) {
+  Future<MediaReachabilityVerdict> probeMediaReachability(
+    String url, {
+    Duration? timeout,
+  }) {
     final minimumMs = rule.mediaValidationTimeoutMs;
     final effectiveTimeout = minimumMs > (timeout?.inMilliseconds ?? 0)
         ? Duration(milliseconds: minimumMs)
         : timeout;
-    return super.isPlaybackUrlReachable(url, timeout: effectiveTimeout);
+    return super.probeMediaReachability(url, timeout: effectiveTimeout);
   }
 
   @override
@@ -136,7 +139,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
         List<Future<void>>.generate(end - i, (offset) async {
           final series = seriesList[i + offset];
           try {
-            final subject = await BgmService.resolveSubject(title: series.name);
+            final subject = await resolveBgmSubject(title: series.name);
             series.image = subject?.imageUrl ?? series.image;
             series.description =
                 subject?.summary ?? series.description ?? '暂无简介';
@@ -184,11 +187,21 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
       if (media.url.isEmpty) {
         return (url: '', httpHeaders: const <String, String>{});
       }
-      if (!skipValidation &&
-          !validatesOwnUrls &&
-          !await isPlaybackUrlReachable(media.url, timeout: reachTimeout)) {
-        debugPrint('$name: 动态媒体不可达/不可播，丢弃: ${media.url}');
-        return (url: '', httpHeaders: const <String, String>{});
+      if (!skipValidation) {
+        final verdict = await probeMediaReachability(
+          media.url,
+          timeout: reachTimeout,
+        );
+        if (verdict == MediaReachabilityVerdict.rejected) {
+          debugPrint('$name: 动态媒体被服务器拒绝，丢弃: ${media.url}');
+          return (url: '', httpHeaders: const <String, String>{});
+        }
+        if (verdict == MediaReachabilityVerdict.unknown) {
+          debugPrint(
+            '$name: 动态媒体结论不确定（超时/临时缺失/网络异常），保留待播放器验证: '
+            '${media.url}',
+          );
+        }
       }
       return (url: media.url, httpHeaders: await _resolveMediaHeaders(media));
     }).whenComplete(_dropParseCache);
@@ -923,4 +936,105 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
       return '';
     }
   }
+}
+
+/// Resolves redirect-only media entry points before handing them to libmpv.
+class RemoteMediaRedirectResolver {
+  static const _maxRedirects = 5;
+  static const _requestTimeout = Duration(seconds: 20);
+  static const _hopByHop = {
+    'connection',
+    'content-length',
+    'host',
+    'keep-alive',
+    'proxy-authenticate',
+    'proxy-authorization',
+    'te',
+    'trailer',
+    'transfer-encoding',
+    'upgrade',
+  };
+
+  final HttpClient _client = SystemProxyService.createHttpClient()
+    ..connectionTimeout = _requestTimeout
+    ..idleTimeout = const Duration(seconds: 15)
+    ..userAgent = 'Baka Media Resolver';
+
+  Future<String> resolve(
+    String remoteUrl, {
+    Map<String, String> headers = const {},
+  }) async {
+    final original = Uri.tryParse(remoteUrl);
+    if (original == null ||
+        (original.scheme != 'http' && original.scheme != 'https')) {
+      return remoteUrl;
+    }
+
+    Map<String, String>? safeHeaders;
+    if (headers.isNotEmpty) {
+      safeHeaders = <String, String>{};
+      for (final entry in headers.entries) {
+        if (!_hopByHop.contains(entry.key.toLowerCase())) {
+          safeHeaders[entry.key] = entry.value;
+        }
+      }
+    }
+
+    var current = original;
+    try {
+      for (var hop = 0; hop <= _maxRedirects; hop++) {
+        final request = await _client.headUrl(current).timeout(_requestTimeout);
+        request.followRedirects = false;
+        request.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
+
+        if (safeHeaders != null && _sameAuthority(current, original)) {
+          safeHeaders.forEach(request.headers.set);
+        }
+
+        final response = await request.close().timeout(_requestTimeout);
+        final location = response.headers.value(HttpHeaders.locationHeader);
+        final status = response.statusCode;
+        await response.drain<void>().timeout(_requestTimeout);
+
+        if (location != null &&
+            location.isNotEmpty &&
+            _isRedirectStatus(status)) {
+          current = current.resolve(location);
+          continue;
+        }
+
+        if (status >= 200 && status < 400) {
+          if (current != original) {
+            debugPrint(
+              '[RemoteMediaResolver] ${original.host} -> '
+              '${current.host}:${current.port}',
+            );
+          }
+          return current.toString();
+        }
+        debugPrint('[RemoteMediaResolver] HTTP $status for ${current.host}');
+        return remoteUrl;
+      }
+      debugPrint(
+        '[RemoteMediaResolver] too many redirects for ${original.host}',
+      );
+    } catch (error) {
+      debugPrint('[RemoteMediaResolver] ${original.host} failed: $error');
+    }
+    return remoteUrl;
+  }
+
+  static bool _isRedirectStatus(int status) =>
+      status == HttpStatus.movedPermanently ||
+      status == HttpStatus.found ||
+      status == HttpStatus.seeOther ||
+      status == HttpStatus.temporaryRedirect ||
+      status == HttpStatus.permanentRedirect;
+
+  static bool _sameAuthority(Uri left, Uri right) =>
+      left.scheme.toLowerCase() == right.scheme.toLowerCase() &&
+      left.host.toLowerCase() == right.host.toLowerCase() &&
+      left.port == right.port;
+
+  void close() => _client.close(force: true);
 }

@@ -1,3 +1,10 @@
+import 'package:baka/services/source/source_repository.dart';
+import 'package:baka/services/playback/history_repository.dart';
+import 'package:baka/services/collection/collection_repository.dart';
+import 'package:baka/models/playback_request.dart';
+import 'package:baka/app/app_runtime.dart';
+import 'package:baka/services/playback/media_session.dart';
+import 'package:get/get.dart' hide ContextExtensionss;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -6,13 +13,14 @@ import 'package:flutter/services.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/pages/player/bgm_detail_page.dart';
 import 'package:baka/pages/player/dlna_page.dart';
+import 'package:baka/pages/source/ai_rule_authoring_page.dart';
 import 'package:baka/pages/setting/player_settings_page.dart';
+import 'package:baka/models/ai_rule_authoring.dart';
 import 'package:baka/models/playback_episode.dart';
-import 'package:baka/services/danmaku_service.dart';
-import 'package:baka/services/playback_session_coordinator.dart';
-import 'package:baka/services/player_service.dart';
+import 'package:baka/services/playback/playback_content.dart';
 import 'package:baka/services/matching/match_memory_service.dart';
-import 'package:baka/services/watch_party_service.dart';
+import 'package:baka/services/playback/watch_party.dart';
+import 'package:baka/source/source_registry.dart';
 
 import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/utils/toast_utils.dart';
@@ -21,7 +29,7 @@ import 'package:baka/widgets/baka_player/index.dart';
 import 'package:baka/widgets/comment/comment_widget.dart';
 import 'package:baka/widgets/common/tab_indicator.dart';
 import 'package:baka/widgets/common/scale_button.dart';
-import 'package:baka/widgets/danmaku/controller.dart';
+import 'package:baka/services/playback/danmaku_controller.dart';
 import 'package:baka/widgets/episode/episode_list_dialog.dart';
 import 'package:baka/widgets/episode/episode_widgets.dart';
 import 'package:baka/widgets/anime_detail/anime_detail_placeholder.dart';
@@ -36,13 +44,13 @@ import 'package:baka/widgets/anime_detail/controller/video_source_search_control
 
 class PlayerPage extends StatefulWidget {
   const PlayerPage({
-    required this.data,
+    required this.request,
     super.key,
     this.posIndex,
     this.autoMatch = false,
   });
 
-  final Map data;
+  final PlaybackRequest request;
   final int? posIndex;
   final bool autoMatch;
 
@@ -72,10 +80,12 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
     systemStatusBarContrastEnforced: false,
   );
 
-  late final PlayerService _svc;
-  late final PlaybackSessionCoordinator _session;
+  late final PlaybackContent _svc;
   late final WatchPartyService _watchParty;
+  late final MediaSessionService _mediaSession;
   late final TabController _tabController;
+  StreamSubscription<void>? _completedSubscription;
+  StreamSubscription<Duration>? _seekSubscription;
   List<String> _cachedTags = const [];
   late final String _fixedSummary;
   late final String _taskIdPrefix;
@@ -89,7 +99,11 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
   final ValueNotifier<bool> _showDetailNotifier = ValueNotifier<bool>(false);
   final ValueNotifier<bool> _sortAscendingNotifier = ValueNotifier<bool>(true);
   final ValueNotifier<bool> _playerFullscreen = ValueNotifier<bool>(false);
+  final ValueNotifier<PlayerFailureContext?> _terminalFailureNotifier =
+      ValueNotifier<PlayerFailureContext?>(null);
   int _playbackGeneration = 0;
+  bool _lastPlaybackOpenSucceeded = false;
+  Object? _lastPlaybackFailure;
 
   SystemUiOverlayStyle _exitStatusBarStyle = _lightStatusBarStyle;
 
@@ -102,7 +116,7 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
   int get currPlayIndex => _svc.currPlayIndex;
   int get currUrl => _svc.currUrl;
   bool get inited => _initedNotifier.value;
-  bool get isWindows => Instances.isWindows;
+  bool get isWindows => Instances.isDesktopPlatform;
   bool get _isAdapter => _svc.isAdapter;
   bool get _isLocalSource => _svc.isLocalSource;
   BgmInfo get _bgmInfo => _svc.bgmInfo;
@@ -115,24 +129,41 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
   VideoSourceSearchController? _autoMatchController;
   VideoSourceSearchController? _sourceSearchController;
 
+  Future<void> _saveProgress() {
+    final position = ctr.timeline.value.position;
+    return _svc.saveProgress(position, ctr.preferences.value.rememberLastPosition);
+  }
+
+  Future<void> _saveHistory() {
+    final timeline = ctr.timeline.value;
+    return _svc.saveHistory(
+      positionMs: timeline.position.inMilliseconds,
+      durationMs: timeline.duration.inMilliseconds,
+    );
+  }
+
+  Future<void> _saveAndResetForSwitch() async {
+    await _saveProgress();
+    await _saveHistory();
+    danmakuController.reset();
+  }
+
   @override
   void initState() {
     super.initState();
-    _svc = PlayerService(data: widget.data, posIndex: widget.posIndex);
+    _svc = PlaybackContent(
+      sources: sourceRepository,
+      collections: collections,
+      history: historyRepository,
+      request: widget.request,
+      posIndex: widget.posIndex,
+    );
     _sourceSearchController = VideoSourceSearchController.takeCachedFor(
       seedData: _svc.data,
     );
-    _watchParty = WatchPartyService.instance;
-    _session = PlaybackSessionCoordinator(
-      controller: ctr,
-      danmakuController: danmakuController,
-      content: _svc,
-      onNextEpisode: _playNextEpisode,
-      onPreviousEpisode: _playPreviousEpisode,
-      watchParty: _watchParty,
-      onWatchPartyEpisodeRequested: (episodeIndex) =>
-          _switchEpisode(episodeIndex),
-    );
+    _watchParty = Get.find<WatchPartyService>();
+    _mediaSession = Get.find<MediaSessionService>();
+    Get.find<AppRuntime>().playbacks.add(ctr);
     _tabController = TabController(length: 2, vsync: this);
     final source = _svc.data['source']?.toString() ?? '';
     final id = _svc.data['id'];
@@ -173,12 +204,12 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
         _autoMatchController = null;
         controller?.cancelSearch();
         controller?.dispose();
-        final playerData = Map<String, dynamic>.from(resolvedData);
+        final playerData = resolvedData;
         Navigator.of(context).pushReplacement(
           platformPageRoute<void>(
             builder: (_) => PlayerPage(
-              data: playerData,
-              posIndex: BgmUtils.toInt(playerData['currPlayIndex']),
+              request: playerData,
+              posIndex: playerData.episodeIndex,
               autoMatch: false,
             ),
             transitionDuration: const Duration(milliseconds: 220),
@@ -292,15 +323,19 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
   @override
   void dispose() {
     ctr.core.removeListener(_onPlaybackCoreChanged);
+    _completedSubscription?.cancel();
+    _seekSubscription?.cancel();
     _autoMatchController?.cancelSearch();
     _autoMatchController?.dispose();
     _sourceSearchController?.dispose();
-    unawaited(
-      _session.dispose().whenComplete(() async {
-        await ctr.dispose();
-        _svc.dispose();
-      }),
-    );
+    Get.find<AppRuntime>().playbacks.remove(ctr);
+    _mediaSession.detach(ctr);
+    _watchParty.detachPlayer(ctr);
+    ctr.detachDanmaku();
+    unawaited(_saveProgress());
+    unawaited(_saveHistory());
+    unawaited(ctr.dispose());
+    unawaited(_svc.dispose());
     _tabController.dispose();
     _followNotifier.dispose();
     _initedNotifier.dispose();
@@ -308,6 +343,7 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
     _showDetailNotifier.dispose();
     _sortAscendingNotifier.dispose();
     _playerFullscreen.dispose();
+    _terminalFailureNotifier.dispose();
     SystemChrome.setSystemUIOverlayStyle(_exitStatusBarStyle);
     super.dispose();
   }
@@ -337,6 +373,9 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
 
   Future<void> initVideoController(int requestId) async {
     if (_isStale(requestId)) return;
+    _terminalFailureNotifier.value = null;
+    _lastPlaybackOpenSucceeded = false;
+    _lastPlaybackFailure = null;
     _resolvedUrl = '';
     Duration? resumePosition;
     try {
@@ -347,8 +386,23 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
 
       ctr.setMediaInfo(_svc.currentMediaInfo);
       if (!inited) {
-        await _session.start();
+        ctr.attachDanmaku(danmakuController);
+        DanmakuController.loadSettings(danmakuController);
+        await Future.wait([ctr.initialize(), _mediaSession.init()]);
         if (_isStale(requestId)) return;
+
+        _completedSubscription = ctr.completed.listen((_) => _playNextEpisode());
+        _seekSubscription = ctr.seekEvents.listen((_) => unawaited(_saveProgress()));
+        _mediaSession.attach(
+          ctr,
+          onNextEpisode: _playNextEpisode,
+          onPreviousEpisode: _playPreviousEpisode,
+        );
+        _watchParty.attachPlayer(
+          ctr,
+          _svc,
+          onEpisodeRequested: (episodeIndex) => _switchEpisode(episodeIndex),
+        );
 
         if (ctr.preferences.value.rememberLastPosition) {
           final position = _svc.getSavedProgress();
@@ -414,9 +468,12 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
       }
 
       if (_isStale(requestId)) return;
+      _lastPlaybackOpenSucceeded = true;
+      _lastPlaybackFailure = null;
       await _svc.rememberCurrentEpisode();
       if (_isStale(requestId)) return;
       if (!inited) _initedNotifier.value = true;
+      _terminalFailureNotifier.value = null;
       if (resumePosition != null) {
         ctr.showJumpToPositionPrompt(resumePosition);
       }
@@ -424,7 +481,7 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
       if (localPath != null) {
         final content = await _svc.readLocalDanmakuFile(localPath);
         if (!_isStale(requestId) && content != null) {
-          danmakuController.setItems(await DanmakuService.decode(content));
+          danmakuController.setItems(await DanmakuController.decode(content));
         }
       } else {
         final episodeIndex = currPlayIndex;
@@ -436,6 +493,8 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
     } catch (e) {
       if (_isStale(requestId)) return;
       debugPrint('初始化视频控制器失败: $e');
+      _lastPlaybackFailure = e;
+      if (_lastPlaybackOpenSucceeded) return;
       await _handlePlaybackInitializationFailure(e);
     }
   }
@@ -456,15 +515,7 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
     _isAutoSwitchingSource = true;
 
     try {
-      final currentSourceKey = _svc.data['source']?.toString() ?? '';
-      if (currentSourceKey.isNotEmpty) {
-        _failedSourceKeys.add(currentSourceKey);
-      }
-      final currentSeriesId =
-          _svc.data['seriesId'] ?? _svc.data['id'] ?? _svc.data['url'];
-      if (currentSourceKey.isNotEmpty && currentSeriesId != null) {
-        _failedSourceKeys.add('$currentSourceKey|$currentSeriesId');
-      }
+      _rememberFailedCurrentSource();
 
       // 清除历史无效匹配记忆 + 失效预取，避免再次命中死链
       _svc.clearPrefetchedPlaybackMedia();
@@ -475,11 +526,14 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
       }
 
       // 1. 尝试当前剧集的下一条线路（重新解析并校验，不复用死预取）
-      final currentEp = _svc.currentVideoItem;
-      if (currentEp != null && currUrl < currentEp.lineCount) {
+      var currentEp = _svc.currentVideoItem;
+      while (currentEp != null && currUrl < currentEp.lineCount) {
         showSnackBar('当前线路播放异常，正在自动为您切换线路 ${currUrl + 1}...');
         await changeUrl(currUrl + 1);
-        return;
+        if (_lastPlaybackOpenSucceeded && !ctr.core.value.failed) return;
+        _svc.clearPrefetchedPlaybackMedia();
+        _svc.stopAdapterPlaybackKeepAlive();
+        currentEp = _svc.currentVideoItem;
       }
 
       // 2. 全自动自动匹配并无缝切换至下一个有效视频源
@@ -491,14 +545,13 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
         unawaited(controller.startSearch());
       }
 
-      final nextCandidateData = await controller.findNextPlayableCandidate(
-        excludedKeys: _failedSourceKeys,
-        episodeIndex: currPlayIndex,
-      );
-
-      if (!mounted) return;
-
-      if (nextCandidateData != null) {
+      while (mounted) {
+        final nextCandidateData = await controller.findNextPlayableCandidate(
+          excludedKeys: _failedSourceKeys,
+          episodeIndex: currPlayIndex,
+        );
+        if (!mounted) return;
+        if (nextCandidateData == null) break;
         final nextSource =
             nextCandidateData['sourceDisplayName'] ??
             nextCandidateData['source'] ??
@@ -507,14 +560,81 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
         _svc.adoptPlaybackData(nextCandidateData);
         _bumpPageData();
         await initVideoController(_nextPlaybackGeneration());
-        return;
-      } else {
-        showSnackBar('所有可用匹配源均播放失败，请点击源名称手动搜索选择', isError: true);
+        if (_lastPlaybackOpenSucceeded && !ctr.core.value.failed) return;
+        _rememberFailedCurrentSource();
+        _svc.clearPrefetchedPlaybackMedia();
+        _svc.stopAdapterPlaybackKeepAlive();
       }
+      showSnackBar('所有可用匹配源均播放失败，请点击源名称手动搜索选择', isError: true);
+      _setTerminalPlaybackFailure(_lastPlaybackFailure ?? error);
     } catch (e) {
       debugPrint('[PlayerPage] Auto fallback error: $e');
+      _setTerminalPlaybackFailure(e);
     } finally {
       _isAutoSwitchingSource = false;
+    }
+  }
+
+  void _rememberFailedCurrentSource() {
+    final sourceKey = _svc.data['source']?.toString() ?? '';
+    if (sourceKey.isEmpty) return;
+    _failedSourceKeys.add(sourceKey);
+    final seriesId =
+        _svc.data['seriesId'] ?? _svc.data['id'] ?? _svc.data['url'];
+    if (seriesId != null) _failedSourceKeys.add('$sourceKey|$seriesId');
+  }
+
+  void _setTerminalPlaybackFailure(Object error) {
+    if (!mounted) return;
+    _terminalFailureNotifier.value = PlayerFailureContext(
+      message: error.toString(),
+      title: _svc.data['title']?.toString() ?? '',
+      sourceKey: _svc.data['source']?.toString() ?? '',
+      seriesId: (_svc.data['seriesId'] ?? _svc.data['seriesUrl'])?.toString(),
+      episodeId: _svc.currentEpisodeId,
+    );
+  }
+
+  Future<void> _openAiRuleRepair() async {
+    final failure = _terminalFailureNotifier.value;
+    if (failure == null || Instances.isTV) return;
+    await sourceRepository.init();
+    final sourceKey = failure.sourceKey;
+    final catalog = sourceCatalog;
+    final currentConfig = AdapterRegistry.isCustomSource(sourceKey)
+        ? catalog.customSourceById(
+            sourceKey.substring(AdapterRegistry.customSourcePrefix.length),
+          )
+        : (AdapterRegistry.isBuiltinSource(sourceKey)
+              ? catalog.builtinSourceById(sourceKey)
+              : null);
+    if (!mounted) return;
+    final repairing = currentConfig != null;
+    final saved = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => AiRuleAuthoringPage(
+          seed: RuleAuthoringSeed(
+            mode: repairing
+                ? RuleAuthoringMode.repair
+                : RuleAuthoringMode.create,
+            siteUrl: currentConfig?.baseUrl ?? '',
+            keyword: failure.title,
+            sourceKey: repairing ? sourceKey : null,
+            currentConfig: currentConfig,
+            seriesId: failure.seriesId,
+            episodeId: failure.episodeId,
+            failureMessage: failure.message,
+          ),
+        ),
+      ),
+    );
+    if (!mounted || saved != true) return;
+    _terminalFailureNotifier.value = null;
+    _failedSourceKeys.clear();
+    if (repairing) {
+      await initVideoController(_nextPlaybackGeneration());
+    } else {
+      await _openSourceSwitchSheet();
     }
   }
 
@@ -528,7 +648,7 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
       return;
     }
     final currentRequestId = _nextPlaybackGeneration();
-    await _session.saveAndResetForSwitch();
+    await _saveAndResetForSwitch();
     if (_isStale(currentRequestId)) return;
     // 期间状态只可能被并发切换改变，而并发切换已被上面的 stale 检查拦截
     _svc.applySelection(selection);
@@ -596,9 +716,13 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
   Widget _buildWindowsTabletLayout(BuildContext context) {
     return _withImmersiveStatusBar(
       ListenableBuilder(
-        listenable: _initedNotifier,
+        listenable: Listenable.merge([
+          _initedNotifier,
+          _terminalFailureNotifier,
+        ]),
         builder: (context, _) {
           return WindowsPlayerLayout(
+            torrent: _svc.torrent,
             data: _svc.data,
             videoList: videoList,
             currPlayIndex: currPlayIndex,
@@ -643,6 +767,8 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
             ),
             onDownloadPressed: () => _showEpisodePicker(downloadMode: true),
             onFollowPressed: toggleFollow,
+            terminalPlaybackFailure: _terminalFailureNotifier.value != null,
+            onAiRepair: _openAiRuleRepair,
           );
         },
       ),
@@ -707,7 +833,7 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
       return;
     }
 
-    await _session.saveProgress();
+    await _saveProgress();
     if (!mounted) return;
     _svc.saveHistory(
       positionMs: ctr.timeline.value.position.inMilliseconds,
@@ -716,7 +842,10 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
 
     Navigator.of(context).pushReplacement(
       platformPageRoute<void>(
-        builder: (_) => PlayerPage(data: nextData, posIndex: currPlayIndex),
+        builder: (_) => PlayerPage(
+          request: PlaybackRequest.fromMap(nextData),
+          posIndex: currPlayIndex,
+        ),
         transitionDuration: const Duration(milliseconds: 220),
         transitionsBuilder: (context, animation, secondaryAnimation, child) =>
             FadeTransition(opacity: animation, child: child),
@@ -748,9 +877,26 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
                 onNextEpisode: _playNextEpisode,
                 headerControl: Padding(
                   padding: const EdgeInsets.only(right: 16.0),
-                  child: _buildGlassIconButton(
-                    icon: Icons.more_horiz_rounded,
-                    onPressed: () => PlayerSettingsPage.show(context, ctr),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (videoList.length > 1) ...[
+                        _buildGlassIconButton(
+                          icon: Icons.video_library_rounded,
+                          onPressed: () => _showEpisodePicker(),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                      _buildGlassIconButton(
+                        icon: Icons.cast_connected_rounded,
+                        onPressed: () => showCast(context),
+                      ),
+                      const SizedBox(width: 8),
+                      _buildGlassIconButton(
+                        icon: Icons.more_horiz_rounded,
+                        onPressed: () => PlayerSettingsPage.show(context, ctr),
+                      ),
+                    ],
                   ),
                 ),
                 danmakuEnabled: true,
@@ -795,9 +941,17 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
                   color: Colors.black,
                   child: AspectRatio(
                     aspectRatio: 16 / 9,
-                    child: ValueListenableBuilder<bool>(
-                      valueListenable: _initedNotifier,
-                      builder: (context, isInited, _) {
+                    child: AnimatedBuilder(
+                      animation: Listenable.merge([
+                        _initedNotifier,
+                        _terminalFailureNotifier,
+                      ]),
+                      builder: (context, _) {
+                        final failure = _terminalFailureNotifier.value;
+                        final isInited = _initedNotifier.value;
+                        if (failure != null && !isInited) {
+                          return _buildMobileTerminalFailure();
+                        }
                         if (isInited) {
                           return BakaPlayer(
                             controller: ctr,
@@ -812,6 +966,8 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
                               _playerFullscreen.value = value;
                             },
                             full: false,
+                            showPlaybackError: failure != null,
+                            onAiRepair: _openAiRuleRepair,
                           );
                         }
                         return Center(
@@ -913,6 +1069,37 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildMobileTerminalFailure() {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.error_outline_rounded, color: Colors.redAccent),
+          const SizedBox(height: 8),
+          const Text(
+            '播放失败，请换源或使用 AI 修复',
+            style: TextStyle(color: Colors.white),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            children: [
+              OutlinedButton(
+                onPressed: _openSourceSwitchSheet,
+                child: const Text('手动换源'),
+              ),
+              FilledButton.icon(
+                onPressed: _openAiRuleRepair,
+                icon: const Icon(Icons.auto_awesome_rounded, size: 17),
+                label: const Text('AI 修复'),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -1073,7 +1260,7 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
           ),
 
           ActiveDownloadIndicator(taskIdPrefix: _taskIdPrefix),
-          const MobileBtProgressIndicator(),
+          MobileBtProgressIndicator(torrent: _svc.torrent),
 
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),

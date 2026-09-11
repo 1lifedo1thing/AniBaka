@@ -1,11 +1,11 @@
+import 'package:baka/core/account_session.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:baka/app_state.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/pages/home/miniapp_page.dart';
 import 'package:baka/pages/mine/mine_profile.dart';
-import 'package:baka/services/navigation_service.dart';
+import 'package:baka/app/navigation.dart';
 import 'package:flutter/material.dart';
-import 'package:get/get.dart';
+import 'package:get/get.dart' hide ContextExtensionss;
 
 class WindowsSidebar extends StatefulWidget {
   final int currentPageIndex;
@@ -22,7 +22,6 @@ class WindowsSidebar extends StatefulWidget {
 }
 
 class _WindowsSidebarState extends State<WindowsSidebar> {
-  late final AppState _app = Get.find<AppState>();
   late bool _isSidebarCollapsed =
       Instances.sp.getBool('sidebarCollapsed') ?? false;
 
@@ -74,7 +73,7 @@ class _WindowsSidebarState extends State<WindowsSidebar> {
   }
 
   Widget _buildAvatar(double size) {
-    final avatarUrl = _app.avatarUrl;
+    final avatarUrl = Get.find<AccountSession>().avatarUrl;
     if (avatarUrl.isEmpty) {
       return _buildAvatarFallback(size);
     }
@@ -114,7 +113,7 @@ class _WindowsSidebarState extends State<WindowsSidebar> {
     if (_isSidebarCollapsed) {
       return Center(
         child: Tooltip(
-          message: _app.isLoggedIn ? '账号与 Bangumi' : '登录',
+          message: Get.find<AccountSession>().isLoggedIn ? '账号与 Bangumi' : '登录',
           child: InkResponse(
             onTap: _openLoginPage,
             radius: 24,
@@ -139,7 +138,9 @@ class _WindowsSidebarState extends State<WindowsSidebar> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    _app.hasIdentity ? _app.displayName : '点击登录',
+                    Get.find<AccountSession>().hasIdentity
+                        ? Get.find<AccountSession>().displayName
+                        : '点击登录',
                     style: const TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
@@ -148,9 +149,10 @@ class _WindowsSidebarState extends State<WindowsSidebar> {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    _app.isBangumiLogin && !_app.isLoggedIn
+                    Get.find<AccountSession>().isBangumiLogin &&
+                            !Get.find<AccountSession>().isLoggedIn
                         ? 'Bangumi 登录'
-                        : _app.isLoggedIn
+                        : Get.find<AccountSession>().isLoggedIn
                         ? '已登录'
                         : '打开登录',
                     style: TextStyle(

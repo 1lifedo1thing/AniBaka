@@ -31,17 +31,15 @@ class PlaybackCoreState {
     String? errorMessage,
     bool? hasSubtitleTracks,
     double? playbackRate,
-  }) {
-    return PlaybackCoreState(
-      loading: loading ?? this.loading,
-      playing: playing ?? this.playing,
-      buffering: buffering ?? this.buffering,
-      failed: failed ?? this.failed,
-      errorMessage: errorMessage ?? this.errorMessage,
-      hasSubtitleTracks: hasSubtitleTracks ?? this.hasSubtitleTracks,
-      playbackRate: playbackRate ?? this.playbackRate,
-    );
-  }
+  }) => PlaybackCoreState(
+    loading: loading ?? this.loading,
+    playing: playing ?? this.playing,
+    buffering: buffering ?? this.buffering,
+    failed: failed ?? this.failed,
+    errorMessage: errorMessage ?? this.errorMessage,
+    hasSubtitleTracks: hasSubtitleTracks ?? this.hasSubtitleTracks,
+    playbackRate: playbackRate ?? this.playbackRate,
+  );
 }
 
 @immutable
@@ -66,15 +64,13 @@ class PlaybackTimelineState {
     Duration? duration,
     Duration? buffered,
     bool? seeking,
-  }) {
-    return PlaybackTimelineState(
-      position: position ?? this.position,
-      previewPosition: previewPosition ?? this.previewPosition,
-      duration: duration ?? this.duration,
-      buffered: buffered ?? this.buffered,
-      seeking: seeking ?? this.seeking,
-    );
-  }
+  }) => PlaybackTimelineState(
+    position: position ?? this.position,
+    previewPosition: previewPosition ?? this.previewPosition,
+    duration: duration ?? this.duration,
+    buffered: buffered ?? this.buffered,
+    seeking: seeking ?? this.seeking,
+  );
 }
 
 @immutable
@@ -120,22 +116,20 @@ class PlayerOverlayState {
     bool? showJumpPrompt,
     Duration? jumpPosition,
     String? jumpPromptText,
-  }) {
-    return PlayerOverlayState(
-      controlsVisible: controlsVisible ?? this.controlsVisible,
-      controlsLocked: controlsLocked ?? this.controlsLocked,
-      doubleSpeed: doubleSpeed ?? this.doubleSpeed,
-      longPressRate: longPressRate ?? this.longPressRate,
-      volume: volume ?? this.volume,
-      brightness: brightness ?? this.brightness,
-      showDanmaku: showDanmaku ?? this.showDanmaku,
-      showDanmakuInput: showDanmakuInput ?? this.showDanmakuInput,
-      skipState: skipState ?? this.skipState,
-      showJumpPrompt: showJumpPrompt ?? this.showJumpPrompt,
-      jumpPosition: jumpPosition ?? this.jumpPosition,
-      jumpPromptText: jumpPromptText ?? this.jumpPromptText,
-    );
-  }
+  }) => PlayerOverlayState(
+    controlsVisible: controlsVisible ?? this.controlsVisible,
+    controlsLocked: controlsLocked ?? this.controlsLocked,
+    doubleSpeed: doubleSpeed ?? this.doubleSpeed,
+    longPressRate: longPressRate ?? this.longPressRate,
+    volume: volume ?? this.volume,
+    brightness: brightness ?? this.brightness,
+    showDanmaku: showDanmaku ?? this.showDanmaku,
+    showDanmakuInput: showDanmakuInput ?? this.showDanmakuInput,
+    skipState: skipState ?? this.skipState,
+    showJumpPrompt: showJumpPrompt ?? this.showJumpPrompt,
+    jumpPosition: jumpPosition ?? this.jumpPosition,
+    jumpPromptText: jumpPromptText ?? this.jumpPromptText,
+  );
 }
 
 enum VideoEnhancementMode {
@@ -150,7 +144,6 @@ enum VideoEnhancementMode {
     'medium' => medium,
     'high' => high,
     'ultra' => ultra,
-    // Migrate the modes used by the previous enhancement implementation.
     'auto' || 'anime4kSoft' => medium,
     'anibakaClear' => low,
     'anime4kStrong' => high,
@@ -212,11 +205,6 @@ class VideoEnhancementState {
   );
 }
 
-String? _resolution(int? width, int? height) {
-  if (width == null || height == null || width <= 0 || height <= 0) return null;
-  return '$width × $height';
-}
-
 @immutable
 class PlaybackPreferences {
   const PlaybackPreferences({
@@ -238,7 +226,7 @@ class PlaybackPreferences {
     this.showSubtitle = true,
     this.subtitleConfig = const SubtitleConfig(),
     this.videoFit = BoxFit.contain,
-    this.videoFitDescription = '\u753b\u9762',
+    this.videoFitDescription = '画面',
     this.hwdecMode = 'auto',
     this.videoRenderer = 'gpu',
   });
@@ -287,34 +275,32 @@ class PlaybackPreferences {
     String? videoFitDescription,
     String? hwdecMode,
     String? videoRenderer,
-  }) {
-    return PlaybackPreferences(
-      rememberLastPosition: rememberLastPosition ?? this.rememberLastPosition,
-      autoFullscreen: autoFullscreen ?? this.autoFullscreen,
-      enableSkipOpEd: enableSkipOpEd ?? this.enableSkipOpEd,
-      defaultDanmakuOff: defaultDanmakuOff ?? this.defaultDanmakuOff,
-      defaultPlaybackSpeed: defaultPlaybackSpeed ?? this.defaultPlaybackSpeed,
-      longPressSpeed: longPressSpeed ?? this.longPressSpeed,
-      showNextEpisodeButton:
-          showNextEpisodeButton ?? this.showNextEpisodeButton,
-      enableDoubleTap: enableDoubleTap ?? this.enableDoubleTap,
-      doubleTapAction: doubleTapAction ?? this.doubleTapAction,
-      doubleTapSeekDuration:
-          doubleTapSeekDuration ?? this.doubleTapSeekDuration,
-      showSystemTime: showSystemTime ?? this.showSystemTime,
-      skipOpWaitTime: skipOpWaitTime ?? this.skipOpWaitTime,
-      skipOpDuration: skipOpDuration ?? this.skipOpDuration,
-      videoEnhancementMode: videoEnhancementMode ?? this.videoEnhancementMode,
-      lastVideoEnhancementMode:
-          lastVideoEnhancementMode ?? this.lastVideoEnhancementMode,
-      showSubtitle: showSubtitle ?? this.showSubtitle,
-      subtitleConfig: subtitleConfig ?? this.subtitleConfig,
-      videoFit: videoFit ?? this.videoFit,
-      videoFitDescription: videoFitDescription ?? this.videoFitDescription,
-      hwdecMode: hwdecMode ?? this.hwdecMode,
-      videoRenderer: videoRenderer ?? this.videoRenderer,
-    );
-  }
+  }) => PlaybackPreferences(
+    rememberLastPosition: rememberLastPosition ?? this.rememberLastPosition,
+    autoFullscreen: autoFullscreen ?? this.autoFullscreen,
+    enableSkipOpEd: enableSkipOpEd ?? this.enableSkipOpEd,
+    defaultDanmakuOff: defaultDanmakuOff ?? this.defaultDanmakuOff,
+    defaultPlaybackSpeed: defaultPlaybackSpeed ?? this.defaultPlaybackSpeed,
+    longPressSpeed: longPressSpeed ?? this.longPressSpeed,
+    showNextEpisodeButton:
+        showNextEpisodeButton ?? this.showNextEpisodeButton,
+    enableDoubleTap: enableDoubleTap ?? this.enableDoubleTap,
+    doubleTapAction: doubleTapAction ?? this.doubleTapAction,
+    doubleTapSeekDuration:
+        doubleTapSeekDuration ?? this.doubleTapSeekDuration,
+    showSystemTime: showSystemTime ?? this.showSystemTime,
+    skipOpWaitTime: skipOpWaitTime ?? this.skipOpWaitTime,
+    skipOpDuration: skipOpDuration ?? this.skipOpDuration,
+    videoEnhancementMode: videoEnhancementMode ?? this.videoEnhancementMode,
+    lastVideoEnhancementMode:
+        lastVideoEnhancementMode ?? this.lastVideoEnhancementMode,
+    showSubtitle: showSubtitle ?? this.showSubtitle,
+    subtitleConfig: subtitleConfig ?? this.subtitleConfig,
+    videoFit: videoFit ?? this.videoFit,
+    videoFitDescription: videoFitDescription ?? this.videoFitDescription,
+    hwdecMode: hwdecMode ?? this.hwdecMode,
+    videoRenderer: videoRenderer ?? this.videoRenderer,
+  );
 
   @override
   bool operator ==(Object other) =>
@@ -343,7 +329,7 @@ class PlaybackPreferences {
           videoRenderer == other.videoRenderer;
 
   @override
-  int get hashCode => Object.hashAll([
+  int get hashCode => Object.hash(
     rememberLastPosition,
     autoFullscreen,
     enableSkipOpEd,
@@ -363,9 +349,8 @@ class PlaybackPreferences {
     subtitleConfig,
     videoFit,
     videoFitDescription,
-    hwdecMode,
-    videoRenderer,
-  ]);
+    Object.hash(hwdecMode, videoRenderer),
+  );
 }
 
 @immutable
@@ -451,14 +436,15 @@ class PlaybackTechnicalInfo {
   final int frameDropCount;
   final int delayedFrameCount;
 
-  String? get resolution {
-    if (width == null || height == null || width! <= 0 || height! <= 0) {
-      return null;
-    }
-    return '$width × $height';
-  }
+  String? get resolution =>
+      (width != null && height != null && width! > 0 && height! > 0)
+          ? '$width × $height'
+          : null;
 
-  String? get outputResolution => _resolution(outputWidth, outputHeight);
+  String? get outputResolution =>
+      (outputWidth != null && outputHeight != null && outputWidth! > 0 && outputHeight! > 0)
+          ? '$outputWidth × $outputHeight'
+          : null;
 
   String? get qualityLabel {
     if (width == null || height == null || width! <= 0 || height! <= 0) {
@@ -484,40 +470,38 @@ class PlaybackTechnicalInfo {
     int? outputHeight,
     int? frameDropCount,
     int? delayedFrameCount,
-  }) {
-    return PlaybackTechnicalInfo(
-      width: width,
-      height: height,
-      framesPerSecond: framesPerSecond,
-      videoBitrate: videoBitrate,
-      videoCodec: videoCodec,
-      videoDecoder: videoDecoder,
-      hardwareDecoder: hardwareDecoder,
-      videoOutput: videoOutput,
-      graphicsApi: graphicsApi,
-      graphicsContext: graphicsContext,
-      pixelFormat: pixelFormat,
-      colorSpace: colorSpace,
-      containerFormat: containerFormat,
-      audioBitrate: audioBitrate,
-      audioSampleRate: audioSampleRate,
-      audioChannels: audioChannels,
-      audioCodec: audioCodec,
-      audioDecoder: audioDecoder,
-      audioFormat: audioFormat,
-      audioChannelLayout: audioChannelLayout,
-      rendererProfile: rendererProfile ?? this.rendererProfile,
-      hardwareDecodeMode: hardwareDecodeMode ?? this.hardwareDecodeMode,
-      requestedEnhancementMode:
-          requestedEnhancementMode ?? this.requestedEnhancementMode,
-      appliedEnhancementPipeline:
-          appliedEnhancementPipeline ?? this.appliedEnhancementPipeline,
-      enhancementFallbackReason:
-          enhancementFallbackReason ?? this.enhancementFallbackReason,
-      outputWidth: outputWidth ?? this.outputWidth,
-      outputHeight: outputHeight ?? this.outputHeight,
-      frameDropCount: frameDropCount ?? this.frameDropCount,
-      delayedFrameCount: delayedFrameCount ?? this.delayedFrameCount,
-    );
-  }
+  }) => PlaybackTechnicalInfo(
+    width: width,
+    height: height,
+    framesPerSecond: framesPerSecond,
+    videoBitrate: videoBitrate,
+    videoCodec: videoCodec,
+    videoDecoder: videoDecoder,
+    hardwareDecoder: hardwareDecoder,
+    videoOutput: videoOutput,
+    graphicsApi: graphicsApi,
+    graphicsContext: graphicsContext,
+    pixelFormat: pixelFormat,
+    colorSpace: colorSpace,
+    containerFormat: containerFormat,
+    audioBitrate: audioBitrate,
+    audioSampleRate: audioSampleRate,
+    audioChannels: audioChannels,
+    audioCodec: audioCodec,
+    audioDecoder: audioDecoder,
+    audioFormat: audioFormat,
+    audioChannelLayout: audioChannelLayout,
+    rendererProfile: rendererProfile ?? this.rendererProfile,
+    hardwareDecodeMode: hardwareDecodeMode ?? this.hardwareDecodeMode,
+    requestedEnhancementMode:
+        requestedEnhancementMode ?? this.requestedEnhancementMode,
+    appliedEnhancementPipeline:
+        appliedEnhancementPipeline ?? this.appliedEnhancementPipeline,
+    enhancementFallbackReason:
+        enhancementFallbackReason ?? this.enhancementFallbackReason,
+    outputWidth: outputWidth ?? this.outputWidth,
+    outputHeight: outputHeight ?? this.outputHeight,
+    frameDropCount: frameDropCount ?? this.frameDropCount,
+    delayedFrameCount: delayedFrameCount ?? this.delayedFrameCount,
+  );
 }

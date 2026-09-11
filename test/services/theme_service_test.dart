@@ -1,3 +1,4 @@
+import '../support/app_dependencies.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/app_state.dart';
 import 'package:baka/theme.dart';
@@ -11,6 +12,7 @@ void main() {
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
     Instances.sp = await SharedPreferences.getInstance();
+    configureTestServices();
     state = AppState()..onInit();
   });
 

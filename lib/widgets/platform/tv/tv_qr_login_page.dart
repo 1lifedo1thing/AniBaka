@@ -1,12 +1,13 @@
+import 'package:baka/core/account_session.dart';
+import 'package:baka/models/app_user.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:get/get.dart';
+import 'package:get/get.dart' hide ContextExtensionss;
 import 'package:qr_flutter/qr_flutter.dart';
 
-import 'package:baka/app_state.dart';
-import 'package:baka/services/qr_login_server.dart';
+import 'package:baka/services/account/qr_login_server.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:baka/widgets/platform/tv/tv_focusable.dart';
 import 'package:baka/widgets/platform/tv/tv_theme_util.dart';
@@ -63,7 +64,7 @@ class _TvQrLoginPageState extends State<TvQrLoginPage> {
 
       if (!mounted || _state != _QrLoginState.waiting) return;
 
-      await Get.find<AppState>().saveLoginInfo(
+      await Get.find<AccountSession>().saveLoginInfo(
         result['token'] as String,
         AppUser.fromJson(result['user'] as Map<String, dynamic>),
         refreshToken: result['refresh_token'] as String?,

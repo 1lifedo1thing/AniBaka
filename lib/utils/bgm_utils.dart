@@ -17,13 +17,10 @@ class BgmSubjectInfo {
   final String? summary;
   final String? imageUrl;
   final double? score;
-  final List<String> aliases;
-  final bool hasDetail;
 
   late final List<String> searchTitles = BgmUtils.buildSearchTitles([
     nameCn,
     name,
-    ...aliases,
   ]);
 
   BgmSubjectInfo({
@@ -33,9 +30,19 @@ class BgmSubjectInfo {
     this.summary,
     this.imageUrl,
     this.score,
-    this.aliases = const [],
-    this.hasDetail = false,
   });
+
+  factory BgmSubjectInfo.fromJson(Map<String, dynamic> data) => BgmSubjectInfo(
+    subjectId: data['id'] as int,
+    name: BgmUtils.trimmed(data['name']),
+    nameCn: BgmUtils.trimmed(data['name_cn']),
+    summary: BgmUtils.trimmed(data['summary']),
+    imageUrl: BgmUtils.trimmed(
+      (data['images'] as Map<String, dynamic>)['large'],
+    ),
+    score: ((data['rating'] as Map<String, dynamic>)['score'] as num)
+        .toDouble(),
+  );
 }
 
 class BgmUtils {

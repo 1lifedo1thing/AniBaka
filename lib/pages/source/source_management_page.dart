@@ -1,8 +1,8 @@
 import 'package:baka/models/custom_source_config.dart';
 import 'package:baka/models/rule_hub.dart';
-import 'package:baka/pages/source/custom_source_edit_page.dart';
+import 'package:baka/pages/source/ai_rule_authoring_page.dart';
 import 'package:baka/services/source/rule_repository_service.dart';
-import 'package:baka/services/source_adapter_service.dart';
+import 'package:baka/services/source/source_repository.dart';
 import 'package:baka/source/source_registry.dart';
 import 'package:baka/theme.dart';
 import 'package:baka/utils/toast_utils.dart';
@@ -19,9 +19,9 @@ class SourceManagementPage extends StatefulWidget {
 }
 
 class _SourceManagementPageState extends State<SourceManagementPage> {
-  final _sources = SourceAdapterService.instance;
-  final _catalog = SourceCatalog.instance;
-  final _repo = RuleRepositoryService.instance;
+  final _sources = sourceRepository;
+  final _catalog = sourceCatalog;
+  final _repo = ruleRepository;
   final Set<String> _installing = <String>{};
 
   List<CustomSourceConfig> _customSources = const [];
@@ -108,9 +108,28 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
 
   Future<void> _openEditor([CustomSourceConfig? source]) async {
     HapticFeedback.lightImpact();
-    await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => CustomSourceEditPage(source: source)),
+    final modified = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => AiRuleAuthoringPage(source: source)),
     );
+    if (modified == true && mounted) {
+      setState(() {
+        _customSources = _catalog.customSources;
+      });
+    }
+  }
+
+  Future<void> _resetBuiltinOverride(String key, String name) async {
+    final confirmed = await showSourceConfirmDialog(
+      context: context,
+      title: '恢复官方规则',
+      content: '将移除“$name”的本地覆盖并恢复 App 内置规则。',
+      confirmText: '恢复',
+    );
+    if (!confirmed) return;
+    final restored = await _catalog.resetBuiltinSource(key);
+    if (mounted) {
+      showSnackBar(restored ? '已恢复官方规则' : '当前没有本地覆盖', isError: !restored);
+    }
   }
 
   Future<void> _toggleCustomSource(CustomSourceConfig source) async {
@@ -601,6 +620,8 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
               final rule = _hubCatalog.installedBySourceId[source.key];
               final enabled = _catalog.isBuiltinEnabled(source.key);
               final hasUpdate = rule?.status == InstallStatus.updateAvailable;
+              final hasLocalOverride =
+                  _catalog.builtinOverrideById(source.key) != null;
               final busy =
                   rule != null && _installing.contains(rule.operationKey);
               return SourceGridCard(
@@ -620,9 +641,11 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
                     Uri.tryParse(config?.baseUrl ?? '')?.host ??
                     config?.baseUrl ??
                     source.statusLabel,
-                badge: rule == null
-                    ? '内置'
-                    : '内置 · v${rule.item.displayVersion}',
+                badge: hasLocalOverride
+                    ? '本地覆盖'
+                    : (rule == null
+                          ? '内置'
+                          : '内置 · v${rule.item.displayVersion}'),
                 installed: true,
                 enabled: enabled,
                 hasUpdate: hasUpdate,
@@ -638,6 +661,29 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
                 onButtonPressed: hasUpdate && rule != null
                     ? () => _installRule(rule)
                     : null,
+                onEdit: () {
+                  final targetConfig =
+                      config ??
+                      CustomSourceConfig(
+                        id: source.key,
+                        name: source.displayName,
+                        baseUrl: '',
+                        pipeline: const <String, dynamic>{
+                          'search': <dynamic>[],
+                          'detail': <dynamic>[],
+                          'play': <dynamic>[],
+                        },
+                      );
+                  _openEditor(targetConfig);
+                },
+                onDelete: hasLocalOverride
+                    ? () => _resetBuiltinOverride(
+                        source.key,
+                        config?.name ?? source.displayName,
+                      )
+                    : null,
+                deleteLabel: '恢复官方规则',
+                deleteDestructive: false,
               );
             }
 

@@ -1,4 +1,4 @@
-import 'package:baka/widgets/baka_player/mpv_config.dart';
+import 'package:baka/widgets/baka_player/controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

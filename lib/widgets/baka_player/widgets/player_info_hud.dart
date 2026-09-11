@@ -2,8 +2,8 @@ import 'dart:async';
 import 'dart:ui';
 
 import 'package:baka/models/playback_state.dart';
-import 'package:baka/services/playback_settings_service.dart';
-import 'package:baka/widgets/baka_player/controller.dart';
+import 'package:baka/services/playback/playback_settings.dart';
+import '../controller.dart';
 import 'package:flutter/material.dart';
 
 /// 播放器极简重要数据悬浮窗 (Player Info HUD)

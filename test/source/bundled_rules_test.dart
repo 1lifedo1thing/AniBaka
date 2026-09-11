@@ -6,10 +6,9 @@ import 'package:test/test.dart';
 import 'package:baka/models/custom_source_config.dart';
 import 'package:baka/services/source/source_codec.dart';
 import 'package:baka/source/engine/rule_validator.dart';
-import 'package:baka/source/model/source_rule.dart';
+import 'package:baka/source/models/source_rule.dart';
 import 'package:baka/source/pipeline_source_adapter.dart';
 import 'package:baka/source/store/bundled_rule_store.dart';
-import 'package:baka/source/store/rule_migrator.dart';
 
 void main() {
   final assetDirectory = Directory('assets/rules');
@@ -45,9 +44,7 @@ void main() {
       expect(config.baseUrl, isNotEmpty, reason: '$name missing baseUrl');
       expect(config.iconUrl, isNotEmpty, reason: '$name missing iconUrl');
 
-      final validation = RuleValidator.validate(
-        RuleMigrator.ruleForConfig(config),
-      );
+      final validation = RuleValidator.validate(config.toSourceRule());
       expect(
         validation.isValid,
         isTrue,

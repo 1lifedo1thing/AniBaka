@@ -96,6 +96,23 @@ class VideoUrlExtractor {
     return _cdnSignedRegex.hasMatch(lower) || _hasExpiringSign(url, lower);
   }
 
+  /// 按需生成 / 临时缓存形态的媒体路径：`/temp/2607/01.mp4`、`/cache/...`、
+  /// `/dlink/...` 等。
+  ///
+  /// 这类地址常常在首次播放时才落盘、过一段时间又被回收：首包 404 只说明
+  /// 「现在还没有」，不足以判定死链——等几秒同一地址就能播。
+  static final _onDemandPathRegex = RegExp(
+    r'/(?:temp|tmp|cache|cached|dlink|transcode|hls_tmp|tmpfile)(?:/|$)',
+    caseSensitive: false,
+  );
+
+  static bool isOnDemandMediaPath(String url) {
+    if (url.isEmpty) return false;
+    final path = Uri.tryParse(url)?.path;
+    if (path == null || path.isEmpty) return false;
+    return _onDemandPathRegex.hasMatch(path);
+  }
+
   /// query 中是否带过期型签名参数：
   /// - `sign=<签名>:<时间戳>`
   /// - `verify=<时间戳>-<签名>`（如 31dm）
@@ -131,6 +148,47 @@ class VideoUrlExtractor {
         lower.contains('.myqcloud.com') ||
         lower.contains('cloudflarestorage') ||
         lower.contains('objstorage');
+  }
+
+  /// 网页/播放页形态：`/play/`、`/vod/`、`detail`、`*.html` 等。
+  static final _htmlPageRegex = RegExp(
+    r'(?:/play/|/video/|/vod/|/bangumi/|/detail/|/ep/|/episode/|/watch/|'
+    r'\.html?(?:[?#/&]|$)|/index\.php)',
+    caseSensitive: false,
+  );
+
+  static final _htmlExtRegex = RegExp(
+    r'\.(?:html?|php|aspx?|jsp)(?:[?#/&]|$)',
+    caseSensitive: false,
+  );
+
+  /// 是否「明确不可能是媒体」：网页播放页、图片、广告位、纯站点根路径。
+  ///
+  /// 只用于**发起网络探测前**的形态否决。缺少视频扩展名不等于死链——
+  /// 网盘直链、`/api/media?id=` 之类的取流地址都没有 `.mp4`，它们只能由
+  /// 探测（或播放器）来验证，不能凭形态直接判死。
+  static bool looksLikeNonMedia(String url) {
+    if (url.isEmpty) return false;
+    if (isVideoUrl(url) || isPlayable(url)) return false;
+    final lower = url.toLowerCase();
+    if (lower.contains('mime=image') || lower.contains('image/')) return true;
+    if (_nonVideoRegex.hasMatch(lower)) return true;
+    return _htmlExtRegex.hasMatch(lower) || _htmlPageRegex.hasMatch(lower);
+  }
+
+  /// 是否是「裸流」地址：绝对 http(s)、主机与非根路径齐备，且不像网页。
+  ///
+  /// 这类地址形态上无法确认是不是媒体，需保留给可达性探测判定。
+  static bool looksLikeBareStream(String url) {
+    if (url.isEmpty) return false;
+    final lower = url.toLowerCase();
+    if (!lower.startsWith('http://') && !lower.startsWith('https://')) {
+      return false;
+    }
+    if (looksLikeNonMedia(url)) return false;
+    final uri = Uri.tryParse(url);
+    if (uri == null || uri.host.isEmpty || uri.path.isEmpty) return false;
+    return uri.path != '/' && !_htmlExtRegex.hasMatch(uri.path);
   }
 
   /// 单趟反转义常见的 JS/HTML 转义序列（长序列在前，双反斜杠放最后兜底）。

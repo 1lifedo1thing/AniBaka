@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:baka/instance.dart';
 
-import 'package:baka/services/navigation_service.dart';
+import 'package:baka/app/navigation.dart';
 import 'package:baka/widgets/dialog/input_dialog.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';

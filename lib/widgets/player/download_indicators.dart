@@ -3,7 +3,7 @@ import 'package:baka/utils/format_utils.dart';
 
 import 'package:baka/models/download_task.dart';
 import 'package:baka/pages/player/download_page.dart';
-import 'package:baka/services/download_service.dart';
+import 'package:baka/services/download/download_manager.dart';
 import 'package:baka/services/torrent/torrent_engine.dart';
 import 'package:baka/services/torrent/torrent_service.dart';
 
@@ -25,15 +25,15 @@ class _ActiveDownloadIndicatorState extends State<ActiveDownloadIndicator> {
   @override
   void initState() {
     super.initState();
-    DownloadService.instance.init();
+    downloads.init();
     _listener = _refresh;
-    DownloadService.instance.tasksListenable.addListener(_listener);
+    downloads.tasksListenable.addListener(_listener);
     _refresh();
   }
 
   @override
   void dispose() {
-    DownloadService.instance.tasksListenable.removeListener(_listener);
+    downloads.tasksListenable.removeListener(_listener);
     super.dispose();
   }
 
@@ -41,7 +41,7 @@ class _ActiveDownloadIndicatorState extends State<ActiveDownloadIndicator> {
     DownloadTask? first;
     DownloadTask? downloading;
     var count = 0;
-    for (final task in DownloadService.instance.tasks) {
+    for (final task in downloads.tasks) {
       if (!task.id.startsWith(widget.taskIdPrefix) ||
           task.status == DownloadStatus.completed) {
         continue;
@@ -200,11 +200,11 @@ class _ActiveDownloadIndicatorState extends State<ActiveDownloadIndicator> {
 }
 
 class MobileBtProgressIndicator extends StatelessWidget {
-  const MobileBtProgressIndicator({super.key});
+  const MobileBtProgressIndicator({required this.torrent, super.key});
+  final TorrentService torrent;
 
   @override
   Widget build(BuildContext context) {
-    final torrent = TorrentService.instance;
     return ValueListenableBuilder<TorrentStats?>(
       valueListenable: torrent.statsNotifier,
       builder: (context, stats, _) {

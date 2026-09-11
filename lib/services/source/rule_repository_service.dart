@@ -5,10 +5,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'package:baka/instance.dart';
+import 'package:baka/api/request_cache.dart';
 import 'package:baka/models/custom_source_config.dart';
 import 'package:baka/models/rule_hub.dart';
 import 'package:baka/services/source/source_codec.dart';
-import 'package:baka/services/source_adapter_service.dart';
+import 'package:baka/services/source/source_repository.dart';
 import 'package:baka/source/source_registry.dart';
 import 'package:baka/source/store/bundled_rule_store.dart';
 
@@ -19,10 +20,12 @@ enum InstallStatus { notInstalled, upToDate, updateAvailable }
 typedef RuleInstallInfo = ({CustomSourceConfig? source, InstallStatus status});
 
 /// Official anx-rulehub/2 repository client and installer.
-class RuleRepositoryService extends ChangeNotifier {
-  RuleRepositoryService._();
+late RuleRepositoryService ruleRepository;
 
-  static final RuleRepositoryService instance = RuleRepositoryService._();
+class RuleRepositoryService extends ChangeNotifier {
+  RuleRepositoryService(this.adapters, this.catalog);
+  final SourceAdapterService adapters;
+  final SourceCatalog catalog;
 
   static const String directSubscription =
       'https://raw.githubusercontent.com/AniBakaBaka/AniBakaRule/main/index.json';
@@ -48,19 +51,26 @@ class RuleRepositoryService extends ChangeNotifier {
       headers: const {'Accept': 'application/json'},
     ),
   );
-  final Map<String, ({RuleHubIndex index, int expiresAt})> _memoryCache = {};
+  final _memoryCache = RequestCache<String, RuleHubIndex>(
+    limit: 32,
+    ttl: _cacheTtl,
+  );
 
   List<String> get subscriptions {
     final stored = Instances.sp.getStringList(_subscriptionsKey);
     final values = stored == null || stored.isEmpty
         ? const <String>[defaultSubscription]
         : stored;
-    return {
-      for (final value in values)
-        _legacyOfficialSubscriptions.contains(value.trim())
+    final set = <String>{};
+    for (final value in values) {
+      final trimmed = value.trim();
+      set.add(
+        _legacyOfficialSubscriptions.contains(trimmed)
             ? defaultSubscription
-            : value.trim(),
-    }.toList();
+            : trimmed,
+      );
+    }
+    return set.toList();
   }
 
   Future<bool> addSubscription(String url) async {
@@ -78,9 +88,9 @@ class RuleRepositoryService extends ChangeNotifier {
     final value = url.trim();
     final current = subscriptions;
     if (!current.remove(value)) return false;
+    _memoryCache.remove(value);
     await Instances.sp.setStringList(_subscriptionsKey, current);
     await Instances.sp.remove('$_cacheKeyPrefix$value');
-    _memoryCache.remove(value);
     notifyListeners();
     return true;
   }
@@ -99,33 +109,22 @@ class RuleRepositoryService extends ChangeNotifier {
     return results.whereType<RuleHubIndex>().toList(growable: false);
   }
 
-  Future<RuleHubIndex> fetchIndex(
-    String url, {
-    bool forceRefresh = false,
-  }) async {
+  Future<RuleHubIndex> fetchIndex(String url, {bool forceRefresh = false}) {
     final local = url.startsWith(assetScheme);
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final cached = _memoryCache[url];
-    if (!forceRefresh && !local && cached != null && now < cached.expiresAt) {
-      return cached.index;
-    }
-
-    try {
-      final body = await _getString(url, forceRefresh: forceRefresh);
-      final index = _parseIndex(body, url);
-      if (!local) {
-        _memoryCache[url] = (
-          index: index,
-          expiresAt: now + _cacheTtl.inMilliseconds,
-        );
-        await Instances.sp.setString('$_cacheKeyPrefix$url', body);
+    return _memoryCache.get(url, () async {
+      try {
+        final body = await _getString(url, forceRefresh: forceRefresh);
+        final index = _parseIndex(body, url);
+        if (!local && subscriptions.contains(url)) {
+          await Instances.sp.setString('$_cacheKeyPrefix$url', body);
+        }
+        return index;
+      } catch (_) {
+        final persisted = local ? null : _loadPersistedIndex(url);
+        if (persisted != null) return persisted;
+        rethrow;
       }
-      return index;
-    } catch (_) {
-      final persisted = local ? null : _loadPersistedIndex(url);
-      if (persisted != null) return persisted;
-      rethrow;
-    }
+    }, refresh: forceRefresh || local);
   }
 
   Future<CustomSourceConfig> resolveConfig(
@@ -158,9 +157,7 @@ class RuleRepositoryService extends ChangeNotifier {
         indexUrl: indexUrl,
         forceRefresh: true,
       );
-      final adapters = SourceAdapterService.instance;
       await adapters.init();
-      final catalog = SourceCatalog.instance;
 
       if (AdapterRegistry.isBuiltinSource(item.id)) {
         if (!await catalog.updateBuiltinSource(item.id, config)) {
@@ -194,7 +191,6 @@ class RuleRepositoryService extends ChangeNotifier {
   }
 
   Map<RuleHubItem, RuleInstallInfo> inspectItems(Iterable<RuleHubItem> items) {
-    final catalog = SourceCatalog.instance;
     final result = Map<RuleHubItem, RuleInstallInfo>.identity();
     for (final item in items) {
       final builtin = AdapterRegistry.isBuiltinSource(item.id);

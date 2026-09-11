@@ -2,8 +2,8 @@ import 'dart:async';
 
 import 'package:baka/instance.dart';
 import 'package:baka/pages/source/source_management_page.dart';
-import 'package:baka/services/search_service.dart';
-import 'package:baka/services/navigation_service.dart';
+import 'package:baka/pages/search/search_controller.dart';
+import 'package:baka/app/navigation.dart';
 import 'package:baka/widgets/anime/post_card.dart';
 import 'package:flutter/material.dart';
 
@@ -20,15 +20,15 @@ class SearchPage extends StatefulWidget {
 class _SearchPageState extends State<SearchPage> {
   static const _debounceDuration = Duration(milliseconds: 300);
   final _searchController = TextEditingController();
-  late final SearchService _searchService;
+  late final AnimeSearchController _searchService;
   Timer? _debounce;
 
-  bool get _isWindows => Instances.isWindows;
+  bool get _isWindows => Instances.isDesktopPlatform;
 
   @override
   void initState() {
     super.initState();
-    _searchService = SearchService();
+    _searchService = AnimeSearchController();
     _init();
   }
 
@@ -47,15 +47,15 @@ class _SearchPageState extends State<SearchPage> {
     );
     if (!mounted || widget.k == null) return;
 
-    _searchController.text = _searchService.keyword;
-    await _search(_searchService.keyword);
+    _searchController.text = _searchService.keywordNotifier.value;
+    await _search(_searchService.keywordNotifier.value);
   }
 
   void _onSearchChanged(String value) {
     _debounce?.cancel();
     // A response for the previous text must not replace the current query.
     _searchService.activeSearchId++;
-    _searchService.keyword = value;
+    _searchService.keywordNotifier.value = value;
 
     if (value.trim().isEmpty) {
       _searchService.resetSearch();
@@ -74,22 +74,22 @@ class _SearchPageState extends State<SearchPage> {
     }
 
     final searchId = ++_searchService.activeSearchId;
-    _searchService.keyword = query;
+    _searchService.keywordNotifier.value = query;
     // Set loading before showing the result area so stale results never flash.
-    _searchService.isLoading = true;
-    _searchService.showResults = true;
+    _searchService.isLoadingNotifier.value = true;
+    _searchService.showResultsNotifier.value = true;
 
     try {
       final results = await _searchService.executeSearch(query);
       if (!mounted || !_searchService.isActiveSearch(searchId)) return;
-      _searchService.results = results;
+      _searchService.resultsNotifier.value = results;
     } catch (error) {
       debugPrint('Search error for "$query": $error');
       if (!mounted || !_searchService.isActiveSearch(searchId)) return;
-      _searchService.results = const [];
+      _searchService.resultsNotifier.value = const [];
     } finally {
       if (mounted && _searchService.isActiveSearch(searchId)) {
-        _searchService.isLoading = false;
+        _searchService.isLoadingNotifier.value = false;
       }
     }
   }
@@ -359,7 +359,7 @@ class _SearchPageState extends State<SearchPage> {
 
     await _searchService.reloadCustomSources();
     if (!mounted) return;
-    final query = _searchService.keyword.trim();
+    final query = _searchService.keywordNotifier.value.trim();
     if (query.isNotEmpty) await _search(query);
   }
 
@@ -396,9 +396,12 @@ class _SearchPageState extends State<SearchPage> {
                     child: InkWell(
                       borderRadius: BorderRadius.circular(8),
                       onTap: () {
-                        _searchService.selectedSourceIndex = index;
-                        if (_searchService.keyword.trim().isNotEmpty) {
-                          _search(_searchService.keyword);
+                        _searchService.selectedSourceIndexNotifier.value =
+                            index;
+                        if (_searchService.keywordNotifier.value
+                            .trim()
+                            .isNotEmpty) {
+                          _search(_searchService.keywordNotifier.value);
                         }
                       },
                       child: AnimatedContainer(
@@ -496,9 +499,12 @@ class _SearchPageState extends State<SearchPage> {
                             showCheckmark: false,
                             onSelected: (selected) {
                               if (!selected) return;
-                              _searchService.selectedSourceIndex = index;
-                              if (_searchService.keyword.trim().isNotEmpty) {
-                                _search(_searchService.keyword);
+                              _searchService.selectedSourceIndexNotifier.value =
+                                  index;
+                              if (_searchService.keywordNotifier.value
+                                  .trim()
+                                  .isNotEmpty) {
+                                _search(_searchService.keywordNotifier.value);
                               }
                             },
                           ),

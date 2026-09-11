@@ -1,9 +1,10 @@
+import 'package:baka/core/account_session.dart';
 import 'package:baka/app_state.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/pages/home/miniapp_page.dart';
 import 'package:baka/pages/search/search_page.dart';
-import 'package:baka/services/home_service.dart';
-import 'package:baka/services/version_service.dart';
+import 'package:baka/pages/home/home_controller.dart';
+import 'package:baka/app/update_presenter.dart';
 import 'package:baka/utils/reg_utils.dart';
 import 'package:baka/widgets/anime/post_card.dart';
 import 'package:baka/widgets/common/refresh.dart';
@@ -17,7 +18,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/svg.dart';
-import 'package:get/get.dart';
+import 'package:get/get.dart' hide ContextExtensionss;
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -28,7 +29,7 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage>
     with SingleTickerProviderStateMixin {
-  late final HomeDataService _svc = HomeDataService();
+  late final HomeController _svc = HomeController();
   late final AppState _appState = Get.find<AppState>();
 
   final GlobalKey _rankSectionKey = GlobalKey();
@@ -44,7 +45,7 @@ class _HomePageState extends State<HomePage>
   @override
   void initState() {
     super.initState();
-    if (!Instances.isTV && !Instances.isWindows) {
+    if (!Instances.isTV && !Instances.isDesktopPlatform) {
       _scrollController.addListener(_onScroll);
     }
     // 先让各板块订阅数据源，再执行首次刷新，避免启动阶段的结果早于页面挂载。
@@ -76,7 +77,7 @@ class _HomePageState extends State<HomePage>
       _svc.loadFeed(force: force),
       if (!Instances.isTV) _svc.loadRank(force: force),
       if (!Instances.isTV) _svc.loadSwipers(force: force),
-      if (Instances.isWindows) _svc.loadSchedule(force: force),
+      if (Instances.isDesktopPlatform) _svc.loadSchedule(force: force),
     ]);
   }
 
@@ -89,7 +90,7 @@ class _HomePageState extends State<HomePage>
     if (Instances.isTV) {
       return TvHomePage(svc: _svc);
     }
-    if (Instances.isWindows) {
+    if (Instances.isDesktopPlatform) {
       return WindowsHomePage(svc: _svc, onRefresh: _refresh);
     }
 
@@ -290,8 +291,8 @@ class _HomePageState extends State<HomePage>
 
   Widget _buildUserAvatar() {
     return Obx(() {
-      final avatar = _appState.user.value.qq;
-      final isLoggedIn = _appState.isLoggedIn;
+      final avatar = Get.find<AccountSession>().user.value.qq;
+      final isLoggedIn = Get.find<AccountSession>().isLoggedIn;
       final theme = Theme.of(context);
 
       return InkWell(
@@ -345,7 +346,7 @@ class _HomePageState extends State<HomePage>
         ],
       ),
     );
-    if (confirmed == true && mounted) _appState.performLogout();
+    if (confirmed == true && mounted) Get.find<AccountSession>().logout();
   }
 
   Widget _buildBanner() {

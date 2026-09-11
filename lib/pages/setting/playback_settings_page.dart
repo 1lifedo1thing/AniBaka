@@ -1,4 +1,4 @@
-import 'package:baka/services/playback_settings_service.dart';
+import 'package:baka/services/playback/playback_settings.dart';
 import 'package:baka/models/playback_state.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';

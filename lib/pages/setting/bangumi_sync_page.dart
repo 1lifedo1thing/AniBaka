@@ -1,13 +1,16 @@
+import 'package:baka/core/api_transport.dart';
+import 'package:baka/api/bangumi_account_api.dart';
+import 'package:baka/services/account/bangumi_session.dart';
+import 'package:baka/core/account_session.dart';
 import 'package:baka/app_state.dart';
-import 'package:baka/instance.dart';
-import 'package:baka/services/bangumi_sync_service.dart';
+import 'package:baka/services/collection/bangumi_sync.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:baka/widgets/dialog/input_dialog.dart';
 import 'package:baka/widgets/settings/settings_widgets.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:get/get.dart';
+import 'package:get/get.dart' hide ContextExtensionss;
 import 'package:url_launcher/url_launcher_string.dart';
 
 const _bangumiIconAsset = 'assets/bangumi.svg';
@@ -24,7 +27,7 @@ class BangumiSyncPage extends StatefulWidget {
 class _BangumiSyncPageState extends State<BangumiSyncPage> {
   static const _apiDocsUrl = 'https://bangumi.github.io/api/';
 
-  final _service = BangumiSyncService.instance;
+  final _service = bangumiSession;
   bool _busy = false;
   String? _progress;
   BangumiSyncReport? _report;
@@ -57,7 +60,7 @@ class _BangumiSyncPageState extends State<BangumiSyncPage> {
       if (!mounted) return;
       setState(() => _progress = null);
       if (Get.isRegistered<AppState>()) {
-        Get.find<AppState>().triggerLoginRefresh();
+        Get.find<AccountSession>().refreshView();
       }
       showSnackBar('已连接 Bangumi：${account.nickname}');
     } catch (error) {
@@ -86,7 +89,7 @@ class _BangumiSyncPageState extends State<BangumiSyncPage> {
       _report = null;
     });
     if (Get.isRegistered<AppState>()) {
-      Get.find<AppState>().triggerLoginRefresh();
+      Get.find<AccountSession>().refreshView();
     }
     showSnackBar('已断开 Bangumi 关联');
   }
@@ -99,7 +102,7 @@ class _BangumiSyncPageState extends State<BangumiSyncPage> {
       _report = null;
     });
     try {
-      final report = await _service.sync(
+      final report = await bangumiSync.sync(
         onProgress: (progress) {
           if (mounted) setState(() => _progress = progress);
         },
@@ -124,7 +127,7 @@ class _BangumiSyncPageState extends State<BangumiSyncPage> {
     final connected = _service.isConnected;
     final account = _service.account;
     final lastSyncAt = _service.lastSyncAt?.toLocal();
-    final aniBakaLoggedIn = Instances.userToken.isNotEmpty;
+    final aniBakaLoggedIn = apiTransport.session.token.isNotEmpty;
     final theme = Theme.of(context);
 
     return Scaffold(

@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:baka/source/source_registry.dart';
-import 'package:baka/services/search_service.dart';
-import 'package:baka/services/navigation_service.dart';
+import 'package:baka/pages/search/search_controller.dart';
+import 'package:baka/app/navigation.dart';
 import 'package:baka/widgets/platform/tv/tv_focusable.dart';
 import 'package:baka/widgets/platform/tv/tv_theme_util.dart';
 import 'package:baka/widgets/anime/post_card.dart';
@@ -18,7 +18,7 @@ class TvSearchPage extends StatefulWidget {
 }
 
 class _TvSearchPageState extends State<TvSearchPage> {
-  late final SearchService _svc;
+  late final AnimeSearchController _svc;
   final _searchController = TextEditingController();
   final _searchBoxFocusNode = FocusNode();
   final _textFieldFocusNode = FocusNode();
@@ -26,15 +26,15 @@ class _TvSearchPageState extends State<TvSearchPage> {
   @override
   void initState() {
     super.initState();
-    _svc = SearchService();
+    _svc = AnimeSearchController();
     _initSearch();
   }
 
   Future<void> _initSearch() async {
     await _svc.init(initialKeyword: widget.initialKeyword);
     if (widget.initialKeyword != null) {
-      _searchController.text = _svc.keyword;
-      await _search(_svc.keyword);
+      _searchController.text = _svc.keywordNotifier.value;
+      await _search(_svc.keywordNotifier.value);
     }
   }
 
@@ -54,19 +54,19 @@ class _TvSearchPageState extends State<TvSearchPage> {
       return;
     }
     final searchId = ++_svc.activeSearchId;
-    _svc.keyword = query;
-    _svc.showResults = true;
-    _svc.isLoading = true;
+    _svc.keywordNotifier.value = query;
+    _svc.showResultsNotifier.value = true;
+    _svc.isLoadingNotifier.value = true;
     try {
       final results = await _svc.executeSearch(query);
       if (!mounted || !_svc.isActiveSearch(searchId)) return;
-      _svc.results = results;
-      _svc.isLoading = false;
+      _svc.resultsNotifier.value = results;
+      _svc.isLoadingNotifier.value = false;
     } catch (e) {
       debugPrint('TV 搜索报错: $e');
       if (!mounted || !_svc.isActiveSearch(searchId)) return;
-      _svc.results = const [];
-      _svc.isLoading = false;
+      _svc.resultsNotifier.value = const [];
+      _svc.isLoadingNotifier.value = false;
     }
   }
 
@@ -267,10 +267,10 @@ class _TvSearchPageState extends State<TvSearchPage> {
                   isSelected: selectedIndex == index,
                   fontSize: 13,
                   onPressed: () {
-                    if (_svc.selectedSourceIndex != index) {
-                      _svc.selectedSourceIndex = index;
-                      if (_svc.keyword.trim().isNotEmpty) {
-                        _search(_svc.keyword);
+                    if (_svc.selectedSourceIndexNotifier.value != index) {
+                      _svc.selectedSourceIndexNotifier.value = index;
+                      if (_svc.keywordNotifier.value.trim().isNotEmpty) {
+                        _search(_svc.keywordNotifier.value);
                       }
                     }
                   },

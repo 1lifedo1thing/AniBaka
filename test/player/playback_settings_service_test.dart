@@ -1,6 +1,7 @@
+import '../support/app_dependencies.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/models/playback_state.dart';
-import 'package:baka/services/playback_settings_service.dart';
+import 'package:baka/services/playback/playback_settings.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -10,6 +11,7 @@ void main() {
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
     Instances.sp = await SharedPreferences.getInstance();
+    configureTestServices();
   });
 
   tearDown(() {
@@ -170,6 +172,7 @@ void main() {
         'player_anime4KLevel': 'high',
       });
       Instances.sp = await SharedPreferences.getInstance();
+      configureTestServices();
 
       final preferences = PlaybackSettingsService.loadAll();
 
@@ -184,6 +187,7 @@ void main() {
       'player_anime4KLevel': 'ultra',
     });
     Instances.sp = await SharedPreferences.getInstance();
+    configureTestServices();
 
     final preferences = PlaybackSettingsService.loadAll();
 

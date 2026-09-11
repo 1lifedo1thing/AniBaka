@@ -1,5 +1,12 @@
+import '../support/app_dependencies.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:baka/instance.dart';
+import 'package:baka/services/source/source_repository.dart';
+import 'package:baka/services/playback/history_repository.dart';
+import 'package:baka/services/collection/collection_repository.dart';
+import 'package:baka/models/playback_request.dart';
 import 'package:baka/models/playback_episode.dart';
-import 'package:baka/services/player_service.dart';
+import 'package:baka/services/playback/playback_content.dart';
 import 'package:baka/source/adapter_base.dart';
 import 'package:baka/source/models/series.dart';
 import 'package:baka/source/models/source.dart';
@@ -52,19 +59,59 @@ class _KeepAliveAdapter extends AdapterBase {
 }
 
 void main() {
-  test('accepts an untyped route map without copying its data', () {
-    final routeData = <dynamic, dynamic>{'source': 'internal', 'title': 'A'};
-    final service = PlayerService(data: routeData);
-
-    service.data['title'] = 'B';
-    expect(routeData['title'], 'B');
-    routeData['id'] = 42;
-    expect(service.data['id'], 42);
+  TestWidgetsFlutterBinding.ensureInitialized();
+  setUp(() async {
+    SharedPreferences.setMockInitialValues({});
+    Instances.sp = await SharedPreferences.getInstance();
+    configureTestServices();
   });
+  test(
+    'prefetched media is reused and invalidated by selection and source',
+    () async {
+      final data = <String, dynamic>{'source': 'fixture', 'title': 'Example'};
+      final episodes = [
+        const PlaybackEpisode(title: 'Episode', lines: ['first', 'second']),
+      ];
+      PlaybackContent.storePrefetchedPlaybackMedia(
+        data,
+        episodeIndex: 0,
+        lineIndex: 1,
+        episodeId: 'first',
+        url: 'https://fixture.test/prefetched.mp4',
+        httpHeaders: const {'Referer': 'https://fixture.test'},
+      );
+      final service = PlaybackContent(
+        sources: sourceRepository,
+        collections: collections,
+        history: historyRepository,
+        request: PlaybackRequest.fromMap(data),
+      );
+      service.syncVideoData(episodes);
+      final adapter = _KeepAliveAdapter();
+      final media = await service.resolveAdapterPlaybackMedia(adapter, 'first');
+      expect(media.url, 'https://fixture.test/prefetched.mp4');
+      expect(media.httpHeaders['Referer'], 'https://fixture.test');
+      service.applySelection((episodeIndex: 0, lineIndex: 2));
+      expect(data.containsKey('_prefetchedPlayback'), isFalse);
+      PlaybackContent.storePrefetchedPlaybackMedia(
+        data,
+        episodeIndex: 0,
+        lineIndex: 2,
+        episodeId: 'second',
+        url: 'https://fixture.test/prefetched.mp4',
+        httpHeaders: const {},
+      );
+      service.adoptPlaybackData({'source': 'another', 'videoList': episodes});
+      expect(data.containsKey('_prefetchedPlayback'), isFalse);
+    },
+  );
 
   test('uses the localized logo image from player route data', () {
-    final service = PlayerService(
-      data: <String, Object>{
+    final service = PlaybackContent(
+      sources: sourceRepository,
+      collections: collections,
+      history: historyRepository,
+      request: PlaybackRequest.fromMap(<String, Object>{
         'source': 'internal',
         'images': {
           'logos': [
@@ -72,7 +119,7 @@ void main() {
             {'url': 'https://example.com/zh-logo.png', 'lang': 'zh'},
           ],
         },
-      },
+      }),
     );
 
     expect(service.logoUrl, 'https://example.com/zh-logo.png');
@@ -86,7 +133,12 @@ void main() {
         'source': 'internal',
         'videos': '01. 正片\$line-a\n1 正片\$line-b\n02. 下一集\$line-c',
       };
-      final service = PlayerService(data: data);
+      final service = PlaybackContent(
+        sources: sourceRepository,
+        collections: collections,
+        history: historyRepository,
+        request: PlaybackRequest.fromMap(data),
+      );
       await service.loadDetail();
       final episodes = service.videoList;
 
@@ -106,7 +158,12 @@ void main() {
   );
 
   test('line switch changes typed selection without reparsing data', () {
-    final service = PlayerService(data: <String, Object>{'source': 'internal'});
+    final service = PlaybackContent(
+      sources: sourceRepository,
+      collections: collections,
+      history: historyRepository,
+      request: PlaybackRequest.fromMap(<String, Object>{'source': 'internal'}),
+    );
     service.syncVideoData(const [
       PlaybackEpisode(title: '第一集', lines: ['a', 'b']),
       PlaybackEpisode(title: '第二集', lines: ['c']),
@@ -153,7 +210,12 @@ void main() {
   });
 
   test('playback keep-alive follows the active media lifecycle', () async {
-    final service = PlayerService(data: <String, Object>{'source': 'internal'});
+    final service = PlaybackContent(
+      sources: sourceRepository,
+      collections: collections,
+      history: historyRepository,
+      request: PlaybackRequest.fromMap(<String, Object>{'source': 'internal'}),
+    );
     final adapter = _KeepAliveAdapter();
 
     final first = await service.startAdapterPlaybackKeepAlive(
@@ -182,7 +244,12 @@ void main() {
   });
 
   test('validated source falls back to another playback line', () async {
-    final service = PlayerService(data: <String, Object>{'source': 'internal'});
+    final service = PlaybackContent(
+      sources: sourceRepository,
+      collections: collections,
+      history: historyRepository,
+      request: PlaybackRequest.fromMap(<String, Object>{'source': 'internal'}),
+    );
     service.syncVideoData(const [
       PlaybackEpisode(title: 'Episode', lines: ['blocked', 'good']),
     ]);
@@ -196,4 +263,50 @@ void main() {
     expect(service.currUrl, 2);
     service.dispose();
   });
+
+  test(
+    'local source preserves multi-episode videoList and updates selection',
+    () async {
+      final episodes = [
+        const PlaybackEpisode(
+          title: '第 01 话',
+          lines: ['https://dav.test/ep01.mp4'],
+        ),
+        const PlaybackEpisode(
+          title: '第 02 话',
+          lines: ['https://dav.test/ep02.mp4'],
+        ),
+        const PlaybackEpisode(
+          title: '第 03 话',
+          lines: ['https://dav.test/ep03.mp4'],
+        ),
+      ];
+
+      final service = PlaybackContent(
+        sources: sourceRepository,
+        collections: collections,
+        history: historyRepository,
+        request: PlaybackRequest.fromMap(<String, Object>{
+          'source': '_local',
+          'title': '测试番剧',
+          'videoList': episodes,
+          'currPlayIndex': 1,
+        }),
+      );
+
+      await service.loadDetail();
+
+      expect(service.isLocalSource, isTrue);
+      expect(service.videoList, hasLength(3));
+      expect(service.currPlayIndex, 1);
+      expect(service.currentEpisodeTitle, '第 02 话');
+      expect(service.localFilePath, 'https://dav.test/ep02.mp4');
+      expect(await service.resolveEpisodeUrl(2), 'https://dav.test/ep03.mp4');
+
+      service.applySelection(service.normalizeSelection(2, 1));
+      expect(service.currPlayIndex, 2);
+      expect(service.currentEpisodeTitle, '第 03 话');
+      expect(service.localFilePath, 'https://dav.test/ep03.mp4');
+    },
+  );
 }

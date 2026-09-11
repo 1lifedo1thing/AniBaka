@@ -1,14 +1,14 @@
+import 'package:baka/app/watch_party_links.dart';
+import 'package:baka/core/account_session.dart';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:get/get.dart';
+import 'package:get/get.dart' hide ContextExtensionss;
 import 'package:mobile_scanner/mobile_scanner.dart';
 
-import 'package:baka/app_state.dart';
 import 'package:baka/instance.dart';
-import 'package:baka/services/watch_party_link_service.dart';
 import 'package:baka/utils/toast_utils.dart';
 
 /// AniBaka 通用扫码页。
@@ -52,14 +52,14 @@ class _QrScannerPageState extends State<QrScannerPage> {
   }
 
   Future<void> _processScannedValue(String value) async {
-    final inviteCode = WatchPartyLinkService.inviteCodeFromValue(value);
+    final inviteCode = WatchPartyLinks.inviteCodeFromValue(value);
     if (inviteCode != null) {
       _hasScanned = true;
       if (mounted) setState(() => _isSending = true);
       await _controller.stop();
       await HapticFeedback.mediumImpact();
       if (mounted) Navigator.of(context).pop();
-      await WatchPartyLinkService.joinInvite(inviteCode);
+      await Get.find<WatchPartyLinks>().joinInviteLink(inviteCode);
       return;
     }
 
@@ -75,15 +75,14 @@ class _QrScannerPageState extends State<QrScannerPage> {
   Future<void> _sendTokenToTv(String url) async {
     setState(() => _isSending = true);
 
-    final token = Instances.sp.getString('usertoken');
+    final token = Get.find<AccountSession>().token;
     final refreshToken = Instances.sp.getString('refresh_token');
     final storedExpiry = Instances.sp.getString('token_expires_at');
     final tokenExpiresAt = storedExpiry == null
         ? null
         : DateTime.tryParse(storedExpiry)?.toUtc().toIso8601String();
-    final appState = Get.find<AppState>();
 
-    if (token == null || token.isEmpty || !appState.isLoggedIn) {
+    if (token.isEmpty || !Get.find<AccountSession>().isLoggedIn) {
       if (mounted) {
         showSnackBar('请先在手机端登录');
         Navigator.of(context).pop();
@@ -102,7 +101,7 @@ class _QrScannerPageState extends State<QrScannerPage> {
           'token': token,
           if (refreshToken?.isNotEmpty == true) 'refresh_token': refreshToken,
           'token_expires_at': ?tokenExpiresAt,
-          'user': appState.user.value.toJson(),
+          'user': Get.find<AccountSession>().user.value.toJson(),
         }),
       );
       final response = await request.close().timeout(

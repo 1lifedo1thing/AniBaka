@@ -163,6 +163,9 @@ class SourceGridCard extends StatelessWidget {
   final VoidCallback? onButtonPressed;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
+  final String editLabel;
+  final String deleteLabel;
+  final bool deleteDestructive;
 
   const SourceGridCard({
     required this.icon,
@@ -178,6 +181,9 @@ class SourceGridCard extends StatelessWidget {
     this.onButtonPressed,
     this.onEdit,
     this.onDelete,
+    this.editLabel = '编辑',
+    this.deleteLabel = '删除',
+    this.deleteDestructive = true,
     super.key,
   });
 
@@ -285,9 +291,9 @@ class SourceGridCard extends StatelessWidget {
                         },
                         itemBuilder: (_) => [
                           if (onEdit != null)
-                            const PopupMenuItem(
+                            PopupMenuItem(
                               value: 'edit',
-                              child: Text('编辑'),
+                              child: Text(editLabel),
                             ),
                           if (onEdit != null && onDelete != null)
                             const PopupMenuDivider(),
@@ -295,9 +301,11 @@ class SourceGridCard extends StatelessWidget {
                             PopupMenuItem(
                               value: 'delete',
                               child: Text(
-                                '删除',
+                                deleteLabel,
                                 style: TextStyle(
-                                  color: context.colorScheme.error,
+                                  color: deleteDestructive
+                                      ? context.colorScheme.error
+                                      : null,
                                 ),
                               ),
                             ),
@@ -389,14 +397,16 @@ class SourceReorderSection<T> extends StatelessWidget {
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: context.cardColor,
+            child: Material(
+              color: context.cardColor,
+              borderRadius: BorderRadius.circular(12),
+              shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(
+                side: BorderSide(
                   color: context.theme.dividerColor.withValues(alpha: 0.1),
                 ),
               ),
+              clipBehavior: Clip.antiAlias,
               child: ReorderableListView.builder(
                 shrinkWrap: true,
                 primary: false,
@@ -525,14 +535,16 @@ class SourceSubscriptionSheet extends StatelessWidget {
   }
 
   Widget _buildContent(BuildContext context, List<String> subscriptions) {
-    return Container(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      decoration: BoxDecoration(
-        color: context.cardColor,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      child: SafeArea(
-        child: Column(
+    return Material(
+      color: context.cardColor,
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.viewInsetsOf(context).bottom,
+        ),
+        child: SafeArea(
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             const SizedBox(height: 12),
@@ -612,6 +624,7 @@ class SourceSubscriptionSheet extends StatelessWidget {
           ],
         ),
       ),
-    );
+    ),
+  );
   }
 }

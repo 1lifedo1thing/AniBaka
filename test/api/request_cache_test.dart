@@ -1,9 +1,80 @@
 import 'dart:async';
 
 import 'package:baka/api/request_cache.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test(
+    'refresh bypasses completed values but shares a running refresh',
+    () async {
+      final cache = RequestCache<String, int>(limit: 1);
+      expect(await cache.get('a', () async => 1), 1);
+      final gate = Completer<int>();
+      final first = cache.get('a', () => gate.future, refresh: true);
+      final second = cache.get('a', () async => 3, refresh: true);
+      expect(identical(first, second), isTrue);
+      gate.complete(2);
+      expect(await second, 2);
+      expect(await cache.get('a', () async => 4), 2);
+    },
+  );
+
+  test('removed refresh cannot replace a newer value', () async {
+    final cache = RequestCache<String, int>(limit: 1);
+    final gate = Completer<int>();
+    final old = cache.get('a', () => gate.future, refresh: true);
+    cache.remove('a');
+    expect(await cache.get('a', () async => 2), 2);
+    gate.complete(1);
+    await old;
+    expect(await cache.get('a', () async => 3), 2);
+  });
+  test('capacity never evicts an in-flight request', () async {
+    final cache = RequestCache<int, int>(limit: 2, ttl: Duration.zero);
+    final gates = List.generate(3, (_) => Completer<int>());
+    var loads = 0;
+    final calls = [
+      for (var repeat = 0; repeat < 5; repeat++)
+        for (var key = 0; key < 3; key++)
+          cache.get(key, () {
+            loads++;
+            return gates[key].future;
+          }),
+    ];
+    expect(loads, 3);
+    for (var i = 0; i < 3; i++) {
+      gates[i].complete(i);
+    }
+    expect(await Future.wait(calls), [
+      for (var i = 0; i < 5; i++) ...[0, 1, 2],
+    ]);
+    expect(await cache.get(0, () async => 99), 99);
+  });
+
+  test('invalidated pending results cannot replace newer values', () async {
+    final cache = RequestCache<int, int>(limit: 2);
+    final stale = Completer<int>();
+    final first = cache.get(1, () => stale.future);
+    cache.clear();
+    expect(await cache.get(1, () async => 2), 2);
+    stale.complete(1);
+    expect(await first, 1);
+    expect(await cache.get(1, () async => 3), 2);
+    cache.remove(1);
+    expect(await cache.get(1, () async => 3), 3);
+  });
+
+  test('synchronous futures and throwing loaders complete normally', () async {
+    final cache = RequestCache<int, int>(limit: 2);
+    expect(await cache.get(1, () => SynchronousFuture(7)), 7);
+    await expectLater(
+      cache.get(2, () => throw StateError('sync')),
+      throwsStateError,
+    );
+    expect(await cache.get(2, () async => 8), 8);
+  });
+
   test('concurrent callers share one request and parsed value', () async {
     final cache = RequestCache<String, Object>(limit: 4);
     final gate = Completer<Object>();
@@ -90,5 +161,16 @@ void main() {
 
     gate.complete(9);
     expect(await first, 9);
+  });
+
+  test('deduplicator releases synchronous results and failed loads', () async {
+    final requests = RequestDeduplicator<int, int>();
+    expect(await requests.run(1, () => SynchronousFuture(1)), 1);
+    expect(await requests.run(1, () => SynchronousFuture(2)), 2);
+    await expectLater(
+      requests.run(2, () => throw StateError('sync')),
+      throwsStateError,
+    );
+    expect(await requests.run(2, () async => 3), 3);
   });
 }

@@ -1,7 +1,8 @@
+import 'package:baka/core/api_transport.dart';
+import 'package:baka/services/account/bangumi_session.dart';
+import 'package:baka/core/account_session.dart';
+import 'package:baka/models/app_user.dart';
 import 'package:baka/api/post.dart';
-import 'package:baka/app_state.dart';
-import 'package:baka/instance.dart';
-import 'package:baka/services/bangumi_sync_service.dart';
 import 'package:baka/utils/date_util.dart';
 import 'package:baka/utils/image_utils.dart';
 import 'package:baka/utils/reg_utils.dart';
@@ -13,7 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:get/get.dart';
+import 'package:get/get.dart' hide ContextExtensionss;
 import 'package:url_launcher/url_launcher_string.dart';
 
 Color? _commentMutedColor(ThemeData theme, {double alpha = 0.35}) =>
@@ -155,7 +156,7 @@ class CommentListState extends State<CommentList> {
     r'|\b(\d{1,2}:\d{2}(?::\d{2})?)\b',
   );
 
-  AppUser get _user => Get.find<AppState>().user.value;
+  AppUser get _user => Get.find<AccountSession>().user.value;
   List? _internalComments;
   int _requestSerial = 0;
   late MarkdownStyleSheet _markdownStyle;
@@ -478,7 +479,7 @@ class CommentListState extends State<CommentList> {
                     onTap: () {
                       HapticFeedback.lightImpact();
                       launchUrlString(
-                        '$host/comment/delete/${comment['id']}?token=${Instances.userToken}',
+                        '$host/comment/delete/${comment['id']}?token=${apiTransport.session.token}',
                       );
                     },
                   ),
@@ -593,7 +594,7 @@ class CommentListState extends State<CommentList> {
               onDoubleTap: () {
                 HapticFeedback.mediumImpact();
                 launchUrlString(
-                  '$host/comment/delete/${reply['id']}?token=${Instances.userToken}',
+                  '$host/comment/delete/${reply['id']}?token=${apiTransport.session.token}',
                 );
               },
               onTap: () async {
@@ -720,7 +721,7 @@ class CommentListState extends State<CommentList> {
     final user = _user;
     if (!user.isLoggedIn) {
       showSnackBar(
-        BangumiSyncService.instance.isConnected
+        bangumiSession.isConnected
             ? 'Bangumi 登录不能回复 AniBaka 评论，请先登录 AniBaka'
             : '登录后才能评论~',
       );

@@ -1,9 +1,10 @@
+import 'package:baka/core/account_session.dart';
 import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:get/get.dart';
+import 'package:get/get.dart' hide ContextExtensionss;
 import 'package:url_launcher/url_launcher_string.dart';
 
 import 'package:baka/app_state.dart';
@@ -15,7 +16,7 @@ import 'package:baka/pages/mine/mine_profile.dart';
 import 'package:baka/pages/player/download_page.dart';
 import 'package:baka/pages/setting/app_settings_page.dart';
 import 'package:baka/pages/source/source_management_page.dart';
-import 'package:baka/services/version_service.dart';
+import 'package:baka/app/update_presenter.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:baka/widgets/common/scale_button.dart';
 import 'package:baka/widgets/dialog/input_dialog.dart';
@@ -34,7 +35,7 @@ class _MinePageState extends State<MinePage> {
   @override
   void initState() {
     super.initState();
-    _loginWorker = ever(_app.user, (_) {
+    _loginWorker = ever(Get.find<AccountSession>().user, (_) {
       if (mounted) setState(() {});
     });
   }
@@ -82,7 +83,10 @@ class _MinePageState extends State<MinePage> {
                       title: 'APP线路',
                       icon: Icons.swap_calls_outlined,
                       onTap: _switchHost,
-                      trailing: _buildTag(_app.currentHost, isDark),
+                      trailing: _buildTag(
+                        Get.find<AccountSession>().currentHost,
+                        isDark,
+                      ),
                     ),
                     _MenuItem(
                       title: '支持开发',
@@ -137,9 +141,9 @@ class _MinePageState extends State<MinePage> {
   }
 
   Widget _buildHeader(BuildContext context, bool isDark) {
-    final bool isLogin = _app.isLoggedIn;
-    final bool hasIdentity = _app.hasIdentity;
-    final avatarUrl = _app.avatarUrl;
+    final bool isLogin = Get.find<AccountSession>().isLoggedIn;
+    final bool hasIdentity = Get.find<AccountSession>().hasIdentity;
+    final avatarUrl = Get.find<AccountSession>().avatarUrl;
 
     return SliverToBoxAdapter(
       child: SafeArea(
@@ -174,7 +178,7 @@ class _MinePageState extends State<MinePage> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      _app.displayName,
+                      Get.find<AccountSession>().displayName,
                       style: TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.bold,
@@ -183,7 +187,8 @@ class _MinePageState extends State<MinePage> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
-                    if (_app.isBangumiLogin && !isLogin) ...[
+                    if (Get.find<AccountSession>().isBangumiLogin &&
+                        !isLogin) ...[
                       const SizedBox(height: 4),
                       Container(
                         padding: const EdgeInsets.symmetric(
@@ -208,7 +213,7 @@ class _MinePageState extends State<MinePage> {
                     ],
                     const SizedBox(height: 2),
                     Text(
-                      _app.displaySubtitle,
+                      Get.find<AccountSession>().displaySubtitle,
                       style: TextStyle(
                         fontSize: 13,
                         color: isDark ? Colors.white54 : Colors.black54,
@@ -221,7 +226,7 @@ class _MinePageState extends State<MinePage> {
                       GestureDetector(
                         onTap: _copyUid,
                         child: Text(
-                          'UID: ${_app.user.value.id}',
+                          'UID: ${Get.find<AccountSession>().user.value.id}',
                           style: TextStyle(
                             fontSize: 10,
                             fontFamily: 'monospace',
@@ -456,7 +461,7 @@ class _MinePageState extends State<MinePage> {
   }
 
   Future<void> _copyUid() async {
-    final uid = _app.user.value.id;
+    final uid = Get.find<AccountSession>().user.value.id;
     final copied = uid != 0;
     if (copied) {
       await Clipboard.setData(ClipboardData(text: uid.toString()));
@@ -502,9 +507,9 @@ class _MinePageState extends State<MinePage> {
   }
 
   void _switchHost() {
-    _app.switchHost();
+    Get.find<AccountSession>().switchHost();
     setState(() {});
-    showSnackBar('已切换至 ${_app.currentHost}，重启生效');
+    showSnackBar('已切换至 ${Get.find<AccountSession>().currentHost}，重启生效');
   }
 
   Future<void> _joinQqGroup() async {

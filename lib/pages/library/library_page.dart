@@ -1,9 +1,10 @@
+import 'package:baka/models/playback_request.dart';
 import 'package:baka/api/anibaka_api.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/models/collection.dart';
 import 'package:baka/pages/player/player_page.dart';
-import 'package:baka/services/collection_service.dart';
-import 'package:baka/services/play_history_sync_service.dart';
+import 'package:baka/services/collection/collection_repository.dart';
+import 'package:baka/services/playback/history_repository.dart';
 import 'package:baka/widgets/anime/post_card.dart';
 import 'package:baka/widgets/common/skeletonizer.dart';
 import 'package:baka/widgets/dialog/input_dialog.dart';
@@ -38,7 +39,7 @@ class _LibraryPageState extends State<LibraryPage> {
   @override
   void initState() {
     super.initState();
-    _historyList = PlayHistorySyncService.getHistoryList();
+    _historyList = historyRepository.getHistoryList();
     _scrollController.addListener(_onScroll);
     _loadInitialData();
   }
@@ -66,11 +67,11 @@ class _LibraryPageState extends State<LibraryPage> {
     setState(() => _isCollectionLoading = true);
     try {
       final results = await Future.wait<Object?>([
-        CollectionService.getStats(),
-        CollectionService.getList(page: 1, pageSize: 20, status: status),
+        collections.getStats(),
+        collections.getList(page: 1, pageSize: 20, status: status),
         if (_isLoggedIn)
-          PlayHistorySyncService.syncRemoteToLocal().then((_) {
-            return PlayHistorySyncService.getHistoryList();
+          historyRepository.syncRemoteToLocal().then((_) {
+            return historyRepository.getHistoryList();
           }),
       ]);
       if (!mounted ||
@@ -100,7 +101,7 @@ class _LibraryPageState extends State<LibraryPage> {
   }
 
   Future<void> _fetchStats() async {
-    final newStats = await CollectionService.getStats();
+    final newStats = await collections.getStats();
     if (newStats != null && mounted) setState(() => _stats = newStats);
   }
 
@@ -111,7 +112,7 @@ class _LibraryPageState extends State<LibraryPage> {
     final page = reset ? 1 : _collectionPage + 1;
     setState(() => _isCollectionLoading = true);
     try {
-      final response = await CollectionService.getList(
+      final response = await collections.getList(
         page: page,
         pageSize: 20,
         status: status,
@@ -157,7 +158,7 @@ class _LibraryPageState extends State<LibraryPage> {
       isDestructive: true,
     );
     if (confirmed) {
-      await PlayHistorySyncService.clearHistory();
+      await historyRepository.clearHistory();
       if (_isLoggedIn) {
         AniBakaApi.clearPlayHistory().catchError((_) => false);
       }
@@ -498,11 +499,14 @@ class _LibraryPageState extends State<LibraryPage> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => PlayerPage(data: data, posIndex: posIndex),
+        builder: (_) => PlayerPage(
+          request: PlaybackRequest.fromMap(data),
+          posIndex: posIndex,
+        ),
       ),
     ).then((_) {
       if (!mounted) return;
-      setState(() => _historyList = PlayHistorySyncService.getHistoryList());
+      setState(() => _historyList = historyRepository.getHistoryList());
     });
   }
 }

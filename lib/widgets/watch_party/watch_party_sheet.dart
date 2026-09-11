@@ -1,8 +1,9 @@
+import 'package:get/get.dart' hide ContextExtensionss;
+import 'package:baka/app/watch_party_links.dart';
 import 'dart:async';
 
 import 'package:baka/models/watch_party.dart';
-import 'package:baka/services/watch_party_link_service.dart';
-import 'package:baka/services/watch_party_service.dart';
+import 'package:baka/services/playback/watch_party.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -38,7 +39,7 @@ class _WatchPartySheetState extends State<WatchPartySheet> {
     super.initState();
     _inviteController = TextEditingController();
     _nicknameController = TextEditingController(
-      text: WatchPartyService.currentNickname(),
+      text: Get.find<WatchPartyService>().currentNickname(),
     );
     _chatController = TextEditingController();
   }
@@ -56,52 +57,53 @@ class _WatchPartySheetState extends State<WatchPartySheet> {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
-    return Container(
-      height: MediaQuery.sizeOf(context).height * 0.8,
-      decoration: BoxDecoration(
-        color: colorScheme.surface,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Column(
-          children: [
-            const SizedBox(height: 8),
-            Container(
-              width: 32,
-              height: 4,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(2),
-                color: colorScheme.outlineVariant,
+    return Material(
+      color: colorScheme.surface,
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      clipBehavior: Clip.antiAlias,
+      child: SizedBox(
+        height: MediaQuery.sizeOf(context).height * 0.8,
+        child: SafeArea(
+          top: false,
+          child: Column(
+            children: [
+              const SizedBox(height: 8),
+              Container(
+                width: 32,
+                height: 4,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(2),
+                  color: colorScheme.outlineVariant,
+                ),
               ),
-            ),
-            const SizedBox(height: 4),
-            Expanded(
-              child: ValueListenableBuilder<WatchPartyViewState>(
-                valueListenable: widget.service.state,
-                builder: (context, state, _) {
-                  final snapshot = state.snapshot;
-                  if (snapshot != null) {
-                    return _RoomView(
+              const SizedBox(height: 4),
+              Expanded(
+                child: ValueListenableBuilder<WatchPartyViewState>(
+                  valueListenable: widget.service.state,
+                  builder: (context, state, _) {
+                    final snapshot = state.snapshot;
+                    if (snapshot != null) {
+                      return _RoomView(
+                        service: widget.service,
+                        state: state,
+                        snapshot: snapshot,
+                        chatController: _chatController,
+                        onSendChat: _sendChat,
+                      );
+                    }
+                    return _JoinView(
                       service: widget.service,
                       state: state,
-                      snapshot: snapshot,
-                      chatController: _chatController,
-                      onSendChat: _sendChat,
+                      inviteController: _inviteController,
+                      nicknameController: _nicknameController,
+                      onCreateRoom: _handleCreateRoom,
+                      onJoinRoom: _handleJoinRoom,
                     );
-                  }
-                  return _JoinView(
-                    service: widget.service,
-                    state: state,
-                    inviteController: _inviteController,
-                    nicknameController: _nicknameController,
-                    onCreateRoom: _handleCreateRoom,
-                    onJoinRoom: _handleJoinRoom,
-                  );
-                },
+                  },
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -122,12 +124,9 @@ class _WatchPartySheetState extends State<WatchPartySheet> {
 
   Future<void> _handleJoinRoom() async {
     final rawCode = _inviteController.text;
-    final code = WatchPartyLinkService.inviteCodeFromValue(rawCode) ?? rawCode.trim();
+    final code = WatchPartyLinks.inviteCodeFromValue(rawCode) ?? rawCode.trim();
     try {
-      await widget.service.joinInvite(
-        code,
-        nickname: _nicknameController.text,
-      );
+      await widget.service.joinInvite(code, nickname: _nicknameController.text);
     } catch (error) {
       if (mounted) {
         showSnackBar(
@@ -211,7 +210,10 @@ class _JoinView extends StatelessWidget {
             ),
             child: Text(
               state.error,
-              style: TextStyle(color: colorScheme.onErrorContainer, fontSize: 13),
+              style: TextStyle(
+                color: colorScheme.onErrorContainer,
+                fontSize: 13,
+              ),
             ),
           ),
         ],
@@ -384,7 +386,10 @@ class _RoomView extends StatelessWidget {
           TabBar(
             dividerColor: colorScheme.outlineVariant,
             indicatorSize: TabBarIndicatorSize.tab,
-            labelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            labelStyle: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
             tabs: [
               Tab(text: '聊天 (${snapshot.chat.length})'),
               Tab(text: '成员 (${snapshot.members.length})'),
@@ -399,10 +404,7 @@ class _RoomView extends StatelessWidget {
                   controller: chatController,
                   onSend: onSendChat,
                 ),
-                _MembersTab(
-                  snapshot: snapshot,
-                  service: service,
-                ),
+                _MembersTab(snapshot: snapshot, service: service),
                 _InviteTab(invite: state.invite),
               ],
             ),
@@ -508,9 +510,7 @@ class _ChatTab extends StatelessWidget {
           ),
           decoration: BoxDecoration(
             color: colorScheme.surface,
-            border: Border(
-              top: BorderSide(color: colorScheme.outlineVariant),
-            ),
+            border: Border(top: BorderSide(color: colorScheme.outlineVariant)),
           ),
           child: Row(
             children: [
@@ -551,10 +551,7 @@ class _ChatTab extends StatelessWidget {
 }
 
 class _MembersTab extends StatelessWidget {
-  const _MembersTab({
-    required this.snapshot,
-    required this.service,
-  });
+  const _MembersTab({required this.snapshot, required this.service});
 
   final WatchPartySnapshot snapshot;
   final WatchPartyService service;
@@ -654,7 +651,8 @@ class _InviteTab extends StatelessWidget {
           context,
           'Syncplay 服务器',
           '${inv.syncplayHost}:${inv.syncplayPort}',
-          onCopy: () => _copy(context, '${inv.syncplayHost}:${inv.syncplayPort}'),
+          onCopy: () =>
+              _copy(context, '${inv.syncplayHost}:${inv.syncplayPort}'),
         ),
         _buildInfoTile(
           context,

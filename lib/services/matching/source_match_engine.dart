@@ -1,7 +1,7 @@
 import 'package:baka/models/playback_episode.dart';
 import 'package:baka/utils/bgm_utils.dart';
 
-import 'title_matcher.dart';
+import 'package:baka/utils/title_matcher.dart';
 
 /// 参与匹配的候选条目。特征惰性计算，同一实例可复用多轮排序。
 class SourceMatchCandidate {
@@ -95,39 +95,77 @@ class SourceMatchScore {
   /// 供 UI 展示的整数分。
   int get score => (confidence * 100).round();
 
-  /// 结果刚到时立刻发起「目录 + 媒体」探针（竞速优先）。
+  /// 结果刚到时立刻发起「目录 + 媒体」探针。
   bool get shouldProbeImmediately =>
       confidence >= SourceMatchEngine.immediateProbeConfidence &&
       !seasonConflict &&
       !severeEpisodeConflict;
+}
 
-  /// 全源搜索结束后的兜底探针阈值（略放宽，仍拒绝季/集硬冲突）。
-  bool get shouldProbeOnFinalPass =>
-      confidence >= SourceMatchEngine.finalProbeConfidence &&
-      !seasonConflict &&
-      !severeEpisodeConflict;
+/// 单个源的关键词执行计划：先竞速 [race]，全部落空后再串行尝试 [fallback]。
+///
+/// 自动匹配只竞速主标题，[fallback] 恒为空；手动搜索才有后备关键词。
+class SourceKeywordPlan {
+  const SourceKeywordPlan({required this.race, required this.fallback});
 
-  /// 标题极高置信：优先插队探测。
-  bool get isHighConfidenceTitle =>
-      confidence >= SourceMatchEngine.priorityProbeConfidence &&
-      !seasonConflict &&
-      !severeEpisodeConflict;
+  final List<String> race;
+  final List<String> fallback;
+
+  bool get isEmpty => race.isEmpty && fallback.isEmpty;
 }
 
 /// 候选源排序：标题相似度为主，季度/集数/类型做有界修正。
 class SourceMatchEngine {
   const SourceMatchEngine();
 
+  /// 结果刚到达时的展示准入：低于此分的结果不进入列表。
+  static const double admissionConfidence = 0.18;
+
+  /// 结果刚到时立刻发起「目录 + 媒体」探针（唯一的探针准入线）。
   static const double immediateProbeConfidence = 0.70;
-  static const double priorityProbeConfidence = 0.82;
-  static const double finalProbeConfidence = 0.60;
-  static const int raceConcurrency = 5;
+
+  /// 自动匹配探针并发（同时按「手动点选」路径处理的候选数）。
+  static const int raceConcurrency = 6;
+
+  /// 单候选竞速最多尝试的线路数。
   static const int maxLinesPerCandidate = 2;
+
+  /// 每个源最多探针数，防止单源结果挤占全部探针名额。
+  static const int raceProbesPerSource = 2;
+
+  /// 自动匹配全局探针上限。
+  static const int maxAutoProbes = 16;
+
+  /// 自动匹配每源搜索关键词数。
   static const int keywordsPerSourceAuto = 1;
+
+  /// 手动搜索每源竞速关键词数。
   static const int keywordsPerSourceManual = 2;
-  static const Duration candidateBudget = Duration(milliseconds: 5500);
-  static const Duration sourceSearchBudget = Duration(seconds: 30);
-  static const Duration wallClock = Duration(seconds: 12);
+
+  /// 单候选总预算（目录 + 一次媒体解析）。
+  static const Duration candidateBudget = Duration(milliseconds: 5000);
+
+  /// 单个源搜索上限，避免无响应源拖住整轮匹配。
+  static const Duration sourceSearchBudget = Duration(seconds: 8);
+
+  /// 自动匹配绝对上限：到时无论是否命中都要给出结论。
+  static const Duration hardDeadline = Duration(seconds: 10);
+
+  /// 关键词计划：自动匹配只竞速主标题，手动搜索竞速前 2 个、其余作为后备。
+  static SourceKeywordPlan planKeywords({
+    required bool autoMatch,
+    required List<String> titles,
+  }) {
+    final raceTake = autoMatch
+        ? keywordsPerSourceAuto
+        : keywordsPerSourceManual;
+    return SourceKeywordPlan(
+      race: titles.take(raceTake).toList(growable: false),
+      fallback: autoMatch
+          ? const <String>[]
+          : titles.skip(raceTake).toList(growable: false),
+    );
+  }
 
   List<SourceMatchScore> rank(
     Iterable<SourceMatchCandidate> candidates,

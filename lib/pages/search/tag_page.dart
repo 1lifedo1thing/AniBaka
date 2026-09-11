@@ -1,7 +1,7 @@
+import 'package:baka/models/playback_request.dart';
 import 'package:baka/api/bgm.dart';
 import 'package:baka/api/post.dart';
 import 'package:baka/pages/player/player_page.dart';
-import 'package:baka/services/bgm_service.dart';
 import 'package:baka/widgets/anime/post_card.dart';
 import 'package:baka/widgets/common/refresh.dart';
 import 'package:flutter/material.dart';
@@ -30,7 +30,7 @@ class _TagPageState extends State<TagPage> {
           limit: pageSize,
           offset: (page - 1) * pageSize,
         );
-        posts = BgmService.convertSearchToAppFormat(subjects);
+        posts = convertBgmSubjectsToAppFormat(subjects);
       } else if (widget.uid != 0) {
         posts = await getPost('', '', page, 15, uid: widget.uid);
       }
@@ -61,12 +61,12 @@ class _TagPageState extends State<TagPage> {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => PlayerPage(
-          data: <String, dynamic>{
+          request: PlaybackRequest.fromMap(<String, dynamic>{
             'title': data['title'],
             'bgmId': data['bgmId'],
             if (data['bgmImageUrl'] != null) 'bgmImageUrl': data['bgmImageUrl'],
             if (data['score'] != null) 'score': data['score'],
-          },
+          }),
         ),
       ),
     );

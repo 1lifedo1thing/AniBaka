@@ -11,14 +11,14 @@ import 'package:flutter/services.dart';
 import 'package:flutter_volume_controller/flutter_volume_controller.dart';
 import 'package:fullscreen_window/fullscreen_window.dart';
 import 'package:media_kit_video/media_kit_video.dart';
-import 'package:baka/widgets/danmaku/controller.dart';
+import 'package:baka/services/playback/danmaku_controller.dart';
 import 'package:baka/widgets/danmaku/view.dart';
-import 'package:baka/widgets/baka_player/controller.dart';
-import 'package:baka/widgets/baka_player/utils.dart';
+import 'controller.dart';
+import 'package:baka/utils/duration_utils.dart';
 import 'package:ios_orientation/ios_orientation.dart';
 import 'package:screen_brightness/screen_brightness.dart';
 import 'widgets/bottom_control.dart';
-import 'package:baka/services/navigation_service.dart';
+import 'package:baka/app/navigation.dart';
 import 'package:baka/pages/setting/danmaku_settings_page.dart';
 import 'package:baka/pages/setting/subtitle_settings_page.dart';
 import 'widgets/danmaku_input_overlay.dart';
@@ -47,6 +47,8 @@ class BakaPlayer extends StatefulWidget {
     this.onNextEpisode,
     this.onFullScreenChanged,
     this.focusNode,
+    this.showPlaybackError = true,
+    this.onAiRepair,
     super.key,
   });
 
@@ -60,6 +62,8 @@ class BakaPlayer extends StatefulWidget {
   final VoidCallback? onNextEpisode;
   final ValueChanged<bool>? onFullScreenChanged;
   final FocusNode? focusNode;
+  final bool showPlaybackError;
+  final VoidCallback? onAiRepair;
 
   BakaPlayer fullscreenView() => BakaPlayer(
     controller: controller,
@@ -71,6 +75,8 @@ class BakaPlayer extends StatefulWidget {
     hasNextEpisode: hasNextEpisode,
     onNextEpisode: onNextEpisode,
     onFullScreenChanged: onFullScreenChanged,
+    showPlaybackError: showPlaybackError,
+    onAiRepair: onAiRepair,
   );
 
   @override
@@ -340,6 +346,8 @@ class _BakaPlayerState extends State<BakaPlayer> {
               controller: widget.controller,
               canSearchSource: widget.canSearchSource,
               onSearch: _navigateToSearch,
+              show: widget.showPlaybackError,
+              onAiRepair: widget.onAiRepair,
             ),
             PlayerPrompts(
               controller: widget.controller,

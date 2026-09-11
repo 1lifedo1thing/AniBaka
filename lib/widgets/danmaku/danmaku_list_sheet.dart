@@ -1,9 +1,7 @@
 import 'package:baka/api/bgm.dart';
-import 'package:baka/services/bgm_service.dart';
-import 'package:baka/services/danmaku_service.dart';
+import 'package:baka/services/playback/danmaku_controller.dart';
 import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/utils/toast_utils.dart';
-import 'package:baka/widgets/danmaku/controller.dart';
 import 'package:flutter/material.dart';
 
 /// 居中对话框形态展示的弹幕来源与检索面板
@@ -105,7 +103,7 @@ class _DanmakuListSheetState extends State<DanmakuListSheet> {
     });
 
     try {
-      final results = await BgmService.searchSubjects(clean);
+      final results = await searchBgmSubjects(clean);
       if (!mounted) return;
 
       setState(() {
@@ -163,7 +161,7 @@ class _DanmakuListSheetState extends State<DanmakuListSheet> {
     setState(() => _loadingEpIndex = epIndex);
 
     try {
-      final items = await DanmakuService.fetch(
+      final items = await DanmakuController.fetchDanmaku(
         subjectId: subject.subjectId,
         episodeIndex: epIndex,
         titles: subject.searchTitles,

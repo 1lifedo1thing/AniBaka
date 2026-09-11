@@ -1,8 +1,8 @@
+import 'package:baka/services/playback/danmaku_controller.dart';
 import 'package:baka/app_state.dart';
-import 'package:baka/services/danmaku_service.dart';
 import 'package:baka/theme.dart';
 import 'package:flutter/material.dart';
-import 'package:get/get.dart';
+import 'package:get/get.dart' hide ContextExtensionss;
 import 'package:baka/widgets/settings/settings_widgets.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -50,7 +50,7 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
   void initState() {
     super.initState();
     _fontScale = ValueNotifier(_theme.fontScale);
-    _danmakuFontFamily = ValueNotifier(DanmakuService.getSavedFontFamily());
+    _danmakuFontFamily = ValueNotifier(DanmakuController.getSavedFontFamily());
   }
 
   @override
@@ -76,7 +76,7 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
     if (_danmakuFontFamily.value == fontFamily) return;
     HapticFeedback.selectionClick();
     _danmakuFontFamily.value = fontFamily;
-    await DanmakuService.setFontFamily(fontFamily);
+    await DanmakuController.setFontFamily(fontFamily);
   }
 
   @override

@@ -1,5 +1,5 @@
 import 'package:baka/models/playback_state.dart';
-import 'package:baka/services/playback_settings_service.dart';
+import 'package:baka/services/playback/playback_settings.dart';
 import 'package:flutter/material.dart';
 import 'package:baka/widgets/baka_player/controller.dart';
 import 'package:baka/utils/toast_utils.dart';

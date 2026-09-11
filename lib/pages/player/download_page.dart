@@ -1,14 +1,15 @@
+import 'package:baka/models/playback_request.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:baka/utils/format_utils.dart';
 import 'package:flutter/material.dart';
-import 'package:get/get.dart';
+import 'package:get/get.dart' hide ContextExtensionss;
 
 import 'package:baka/models/download_task.dart';
 import 'package:baka/pages/player/player_page.dart';
-import 'package:baka/services/download_service.dart';
+import 'package:baka/services/download/download_manager.dart';
 
 class DownloadManagerController extends GetxController {
-  final service = DownloadService.instance;
+  final service = downloads;
   final revision = 0.obs;
 
   late final VoidCallback _listener;
@@ -50,7 +51,7 @@ class DownloadManagerPage extends StatelessWidget {
   const DownloadManagerPage({super.key});
 
   static void show(BuildContext context) {
-    DownloadService.instance.init();
+    downloads.init();
     Navigator.of(
       context,
     ).push(MaterialPageRoute(builder: (_) => const DownloadManagerPage()));
@@ -194,7 +195,7 @@ class _TaskCard extends StatelessWidget {
   const _TaskCard({required this.task, super.key});
 
   void _onTap(BuildContext context) {
-    final service = DownloadService.instance;
+    final service = downloads;
     switch (task.status) {
       case DownloadStatus.downloading:
         service.pause(task);
@@ -207,14 +208,14 @@ class _TaskCard extends StatelessWidget {
           Navigator.of(context).push(
             MaterialPageRoute(
               builder: (_) => PlayerPage(
-                data: {
+                request: PlaybackRequest.fromMap({
                   'source': '_local',
                   'title': task.title,
                   'episodeTitle': task.subtitle,
                   'localFilePath': task.filePath!,
                   'danmakuPath': task.danmakuPath,
                   'id': 0,
-                },
+                }),
               ),
             ),
           );
@@ -248,7 +249,7 @@ class _TaskCard extends StatelessWidget {
     return Dismissible(
       key: ValueKey('dismiss_${task.id}'),
       direction: DismissDirection.endToStart,
-      onDismissed: (_) => DownloadService.instance.delete(task),
+      onDismissed: (_) => downloads.delete(task),
       background: _dismissBackground(theme),
       child: ValueListenableBuilder<DownloadStatus>(
         valueListenable: task.statusNotifier,
@@ -388,7 +389,7 @@ class _AnimeGroupCard extends StatelessWidget {
       confirmDismiss: (_) => _confirmDelete(context),
       onDismissed: (_) {
         for (final task in tasks) {
-          DownloadService.instance.delete(task);
+          downloads.delete(task);
         }
       },
       background: _dismissBackground(theme),

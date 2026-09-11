@@ -1,17 +1,18 @@
+import 'package:baka/core/account_session.dart';
+import 'package:baka/models/app_user.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:get/get.dart';
+import 'package:get/get.dart' hide ContextExtensionss;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
-import 'package:baka/app_state.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/pages/mine/mine_profile.dart';
-import 'package:baka/services/qr_login_server.dart';
-import 'package:baka/services/collection_service.dart';
-import 'package:baka/services/play_history_sync_service.dart';
-import 'package:baka/services/navigation_service.dart';
+import 'package:baka/services/account/qr_login_server.dart';
+import 'package:baka/services/collection/collection_repository.dart';
+import 'package:baka/services/playback/history_repository.dart';
+import 'package:baka/app/navigation.dart';
 import 'package:baka/widgets/platform/tv/tv_focusable.dart';
 import 'package:baka/widgets/platform/tv/tv_theme_util.dart';
 import 'package:baka/widgets/platform/tv/tv_log_export_dialog.dart';
@@ -26,7 +27,6 @@ class TvMyPage extends StatefulWidget {
 }
 
 class _TvMyPageState extends State<TvMyPage> {
-  late final AppState _app = Get.find<AppState>();
   final QrLoginServer _qrServer = QrLoginServer();
   late final Worker _loginWorker;
 
@@ -41,7 +41,7 @@ class _TvMyPageState extends State<TvMyPage> {
   @override
   void initState() {
     super.initState();
-    _loginWorker = ever(Get.find<AppState>().user, (_) {
+    _loginWorker = ever(Get.find<AccountSession>().user, (_) {
       if (mounted) {
         setState(() {});
         _loadUserData();
@@ -51,7 +51,7 @@ class _TvMyPageState extends State<TvMyPage> {
   }
 
   void _loadUserData() {
-    if (!_app.isLoggedIn) {
+    if (!Get.find<AccountSession>().isLoggedIn) {
       _startQrServer();
     } else {
       _qrServer.stop();
@@ -62,8 +62,8 @@ class _TvMyPageState extends State<TvMyPage> {
 
   Future<void> _loadStats() async {
     try {
-      final stats = await CollectionService.getStats();
-      final history = PlayHistorySyncService.getHistoryList();
+      final stats = await collections.getStats();
+      final history = historyRepository.getHistoryList();
       if (mounted) {
         setState(() {
           _stats = stats;
@@ -101,7 +101,7 @@ class _TvMyPageState extends State<TvMyPage> {
       }
 
       _qrTimeoutTimer = Timer(const Duration(minutes: 5), () {
-        if (mounted && !_app.isLoggedIn) {
+        if (mounted && !Get.find<AccountSession>().isLoggedIn) {
           setState(() {
             _qrError = '二维码已过期，请点击刷新';
           });
@@ -113,7 +113,7 @@ class _TvMyPageState extends State<TvMyPage> {
 
       if (!mounted) return;
 
-      await Get.find<AppState>().saveLoginInfo(
+      await Get.find<AccountSession>().saveLoginInfo(
         result['token'] as String,
         AppUser.fromJson(result['user'] as Map<String, dynamic>),
         refreshToken: result['refresh_token'] as String?,
@@ -121,7 +121,7 @@ class _TvMyPageState extends State<TvMyPage> {
       );
 
       showSnackBar('登录成功');
-      Get.find<AppState>().triggerLoginRefresh();
+      Get.find<AccountSession>().refreshView();
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -179,7 +179,7 @@ class _TvMyPageState extends State<TvMyPage> {
     );
 
     if (confirm == true) {
-      Get.find<AppState>().performLogout();
+      Get.find<AccountSession>().logout();
       showSnackBar('已退出登录');
     }
   }
@@ -194,7 +194,7 @@ class _TvMyPageState extends State<TvMyPage> {
 
   @override
   Widget build(BuildContext context) {
-    final isLogin = _app.isLoggedIn;
+    final isLogin = Get.find<AccountSession>().isLoggedIn;
 
     return Focus(
       canRequestFocus: false,
@@ -279,9 +279,9 @@ class _TvMyPageState extends State<TvMyPage> {
             ],
           ),
           child: ClipOval(
-            child: _app.avatarUrl.isNotEmpty
+            child: Get.find<AccountSession>().avatarUrl.isNotEmpty
                 ? CachedNetworkImage(
-                    imageUrl: _app.avatarUrl,
+                    imageUrl: Get.find<AccountSession>().avatarUrl,
                     memCacheWidth: 240,
                     fit: BoxFit.cover,
                   )
@@ -297,7 +297,7 @@ class _TvMyPageState extends State<TvMyPage> {
         ),
         const SizedBox(height: 20),
         Text(
-          _app.displayName,
+          Get.find<AccountSession>().displayName,
           style: TextStyle(
             fontSize: 24,
             fontWeight: FontWeight.w900,
@@ -309,7 +309,7 @@ class _TvMyPageState extends State<TvMyPage> {
         ),
         const SizedBox(height: 8),
         Text(
-          _app.displaySubtitle,
+          Get.find<AccountSession>().displaySubtitle,
           style: TextStyle(fontSize: 13, color: context.tvTextSecondaryColor),
           textAlign: TextAlign.center,
           maxLines: 2,
@@ -515,12 +515,12 @@ class _TvMyPageState extends State<TvMyPage> {
           icon: Icons.alt_route_rounded,
           title: '应用线路',
           value: '切换',
-          subtitle: '当前: ${_app.currentHost}',
+          subtitle: '当前: ${Get.find<AccountSession>().currentHost}',
           color: Colors.tealAccent,
           onPressed: () {
-            _app.switchHost();
+            Get.find<AccountSession>().switchHost();
             setState(() {});
-            showSnackBar('线路已切换至 ${_app.currentHost}');
+            showSnackBar('线路已切换至 ${Get.find<AccountSession>().currentHost}');
           },
         ),
         _buildStatsCard(

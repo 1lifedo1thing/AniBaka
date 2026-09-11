@@ -9,7 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-import 'controller.dart';
+import 'package:baka/services/playback/danmaku_controller.dart';
 
 const double _trackSpacing = 1.05;
 const double _scrollGapPx = 12;

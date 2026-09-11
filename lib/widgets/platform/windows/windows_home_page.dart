@@ -1,4 +1,4 @@
-import 'package:baka/services/home_service.dart';
+import 'package:baka/pages/home/home_controller.dart';
 import 'package:baka/widgets/anime/post_card.dart';
 import 'package:baka/widgets/common/refresh.dart';
 import 'package:baka/widgets/home/rank_section.dart';
@@ -17,7 +17,7 @@ class WindowsHomePage extends StatelessWidget {
     super.key,
   });
 
-  final HomeDataService svc;
+  final HomeController svc;
   final Future<void> Function() onRefresh;
 
   @override

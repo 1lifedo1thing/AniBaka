@@ -1,4 +1,4 @@
-import 'package:baka/app_state.dart';
+import 'package:baka/models/app_user.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

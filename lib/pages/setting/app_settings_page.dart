@@ -1,14 +1,18 @@
+import 'package:baka/services/account/login_service.dart';
+import 'package:baka/core/api_transport.dart';
+import 'package:baka/core/account_session.dart';
+import 'package:baka/models/app_user.dart';
 import 'package:baka/app_state.dart';
 import 'package:baka/instance.dart';
-import 'package:get/get.dart';
-import 'package:baka/services/app_storage.dart';
-import 'package:baka/services/network_service.dart';
+import 'package:get/get.dart' hide ContextExtensionss;
+import 'package:baka/core/app_storage.dart';
 import 'package:baka/utils/app_logger.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:baka/widgets/dialog/input_dialog.dart';
 import 'package:baka/pages/setting/font_settings_page.dart';
 import 'package:baka/pages/setting/playback_settings_page.dart';
 import 'package:baka/pages/source/source_management_page.dart';
+import 'package:baka/pages/setting/ai_rule_settings_page.dart';
 import 'package:baka/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:baka/widgets/settings/settings_widgets.dart';
@@ -27,7 +31,10 @@ class AppSettingsPage extends StatefulWidget {
 
 class _AppSettingsPageState extends State<AppSettingsPage> {
   final _appState = Get.find<AppState>();
-  final _loginService = LoginService();
+  final _loginService = LoginService(
+    Get.find<AccountSession>(),
+    Get.find<ApiTransport>(),
+  );
 
   String _cacheSize = '计算中...';
   bool _isClearing = false;
@@ -35,7 +42,9 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
   bool _isSharingLogs = false;
 
   /// 会话数据只有 [AppState] 一份，页面不再自己 jsonDecode 一遍 `userinfo`。
-  AppUser? get _user => _appState.isLoggedIn ? _appState.user.value : null;
+  AppUser? get _user => Get.find<AccountSession>().isLoggedIn
+      ? Get.find<AccountSession>().user.value
+      : null;
 
   @override
   void initState() {
@@ -157,7 +166,7 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
     showSnackBar(result.message, isError: !result.success);
     final updated = result.user;
     if (updated != null) {
-      await _appState.saveUser(updated);
+      await Get.find<AccountSession>().saveUser(updated);
       if (mounted) setState(() {});
       HapticFeedback.mediumImpact();
     }
@@ -174,7 +183,7 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
       isDestructive: true,
     );
     if (!action || !mounted) return;
-    _appState.performLogout();
+    Get.find<AccountSession>().logout();
     Navigator.pop(context);
   }
 
@@ -293,6 +302,19 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
                           context,
                           MaterialPageRoute(
                             builder: (_) => const SourceManagementPage(),
+                          ),
+                        );
+                      },
+                    ),
+                    SettingsTile(
+                      title: 'AI 规则编写',
+                      value: 'OpenAI 兼容模型 / API Key',
+                      icon: Icons.auto_awesome_rounded,
+                      onTap: () async {
+                        await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const AiRuleSettingsPage(),
                           ),
                         );
                       },

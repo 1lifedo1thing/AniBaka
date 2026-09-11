@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:baka/models/download_task.dart';
-import 'package:baka/services/bgm_service.dart';
-import 'package:baka/services/download_service.dart';
-import 'package:baka/services/player_service.dart';
+import 'package:baka/api/bgm.dart';
+import 'package:baka/services/download/download_manager.dart';
+import 'package:baka/services/playback/playback_content.dart';
 import 'package:baka/models/playback_episode.dart';
 import 'package:baka/widgets/episode/episode_widgets.dart';
 
@@ -102,9 +102,9 @@ class _EpisodeListDialogState extends State<EpisodeListDialog> {
   late bool _downloadMode;
   final Set<int> _selected = {};
 
-  late final Set<String> _queuedIds;
+  late Set<String> _queuedIds;
   late final String _taskIdPrefix;
-  late final List<int> _selectableIndexes;
+  late List<int> _selectableIndexes;
   late List<int> _visibleIndexes;
 
   @override
@@ -112,8 +112,19 @@ class _EpisodeListDialogState extends State<EpisodeListDialog> {
     super.initState();
     _downloadMode = widget.startInDownloadMode && widget.canDownload;
     if (widget.canDownload) {
-      DownloadService.instance.init();
-      _queuedIds = DownloadService.instance.tasks.map((t) => t.id).toSet();
+      downloads.init().then((_) {
+        if (!mounted) return;
+        setState(() {
+          _queuedIds = downloads.tasks.map((task) => task.id).toSet();
+          _selectableIndexes = [
+            for (var i = 0; i < widget.videoList.length; i++)
+              if (!_queuedIds.contains(_taskId(i))) i,
+          ];
+          _selected.removeWhere((i) => _queuedIds.contains(_taskId(i)));
+          _refreshVisibleIndexes();
+        });
+      });
+      _queuedIds = downloads.tasks.map((t) => t.id).toSet();
       final detail = widget.postDetail!;
       final source = detail['source']?.toString() ?? '';
       final id = detail['id'];
@@ -211,9 +222,10 @@ class _EpisodeListDialogState extends State<EpisodeListDialog> {
   }
 
   Future<void> _resolveAndEnqueue(List<int> indices) async {
-    final service = DownloadService.instance;
+    final service = downloads;
+    await service.init();
     final detail = widget.postDetail!;
-    final bgmId = (await BgmService.resolveFromData(detail)).subjectId;
+    final bgmId = (await resolveBgmFromData(detail)).subjectId;
 
     final sourceName = detail['sourceDisplayName']?.toString() ?? '';
     final title = (detail['title'] ?? '未知标题').toString();
@@ -522,7 +534,7 @@ class _EpisodeListDialogState extends State<EpisodeListDialog> {
       index: index,
       rawTitle: rawTitle,
       isSelected: index == widget.currentIndex,
-      isWatched: PlayerService.isEpisodeWatched(widget.videoId, index),
+      isWatched: PlaybackContent.isEpisodeWatched(widget.videoId, index),
       textColor: textColor,
       onTap: () => Navigator.pop(context, index),
     );

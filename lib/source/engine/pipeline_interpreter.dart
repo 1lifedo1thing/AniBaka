@@ -6,14 +6,14 @@ import 'package:crypto/crypto.dart';
 import 'package:encrypt/encrypt.dart' as enc;
 import 'package:html/parser.dart' show parse;
 
-import 'package:baka/services/matching/title_matcher.dart';
+import 'package:baka/utils/title_matcher.dart';
 import 'package:baka/source/models/series.dart';
 import 'package:baka/source/models/episode.dart';
 import 'package:baka/source/models/source.dart';
 import 'package:baka/source/engine/anime_rule_ops.dart';
 import 'package:baka/source/engine/pipeline_host.dart';
 import 'package:baka/source/engine/torrent_records.dart';
-import 'package:baka/source/model/source_rule.dart';
+import 'package:baka/source/models/source_rule.dart';
 import 'package:baka/source/runtime/request_scheduler.dart';
 import 'package:baka/source/video_url_extractor.dart';
 
@@ -113,13 +113,6 @@ class _PipelineContext {
 
   void beginSink() => sinkRuns++;
 }
-
-typedef _OpHandler =
-    FutureOr<void> Function(
-      PipelineInterpreter,
-      PipelineStep,
-      _PipelineContext,
-    );
 
 /// anx-rule/2 顺序解释器；实例无状态，可并发复用。
 class PipelineInterpreter {
@@ -262,101 +255,76 @@ class PipelineInterpreter {
     }
   }
 
-  /// op 名 → 执行函数的路由表。同步 op 一律使用块体，避免把非 void
-  /// 返回值当 Future 误 await；异步 op 直接透传 Future。
-  static final Map<String, _OpHandler> _opHandlers = {
-    'template': (self, step, ctx) {
-      ctx.value = self._render(step.str('value') ?? '', ctx);
-    },
-    'setVar': (self, step, ctx) {
-      ctx.vars[step.str('name') ?? '_'] = self._render(
-        step.str('value') ?? '',
-        ctx,
-      );
-    },
-    'query': (self, step, ctx) {
-      self._opQuery(step, ctx);
-    },
-    'fetch': _handleFetch,
-    'follow': _handleFetch,
-    'select': (self, step, ctx) {
-      self._opSelect(step, ctx);
-    },
-    'regex': (self, step, ctx) {
-      self._opRegex(step, ctx);
-    },
-    'replace': (self, step, ctx) {
-      self._opReplace(step, ctx);
-    },
-    'json': (self, step, ctx) {
-      self._opJson(step, ctx);
-    },
-    'pick': (self, step, ctx) {
-      self._opPick(step, ctx);
-    },
-    'crypto': (self, step, ctx) {
-      self._opCrypto(step, ctx);
-    },
-    'baseN': (self, step, ctx) {
-      self._opBaseN(step, ctx);
-    },
-    'ecPlayer': (self, step, ctx) {
-      self._opEcPlayer(step, ctx);
-    },
-    'maccmsVerify': (self, step, ctx) => self._opMacCmsVerify(step, ctx),
-    'first': (self, step, ctx) => self._opFirst(step, ctx),
-    'searchList': (self, step, ctx) {
-      self._opSearchList(step, ctx);
-    },
-    'jsonSeries': (self, step, ctx) {
-      self._opJsonSeries(step, ctx);
-    },
-    'episodes': (self, step, ctx) {
-      self._opEpisodes(step, ctx);
-    },
-    'jsonEpisodes': (self, step, ctx) {
-      self._opJsonEpisodes(step, ctx);
-    },
-    'maccmsApiEpisodes': (self, step, ctx) {
-      self._opMaccmsApiEpisodes(step, ctx);
-    },
-    'videoUrl': (self, step, ctx) {
-      self._opVideoUrl(step, ctx);
-    },
-    'setMediaHeaders': (self, step, ctx) {
-      self._opSetMediaHeaders(step, ctx);
-    },
-    'playerAaaa': (self, step, ctx) {
-      self._opPlayerAaaa(step, ctx);
-    },
-    'playerDecrypt': (self, step, ctx) {
-      self._opPlayerDecrypt(step, ctx);
-    },
-    'sniff': (self, step, ctx) => self._opSniff(step, ctx),
-    'anime1Search': (self, step, ctx) => self._opAnime1Search(step, ctx),
-    'anime1Detail': (self, step, ctx) => self._opAnime1Detail(step, ctx),
-    'anime1Play': (self, step, ctx) => self._opAnime1Play(step, ctx),
-    'hhPlayer': (self, step, ctx) => self._opHhPlayer(step, ctx),
-    'torrentRecords': (self, step, ctx) {
-      self._opTorrentRecords(step, ctx);
-    },
-    'maccmsSuggest': (self, step, ctx) => self._opMaccmsSuggest(step, ctx),
-  };
-
-  static Future<void> _handleFetch(
-    PipelineInterpreter self,
-    PipelineStep step,
-    _PipelineContext ctx,
-  ) => self._opFetch(step, ctx);
-
   FutureOr<void> _runStep(PipelineStep step, _PipelineContext ctx) {
-    final handler = _opHandlers[step.op];
-    if (handler == null) {
-      _debugLog('[pipeline] 未知 op: ${step.op}');
-      ctx.value = '';
-      return null;
+    switch (step.op) {
+      case 'template':
+        ctx.value = _render(step.str('value') ?? '', ctx);
+      case 'setVar':
+        ctx.vars[step.str('name') ?? '_'] = _render(
+          step.str('value') ?? '',
+          ctx,
+        );
+      case 'query':
+        _opQuery(step, ctx);
+      case 'fetch':
+      case 'follow':
+        return _opFetch(step, ctx);
+      case 'select':
+        _opSelect(step, ctx);
+      case 'regex':
+        _opRegex(step, ctx);
+      case 'replace':
+        _opReplace(step, ctx);
+      case 'json':
+        _opJson(step, ctx);
+      case 'pick':
+        _opPick(step, ctx);
+      case 'crypto':
+        _opCrypto(step, ctx);
+      case 'baseN':
+        _opBaseN(step, ctx);
+      case 'ecPlayer':
+        _opEcPlayer(step, ctx);
+      case 'maccmsVerify':
+        return _opMacCmsVerify(step, ctx);
+      case 'first':
+        return _opFirst(step, ctx);
+      case 'searchList':
+        _opSearchList(step, ctx);
+      case 'jsonSeries':
+        _opJsonSeries(step, ctx);
+      case 'episodes':
+        _opEpisodes(step, ctx);
+      case 'jsonEpisodes':
+        _opJsonEpisodes(step, ctx);
+      case 'maccmsApiEpisodes':
+        _opMaccmsApiEpisodes(step, ctx);
+      case 'videoUrl':
+        _opVideoUrl(step, ctx);
+      case 'setMediaHeaders':
+        _opSetMediaHeaders(step, ctx);
+      case 'playerAaaa':
+        _opPlayerAaaa(step, ctx);
+      case 'playerDecrypt':
+        _opPlayerDecrypt(step, ctx);
+      case 'sniff':
+        return _opSniff(step, ctx);
+      case 'anime1Search':
+        return _opAnime1Search(step, ctx);
+      case 'anime1Detail':
+        return _opAnime1Detail(step, ctx);
+      case 'anime1Play':
+        return _opAnime1Play(step, ctx);
+      case 'hhPlayer':
+        return _opHhPlayer(step, ctx);
+      case 'torrentRecords':
+        _opTorrentRecords(step, ctx);
+      case 'maccmsSuggest':
+        return _opMaccmsSuggest(step, ctx);
+      default:
+        _debugLog('[pipeline] 未知 op: ${step.op}');
+        ctx.value = '';
     }
-    return handler(this, step, ctx);
   }
 
   /// `fetch` / `follow`：发起 HTTP 请求，当前值变为响应体。

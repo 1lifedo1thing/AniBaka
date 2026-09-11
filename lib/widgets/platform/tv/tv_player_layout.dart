@@ -7,7 +7,7 @@ import 'package:baka/models/playback_episode.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/utils/app_logger.dart';
 import 'package:baka/widgets/baka_player/index.dart';
-import 'package:baka/widgets/danmaku/controller.dart';
+import 'package:baka/services/playback/danmaku_controller.dart';
 import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/widgets/platform/tv/tv_focusable.dart';
 import 'package:baka/widgets/platform/tv/tv_episode_selector.dart';

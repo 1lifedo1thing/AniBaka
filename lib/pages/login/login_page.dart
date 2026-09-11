@@ -1,14 +1,17 @@
+import 'package:baka/api/bangumi_account_api.dart';
+import 'package:baka/services/account/bangumi_session.dart';
+import 'package:baka/services/account/login_service.dart';
+import 'package:baka/core/api_transport.dart';
+import 'package:baka/core/account_session.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:get/get.dart';
+import 'package:get/get.dart' hide ContextExtensionss;
 import 'package:url_launcher/url_launcher_string.dart';
 
 import 'package:baka/app_state.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/pages/setting/bangumi_sync_page.dart';
-import 'package:baka/services/bangumi_sync_service.dart';
-import 'package:baka/services/network_service.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:baka/widgets/common/scale_button.dart';
 import 'package:baka/widgets/dialog/input_dialog.dart';
@@ -23,8 +26,11 @@ class Login extends StatefulWidget {
 
 class LoginState extends State<Login> {
   static const _accessTokenUrl = 'https://next.bgm.tv/demo/access-token';
-  final _service = LoginService();
-  final _bangumi = BangumiSyncService.instance;
+  final _service = LoginService(
+    Get.find<AccountSession>(),
+    Get.find<ApiTransport>(),
+  );
+  final _bangumi = bangumiSession;
   final _formKey = GlobalKey<FormState>();
 
   final _nameController = TextEditingController();
@@ -126,7 +132,7 @@ class LoginState extends State<Login> {
       final account = await _bangumi.connect(result);
       if (!mounted) return;
       if (Get.isRegistered<AppState>()) {
-        Get.find<AppState>().triggerLoginRefresh();
+        Get.find<AccountSession>().refreshView();
       }
       setState(() {});
       showSnackBar('已使用 Bangumi 登录：${account.nickname}');
@@ -167,7 +173,7 @@ class LoginState extends State<Login> {
       final account = await _bangumi.completeOAuthLogin(login.state);
       if (!mounted) return;
       if (Get.isRegistered<AppState>()) {
-        Get.find<AppState>().triggerLoginRefresh();
+        Get.find<AccountSession>().refreshView();
       }
       setState(() {});
       showSnackBar('已成功连接 Bangumi：${account.nickname}');
@@ -190,7 +196,7 @@ class LoginState extends State<Login> {
     );
     if (!mounted) return;
     if (Get.isRegistered<AppState>()) {
-      Get.find<AppState>().triggerLoginRefresh();
+      Get.find<AccountSession>().refreshView();
     }
     setState(() {});
   }
@@ -199,7 +205,7 @@ class LoginState extends State<Login> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final reduceMotion = context.reduceMotion;
-    final aniBakaLoggedIn = Instances.userToken.isNotEmpty;
+    final aniBakaLoggedIn = apiTransport.session.token.isNotEmpty;
 
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
@@ -454,11 +460,7 @@ class LoginState extends State<Login> {
                 child: const Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(
-                      Icons.key_rounded,
-                      size: 20,
-                      color: Colors.white,
-                    ),
+                    Icon(Icons.key_rounded, size: 20, color: Colors.white),
                     SizedBox(width: 8),
                     Text(
                       '使用 Access Token 登录 (推荐)',

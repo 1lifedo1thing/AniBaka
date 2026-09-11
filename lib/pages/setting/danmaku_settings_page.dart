@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:baka/services/danmaku_service.dart';
 import 'package:baka/theme.dart';
-import 'package:baka/widgets/danmaku/controller.dart';
+import 'package:baka/services/playback/danmaku_controller.dart';
 import 'package:baka/widgets/danmaku/danmaku_list_sheet.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:baka/widgets/player/settings_panel.dart';
@@ -50,7 +49,7 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
   }
 
   Future<void> _saveSettings() =>
-      DanmakuService.saveSettings(widget.controller);
+      DanmakuController.saveSettings(widget.controller);
 
   void _updateOption(DanmakuOption newOpt, {bool persist = false}) {
     setState(() => widget.controller.updateOption(newOpt));

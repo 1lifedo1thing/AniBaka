@@ -1,3 +1,4 @@
+import 'package:baka/models/playback_request.dart';
 import 'package:baka/pages/player/player_page.dart';
 import 'package:baka/storage/storage_provider.dart';
 import 'package:flutter/material.dart';
@@ -90,14 +91,14 @@ class _StorageBrowserPageState extends State<StorageBrowserPage> {
         context,
         MaterialPageRoute(
           builder: (_) => PlayerPage(
-            data: {
+            request: PlaybackRequest.fromMap({
               'source': '_local',
               'title': widget.provider.displayName,
               'episodeTitle': item.name,
               'localFilePath': url,
               'id': 0,
               'httpHeaders': ?headers,
-            },
+            }),
           ),
         ),
       );
@@ -245,8 +246,6 @@ class _StorageBrowserPageState extends State<StorageBrowserPage> {
       },
     );
   }
-
-
 }
 
 class _ListItemTile extends StatelessWidget {

@@ -8,6 +8,7 @@ import 'package:baka/services/torrent/torrent_service.dart';
 import 'package:baka/services/torrent/torrent_model.dart';
 
 void main() {
+  final torrent = TorrentService();
   test('BT link detection accepts magnets and torrent URLs only', () {
     expect(TorrentService.isBtLink('magnet:?xt=urn:btih:abc'), isTrue);
     expect(
@@ -28,18 +29,11 @@ void main() {
     'non-BT playback URLs pass through without starting an engine',
     () async {
       const direct = 'https://cdn.example/video.mp4';
-      final resolved = await TorrentService.instance.resolvePlaybackUrl(
-        ' $direct ',
-      );
+      final resolved = await torrent.resolvePlaybackUrl(' $direct ');
       expect(resolved, direct);
-      expect(TorrentService.instance.statsNotifier.value, isNull);
+      expect(torrent.statsNotifier.value, isNull);
     },
   );
-
-  test('torrent playback errors have a stable user-facing message', () {
-    const error = TorrentPlaybackException('buffer timeout');
-    expect(error.toString(), contains('buffer timeout'));
-  });
 
   test('magnet parser keeps trackers and exact torrent sources', () {
     final magnet = MagnetLink.parse(

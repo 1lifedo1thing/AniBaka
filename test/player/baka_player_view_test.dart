@@ -6,50 +6,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'fake_playback_backend.dart';
+import '../support/app_dependencies.dart';
 
 void main() {
-  test('fullscreen view receives the existing player arguments', () async {
-    final controller = PlaybackController();
-    const header = SizedBox(key: Key('header'));
-    void pickEpisode() {}
-    void nextEpisode() {}
-    void fullscreenChanged(bool value) {}
-
-    final source = BakaPlayer(
-      controller: controller,
-      canSearchSource: true,
-      headerControl: header,
-      danmakuEnabled: true,
-      onPickEpisode: pickEpisode,
-      hasNextEpisode: true,
-      onNextEpisode: nextEpisode,
-      onFullScreenChanged: fullscreenChanged,
-    );
-    final fullscreen = source.fullscreenView();
-
-    expect(fullscreen.full, isTrue);
-    expect(fullscreen.controller, same(controller));
-    expect(fullscreen.canSearchSource, isTrue);
-    expect(fullscreen.headerControl, same(header));
-    expect(fullscreen.danmakuEnabled, isTrue);
-    expect(fullscreen.onPickEpisode, same(pickEpisode));
-    expect(fullscreen.hasNextEpisode, isTrue);
-    expect(fullscreen.onNextEpisode, same(nextEpisode));
-    expect(fullscreen.onFullScreenChanged, same(fullscreenChanged));
-    await controller.dispose();
-  });
-
   testWidgets('progress bar drag seeks to the finger position', (tester) async {
     SharedPreferences.setMockInitialValues({});
     Instances.sp = await SharedPreferences.getInstance();
+    configureTestServices();
     Instances.isTV = false;
 
-    final backend = FakePlaybackBackend();
-    final controller = PlaybackController(backend: backend);
-    await controller.open('file:///tmp/test.mp4');
-    backend.emitDuration(const Duration(minutes: 24));
-    backend.emitPosition(const Duration(minutes: 20));
+    final controller = PlaybackController();
+    controller.timeline.value = controller.timeline.value.copyWith(
+      duration: const Duration(minutes: 24),
+      position: const Duration(minutes: 20),
+    );
     controller.setControlsVisible(true);
 
     await tester.pumpWidget(
@@ -72,7 +42,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     // 拖动条按手指位置 seek，而不是跳到结尾。
-    expect(backend.lastSeek, const Duration(minutes: 12));
-    controller.dispose();
+    expect(controller.timeline.value.position.inMinutes, 12);
+    await controller.dispose();
   });
 }

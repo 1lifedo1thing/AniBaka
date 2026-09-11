@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'package:baka/services/player_service.dart';
+import 'package:baka/services/playback/playback_content.dart';
 import 'package:baka/models/playback_episode.dart';
 import 'package:baka/utils/date_util.dart';
 import 'package:baka/utils/reg_utils.dart';
@@ -242,7 +242,7 @@ Widget buildHorizontalEpisodeList({
             index: index,
             rawTitle: videoList[index].title,
             isSelected: index == currPlayIndex,
-            isWatched: PlayerService.isEpisodeWatched(videoId, index),
+            isWatched: PlaybackContent.isEpisodeWatched(videoId, index),
             onTap: () => onEpisodeChanged(index),
           ),
         );

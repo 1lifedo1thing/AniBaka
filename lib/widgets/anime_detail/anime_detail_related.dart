@@ -27,39 +27,35 @@ class _AnimeDetailRelatedSectionState extends State<AnimeDetailRelatedSection> {
   );
 
   static Future<List<Map<String, dynamic>>> _load(int subjectId) async {
-    try {
-      final response = await getBgmRelatedSubjects(subjectId);
-      final items = <Map<String, dynamic>>[];
-      final ids = <int>{};
+    final response = await getBgmRelatedSubjects(subjectId);
+    final items = <Map<String, dynamic>>[];
+    final ids = <int>{};
 
-      for (final raw in response) {
-        if (BgmUtils.toInt(raw['type']) != 2) continue;
-        final id = BgmUtils.toInt(raw['id']);
-        final title =
-            BgmUtils.trimmed(raw['name_cn']) ?? BgmUtils.trimmed(raw['name']);
-        if (id == null || title == null || !ids.add(id)) continue;
+    for (final raw in response) {
+      if (BgmUtils.toInt(raw['type']) != 2) continue;
+      final id = BgmUtils.toInt(raw['id']);
+      final title =
+          BgmUtils.trimmed(raw['name_cn']) ?? BgmUtils.trimmed(raw['name']);
+      if (id == null || title == null || !ids.add(id)) continue;
 
-        final image =
-            BgmUtils.pickImageUrl(raw['images']) ??
-            BgmUtils.trimmed(raw['image']) ??
-            '';
-        final relation = BgmUtils.trimmed(raw['relation']) ?? '相关';
-        items.add({
-          'id': id,
-          'bgmId': id,
-          'title': title,
-          'content': image.isEmpty ? '' : '<img src="$image">',
-          if (image.isNotEmpty) 'bgmImageUrl': image,
-          'sort': '番剧',
-          'tag': relation,
-          'info': relation,
-          'source': 'bgm',
-        });
-      }
-      return items;
-    } catch (_) {
-      rethrow;
+      final image =
+          BgmUtils.pickImageUrl(raw['images']) ??
+          BgmUtils.trimmed(raw['image']) ??
+          '';
+      final relation = BgmUtils.trimmed(raw['relation']) ?? '相关';
+      items.add({
+        'id': id,
+        'bgmId': id,
+        'title': title,
+        'content': image.isEmpty ? '' : '<img src="$image">',
+        if (image.isNotEmpty) 'bgmImageUrl': image,
+        'sort': '番剧',
+        'tag': relation,
+        'info': relation,
+        'source': 'bgm',
+      });
     }
+    return items;
   }
 
   @override

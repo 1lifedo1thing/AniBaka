@@ -6,6 +6,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   app_links
   bitsdojo_window_windows
   dynamic_color
+  flutter_secure_storage_windows
   flutter_volume_controller
   fullscreen_window
   media_kit_libs_windows_video

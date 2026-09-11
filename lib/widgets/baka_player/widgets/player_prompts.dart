@@ -1,7 +1,9 @@
 import 'package:baka/models/playback_state.dart';
-import 'package:baka/widgets/baka_player/controller.dart';
+import '../controller.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:flutter/material.dart';
+
+const int _nextEpisodeWaitSeconds = 95;
 
 class PlayerPrompts extends StatelessWidget {
   const PlayerPrompts({
@@ -20,6 +22,7 @@ class PlayerPrompts extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (!isFullScreen) return const SizedBox.shrink();
+
     return Stack(
       fit: StackFit.expand,
       clipBehavior: Clip.none,
@@ -30,11 +33,11 @@ class PlayerPrompts extends StatelessWidget {
             fit: StackFit.expand,
             children: [
               if (overlay.skipState == SkipState.showingCancel)
-                _skipCancelPrompt(controller),
+                _buildSkipCancelPrompt(),
               if (overlay.skipState == SkipState.waiting)
-                _waitingPrompt(controller),
+                _buildWaitingPrompt(),
               if (overlay.showJumpPrompt)
-                _jumpPrompt(controller, overlay.jumpPromptText),
+                _buildJumpPrompt(overlay.jumpPromptText),
             ],
           ),
         ),
@@ -47,9 +50,17 @@ class PlayerPrompts extends StatelessWidget {
               }
               return ValueListenableBuilder<PlaybackTimelineState>(
                 valueListenable: controller.timeline,
-                builder: (context, timeline, _) => _isNearEpisodeEnd(timeline)
-                    ? _nextEpisodePrompt(timeline)
-                    : const SizedBox.shrink(),
+                builder: (context, timeline, _) {
+                  final position = timeline.position.inSeconds;
+                  final duration = timeline.duration.inSeconds;
+                  final remaining = duration - position;
+                  if (duration <= _nextEpisodeWaitSeconds ||
+                      remaining > _nextEpisodeWaitSeconds ||
+                      position <= 0) {
+                    return const SizedBox.shrink();
+                  }
+                  return _buildNextEpisodePrompt(remaining);
+                },
               );
             },
           ),
@@ -57,16 +68,7 @@ class PlayerPrompts extends StatelessWidget {
     );
   }
 
-  bool _isNearEpisodeEnd(PlaybackTimelineState timeline) {
-    const waitSeconds = 95;
-    final position = timeline.position.inSeconds;
-    final duration = timeline.duration.inSeconds;
-    return duration > waitSeconds &&
-        duration - position <= waitSeconds &&
-        position > 0;
-  }
-
-  Widget _waitingPrompt(PlaybackController controller) {
+  Widget _buildWaitingPrompt() {
     return Positioned(
       top: 64,
       right: 24,
@@ -87,7 +89,7 @@ class PlayerPrompts extends StatelessWidget {
             ),
           ),
           const _PillDivider(),
-          _PillAction(
+          _PillButton(
             icon: Icons.fast_forward_rounded,
             label: '跳过',
             onTap: controller.userActionSkip,
@@ -113,7 +115,7 @@ class PlayerPrompts extends StatelessWidget {
     );
   }
 
-  Widget _skipCancelPrompt(PlaybackController controller) {
+  Widget _buildSkipCancelPrompt() {
     return Positioned(
       top: 80,
       right: 24,
@@ -134,7 +136,7 @@ class PlayerPrompts extends StatelessWidget {
             ),
           ),
           const _PillDivider(),
-          _PillAction(
+          _PillButton(
             icon: Icons.replay_rounded,
             label: '撤销',
             onTap: () {
@@ -147,7 +149,7 @@ class PlayerPrompts extends StatelessWidget {
     );
   }
 
-  Widget _jumpPrompt(PlaybackController controller, String text) {
+  Widget _buildJumpPrompt(String text) {
     return Positioned(
       top: 120,
       right: 24,
@@ -185,27 +187,25 @@ class PlayerPrompts extends StatelessWidget {
             ],
           ),
           const SizedBox(width: 16),
-          _JumpActionButton(
+          _PillButton(
             label: '继续',
             icon: Icons.play_arrow_rounded,
-            onTap: controller.performJumpToPosition,
             color: Colors.blueAccent,
+            onTap: controller.performJumpToPosition,
           ),
           const SizedBox(width: 8),
-          _JumpActionButton(
+          _PillButton(
             icon: Icons.close_rounded,
-            onTap: controller.hideJumpPrompt,
             color: Colors.white,
             isClose: true,
+            onTap: controller.hideJumpPrompt,
           ),
         ],
       ),
     );
   }
 
-  Widget _nextEpisodePrompt(PlaybackTimelineState timeline) {
-    const waitSeconds = 95;
-    final remaining = timeline.duration.inSeconds - timeline.position.inSeconds;
+  Widget _buildNextEpisodePrompt(int remaining) {
     return Positioned(
       bottom: 100,
       right: 24,
@@ -239,7 +239,8 @@ class PlayerPrompts extends StatelessWidget {
                   alignment: Alignment.center,
                   children: [
                     CircularProgressIndicator(
-                      value: (waitSeconds - remaining) / waitSeconds,
+                      value: (_nextEpisodeWaitSeconds - remaining) /
+                          _nextEpisodeWaitSeconds,
                       backgroundColor: Colors.white.withValues(alpha: 0.2),
                       color: Colors.blueAccent,
                       strokeWidth: 2,
@@ -273,61 +274,6 @@ class PlayerPrompts extends StatelessWidget {
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _JumpActionButton extends StatelessWidget {
-  const _JumpActionButton({
-    required this.icon,
-    required this.onTap,
-    required this.color,
-    this.label,
-    this.isClose = false,
-  });
-
-  final String? label;
-  final IconData icon;
-  final VoidCallback onTap;
-  final Color color;
-  final bool isClose;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: isClose
-              ? Colors.white.withValues(alpha: 0.1)
-              : color.withValues(alpha: 0.2),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: isClose
-                ? Colors.white.withValues(alpha: 0.2)
-                : color.withValues(alpha: 0.5),
-            width: 0.5,
-          ),
-        ),
-        child: label != null
-            ? Row(
-                children: [
-                  Icon(icon, color: color, size: 14),
-                  const SizedBox(width: 4),
-                  Text(
-                    label!,
-                    style: TextStyle(
-                      color: color,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-              )
-            : Icon(icon, color: Colors.white70, size: 14),
       ),
     );
   }
@@ -379,40 +325,63 @@ class _PillDivider extends StatelessWidget {
   }
 }
 
-class _PillAction extends StatelessWidget {
-  const _PillAction({
+class _PillButton extends StatelessWidget {
+  const _PillButton({
     required this.icon,
-    required this.label,
     required this.onTap,
+    this.label,
+    this.color,
+    this.isClose = false,
   });
 
   final IconData icon;
-  final String label;
   final VoidCallback onTap;
+  final String? label;
+  final Color? color;
+  final bool isClose;
 
   @override
   Widget build(BuildContext context) {
+    final effectiveColor = color ?? Colors.blueAccent.shade100;
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Padding(
-        padding: const EdgeInsets.all(4),
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: EdgeInsets.symmetric(
+          horizontal: label != null ? 10 : 6,
+          vertical: 4,
+        ),
+        decoration: BoxDecoration(
+          color: isClose
+              ? Colors.white.withValues(alpha: 0.1)
+              : effectiveColor.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isClose
+                ? Colors.white.withValues(alpha: 0.2)
+                : effectiveColor.withValues(alpha: 0.4),
+            width: 0.5,
+          ),
+        ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, color: Colors.blueAccent.shade100, size: 14),
-            const SizedBox(width: 4),
-            Text(
-              label,
-              style: TextStyle(
-                color: Colors.blueAccent.shade100,
-                fontSize: 13,
-                fontWeight: FontWeight.bold,
+            Icon(icon, color: isClose ? Colors.white70 : effectiveColor, size: 14),
+            if (label != null) ...[
+              const SizedBox(width: 4),
+              Text(
+                label!,
+                style: TextStyle(
+                  color: effectiveColor,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
-            ),
+            ],
           ],
         ),
       ),
     );
   }
 }
+

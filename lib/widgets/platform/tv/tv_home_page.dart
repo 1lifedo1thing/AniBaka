@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:baka/api/bgm.dart';
 import 'package:baka/api/anibaka_api.dart';
 import 'package:baka/models/anime_detail_view_data.dart';
-import 'package:baka/services/home_service.dart';
+import 'package:baka/pages/home/home_controller.dart';
 import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/widgets/anime/post_card.dart';
 import 'package:baka/widgets/common/skeletonizer.dart';
@@ -18,7 +18,7 @@ import 'package:baka/widgets/platform/tv/tv_theme_util.dart';
 class TvHomePage extends StatefulWidget {
   const TvHomePage({required this.svc, super.key});
 
-  final HomeDataService svc;
+  final HomeController svc;
 
   @override
   State<TvHomePage> createState() => _TvHomePageState();

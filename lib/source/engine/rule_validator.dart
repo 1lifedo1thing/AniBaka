@@ -1,5 +1,6 @@
 import 'package:baka/source/engine/recipes.dart';
-import 'package:baka/source/model/source_rule.dart';
+import 'package:baka/source/engine/rule_language_spec.dart';
+import 'package:baka/source/models/source_rule.dart';
 
 /// 规则静态校验结果。
 class RuleValidation {
@@ -19,39 +20,7 @@ class RuleValidator {
   RuleValidator._();
 
   /// 引擎认识的全部 op。
-  static const Set<String> knownOps = {
-    'template',
-    'setVar',
-    'query',
-    'fetch',
-    'follow',
-    'select',
-    'regex',
-    'replace',
-    'json',
-    'pick',
-    'crypto',
-    'baseN',
-    'ecPlayer',
-    'maccmsVerify',
-    'first',
-    'searchList',
-    'jsonSeries',
-    'episodes',
-    'jsonEpisodes',
-    'maccmsApiEpisodes',
-    'videoUrl',
-    'setMediaHeaders',
-    'playerAaaa',
-    'playerDecrypt',
-    'sniff',
-    'anime1Search',
-    'anime1Detail',
-    'anime1Play',
-    'hhPlayer',
-    'torrentRecords',
-    'maccmsSuggest',
-  };
+  static final Set<String> knownOps = RuleLanguageSpec.knownOps;
 
   static RuleValidation validate(SourceRule rule) {
     final errors = <String>[];
