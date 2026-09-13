@@ -40,15 +40,14 @@ class TvEpisodeSelector extends StatefulWidget {
 
 class _TvEpisodeSelectorState extends State<TvEpisodeSelector> {
   static const _stillsCacheLimit = 5;
+  static const _cardExtent = 110.0 * 16 / 9 + 14;
   int _tabIndex = 0; // 0: 选集, 1: 线路
   late int _focusedIndex;
-  final ScrollController _horizontalScrollController = ScrollController();
-  late List<int> _episodeIndexes;
+  late final ScrollController _horizontalScrollController;
   bool _sortAscending = true;
 
-  /// 集中存储单集剧照与元数据，保证上下共享相同的数据源，零重复获取
-  final Map<int, Map<String, dynamic>> _stillsCache = {};
-  final Set<int> _loadingEpisodes = {};
+  // 共享请求结果；完成时只更新使用它的预览和卡片。
+  final _stillsCache = <int, Future<Map<String, dynamic>?>>{};
 
   int get _lineCount {
     final index = widget.currentIndex;
@@ -64,7 +63,12 @@ class _TvEpisodeSelectorState extends State<TvEpisodeSelector> {
       0,
       widget.videoList.isEmpty ? 0 : widget.videoList.length - 1,
     );
-    _refreshEpisodeIndexes();
+    _horizontalScrollController = ScrollController(
+      initialScrollOffset: (_focusedIndex * _cardExtent - 80).clamp(
+        0,
+        double.infinity,
+      ),
+    );
     _fetchEpisodeDetails(_focusedIndex);
 
     WidgetsBinding.instance.addPostFrameCallback(
@@ -75,11 +79,18 @@ class _TvEpisodeSelectorState extends State<TvEpisodeSelector> {
   @override
   void didUpdateWidget(covariant TvEpisodeSelector oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.videoList != widget.videoList) {
-      _refreshEpisodeIndexes();
-    }
-    if (oldWidget.currentIndex != widget.currentIndex) {
-      _focusedIndex = widget.currentIndex;
+    final catalogChanged =
+        oldWidget.videoList != widget.videoList ||
+        oldWidget.bgmId != widget.bgmId ||
+        oldWidget.tmdbId != widget.tmdbId ||
+        oldWidget.tvdbId != widget.tvdbId;
+    if (catalogChanged) _stillsCache.clear();
+    if (catalogChanged || oldWidget.currentIndex != widget.currentIndex) {
+      _focusedIndex = widget.currentIndex.clamp(
+        0,
+        widget.videoList.isEmpty ? 0 : widget.videoList.length - 1,
+      );
+      if (_lineCount <= 1) _tabIndex = 0;
       _fetchEpisodeDetails(_focusedIndex);
       WidgetsBinding.instance.addPostFrameCallback(
         (_) => _scrollToCurrentEpisode(),
@@ -93,13 +104,6 @@ class _TvEpisodeSelectorState extends State<TvEpisodeSelector> {
     super.dispose();
   }
 
-  void _refreshEpisodeIndexes() {
-    _episodeIndexes = PlaybackEpisodeCatalog.filterIndexes(
-      widget.videoList,
-      ascending: true,
-    );
-  }
-
   void _toggleSortOrder() {
     setState(() => _sortAscending = !_sortAscending);
     WidgetsBinding.instance.addPostFrameCallback(
@@ -108,13 +112,15 @@ class _TvEpisodeSelectorState extends State<TvEpisodeSelector> {
   }
 
   void _scrollToCurrentEpisode() {
-    var targetIndex = _episodeIndexes.indexOf(_focusedIndex);
-    if (targetIndex < 0 || !_horizontalScrollController.hasClients) return;
-    if (!_sortAscending) {
-      targetIndex = _episodeIndexes.length - targetIndex - 1;
+    if (!mounted ||
+        widget.videoList.isEmpty ||
+        !_horizontalScrollController.hasClients) {
+      return;
     }
-    const cardWidth = (110.0 * 16 / 9) + 14.0; // 16:9 card width + spacing
-    final targetOffset = (targetIndex * cardWidth - 80.0).clamp(
+    final targetIndex = _sortAscending
+        ? _focusedIndex
+        : widget.videoList.length - _focusedIndex - 1;
+    final targetOffset = (targetIndex * _cardExtent - 80).clamp(
       0.0,
       _horizontalScrollController.position.maxScrollExtent,
     );
@@ -132,44 +138,50 @@ class _TvEpisodeSelectorState extends State<TvEpisodeSelector> {
     _loadEpisodeDetails(episodeIndex + 1);
   }
 
-  Future<void> _loadEpisodeDetails(int episodeIndex) async {
+  void _loadEpisodeDetails(int episodeIndex) {
     if (episodeIndex < 0 || episodeIndex >= widget.videoList.length) return;
-    if (_stillsCache.containsKey(episodeIndex) ||
-        !_loadingEpisodes.add(episodeIndex)) {
+    final cached = _stillsCache.remove(episodeIndex);
+    if (cached != null) {
+      _stillsCache[episodeIndex] = cached;
       return;
     }
-
-    try {
-      final data = await AniBakaApi.getEpisodeStills(
-        bgmId: widget.bgmId,
-        tmdbId: widget.tmdbId,
-        tvdbId: widget.tvdbId,
-        season: 1,
-        episode: episodeIndex + 1,
-      );
-      if (!mounted || data == null) return;
-      setState(() {
-        if (_stillsCache.length >= _stillsCacheLimit) {
-          _stillsCache.remove(_stillsCache.keys.first);
-        }
-        _stillsCache[episodeIndex] = data;
-      });
-    } catch (error) {
-      debugPrint('获取 TV 剧集剧照失败: $error');
-    } finally {
-      if (mounted) {
-        _loadingEpisodes.remove(episodeIndex);
-      }
+    if (_stillsCache.length == _stillsCacheLimit) {
+      _stillsCache.remove(_stillsCache.keys.first);
     }
+    _stillsCache[episodeIndex] =
+        AniBakaApi.getEpisodeStills(
+          bgmId: widget.bgmId,
+          tmdbId: widget.tmdbId,
+          tvdbId: widget.tvdbId,
+          season: 1,
+          episode: episodeIndex + 1,
+        ).catchError((Object error) {
+          debugPrint('获取 TV 剧集剧照失败: $error');
+          return null;
+        });
   }
 
-  /// 获取指定剧集的剧照路径，上下组件共享相同链接与缓存
-  String _getEpisodeStillUrl(int episodeIndex) {
-    final stillData = _stillsCache[episodeIndex];
-    if (stillData == null) return '';
-    return BgmUtils.trimmed(stillData['still_url']) ??
-        BgmUtils.trimmed(stillData['still_thumb']) ??
-        '';
+  static String _stillUrl(Map<String, dynamic>? data) =>
+      BgmUtils.trimmed(data?['still_url']) ??
+      BgmUtils.trimmed(data?['still_thumb']) ??
+      '';
+
+  Widget _buildStill(String url, IconData icon, double size) {
+    final fallback = Center(
+      child: Icon(icon, color: context.tvTextHintColor, size: size),
+    );
+    return ColoredBox(
+      color: context.tvHighlightColor(0.08),
+      child: url.isEmpty
+          ? fallback
+          : CachedNetworkImage(
+              imageUrl: url,
+              memCacheWidth: 420,
+              fit: BoxFit.cover,
+              placeholder: (context, url) => const SizedBox.expand(),
+              errorWidget: (context, url, error) => fallback,
+            ),
+    );
   }
 
   void _onEpisodeFocused(int episodeIndex) {
@@ -221,7 +233,15 @@ class _TvEpisodeSelectorState extends State<TvEpisodeSelector> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _buildFocusedDetailsHeader(primaryColor, showLineTab),
+              FutureBuilder<Map<String, dynamic>?>(
+                key: ValueKey(_stillsCache[_focusedIndex]),
+                future: _stillsCache[_focusedIndex],
+                builder: (context, snapshot) => _buildFocusedDetailsHeader(
+                  primaryColor,
+                  showLineTab,
+                  snapshot.data,
+                ),
+              ),
 
               const Divider(height: 1, thickness: 0.5, color: Colors.white12),
 
@@ -241,14 +261,16 @@ class _TvEpisodeSelectorState extends State<TvEpisodeSelector> {
   }
 
   /// 上半部分：焦点剧集的 16:9 剧照 + 标题 + 剧情简介预览
-  Widget _buildFocusedDetailsHeader(Color primaryColor, bool showLineTab) {
+  Widget _buildFocusedDetailsHeader(
+    Color primaryColor,
+    bool showLineTab,
+    Map<String, dynamic>? stillData,
+  ) {
     final epItem =
         (_focusedIndex >= 0 && _focusedIndex < widget.videoList.length)
         ? widget.videoList[_focusedIndex]
         : null;
-    final stillData = _stillsCache[_focusedIndex];
-
-    final stillUrl = _getEpisodeStillUrl(_focusedIndex);
+    final stillUrl = _stillUrl(stillData);
 
     final name =
         BgmUtils.trimmed(stillData?['name']) ?? epItem?.title ?? '剧集详情';
@@ -270,35 +292,7 @@ class _TvEpisodeSelectorState extends State<TvEpisodeSelector> {
               height: 118,
               child: AspectRatio(
                 aspectRatio: 16 / 9,
-                child: Container(
-                  color: context.tvHighlightColor(0.08),
-                  child: stillUrl.isNotEmpty
-                      ? CachedNetworkImage(
-                          imageUrl: stillUrl,
-                          memCacheWidth: 420,
-                          fit: BoxFit.cover,
-                          placeholder: (context, url) => Container(
-                            color: context.tvHighlightColor(0.08),
-                            child: const Center(
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            ),
-                          ),
-                          errorWidget: (context, url, error) => Center(
-                            child: Icon(
-                              Icons.movie_rounded,
-                              color: context.tvTextHintColor,
-                              size: 36,
-                            ),
-                          ),
-                        )
-                      : Center(
-                          child: Icon(
-                            Icons.movie_rounded,
-                            color: context.tvTextHintColor,
-                            size: 36,
-                          ),
-                        ),
-                ),
+                child: _buildStill(stillUrl, Icons.movie_rounded, 36),
               ),
             ),
           ),
@@ -482,7 +476,7 @@ class _TvEpisodeSelectorState extends State<TvEpisodeSelector> {
 
   /// 下半部分：带 16:9 剧照的选集卡片横向列表，上下共享图片数据
   Widget _buildHorizontalEpisodeList(Color primaryColor) {
-    if (_episodeIndexes.isEmpty) {
+    if (widget.videoList.isEmpty) {
       return Center(
         child: Text(
           '暂无剧集',
@@ -492,161 +486,155 @@ class _TvEpisodeSelectorState extends State<TvEpisodeSelector> {
     }
 
     return ListView.builder(
+      key: ValueKey((
+        widget.videoList,
+        widget.bgmId,
+        widget.tmdbId,
+        widget.tvdbId,
+      )),
       controller: _horizontalScrollController,
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.symmetric(horizontal: 28),
-      itemCount: _episodeIndexes.length,
+      itemExtent: _cardExtent,
+      itemCount: widget.videoList.length,
+      findChildIndexCallback: (key) {
+        final episode = (key as ValueKey<int>).value;
+        return _sortAscending ? episode : widget.videoList.length - episode - 1;
+      },
       itemBuilder: (context, index) {
         final episodeIndex = _sortAscending
-            ? _episodeIndexes[index]
-            : _episodeIndexes[_episodeIndexes.length - index - 1];
+            ? index
+            : widget.videoList.length - index - 1;
         final item = widget.videoList[episodeIndex];
         final isPlaying = episodeIndex == widget.currentIndex;
-        final stillData = _stillsCache[episodeIndex];
+        return FutureBuilder<Map<String, dynamic>?>(
+          key: ValueKey(episodeIndex),
+          future: _stillsCache[episodeIndex],
+          builder: (context, snapshot) {
+            final stillUrl = _stillUrl(snapshot.data);
+            final epName =
+                BgmUtils.trimmed(snapshot.data?['name']) ?? item.title;
+            return Padding(
+              padding: const EdgeInsets.only(right: 14),
+              child: Center(
+                child: TvFocusable(
+                  autofocus: isPlaying,
+                  onFocusChange: (focused) {
+                    if (focused) _onEpisodeFocused(episodeIndex);
+                  },
+                  onPressed: () => widget.onEpisodeSelected(episodeIndex),
+                  borderRadius: BorderRadius.circular(12),
+                  focusScale: 1.06,
+                  enableGlow: true,
+                  focusBorderWidth: 2.5,
+                  child: SizedBox(
+                    height: 110,
+                    child: AspectRatio(
+                      aspectRatio: 16 / 9,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: context.tvHighlightColor(0.06),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: isPlaying
+                                ? primaryColor
+                                : context.tvHighlightColor(0.12),
+                            width: isPlaying ? 1.5 : 0.8,
+                          ),
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(11),
+                          child: Stack(
+                            children: [
+                              Positioned.fill(
+                                child: _buildStill(
+                                  stillUrl,
+                                  Icons.play_circle_outline,
+                                  32,
+                                ),
+                              ),
 
-        final stillUrl = _getEpisodeStillUrl(episodeIndex);
-        final epName = BgmUtils.trimmed(stillData?['name']) ?? item.title;
-
-        return Padding(
-          padding: const EdgeInsets.only(right: 14),
-          child: TvFocusable(
-            autofocus: isPlaying,
-            onFocusChange: (focused) {
-              if (focused) _onEpisodeFocused(episodeIndex);
-            },
-            onPressed: () => widget.onEpisodeSelected(episodeIndex),
-            borderRadius: BorderRadius.circular(12),
-            focusScale: 1.06,
-            enableGlow: true,
-            focusBorderWidth: 2.5,
-            child: SizedBox(
-              height: 110,
-              child: AspectRatio(
-                aspectRatio: 16 / 9,
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: context.tvHighlightColor(0.06),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: isPlaying
-                          ? primaryColor
-                          : context.tvHighlightColor(0.12),
-                      width: isPlaying ? 1.5 : 0.8,
-                    ),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(11),
-                    child: Stack(
-                      children: [
-                        Positioned.fill(
-                          child: stillUrl.isNotEmpty
-                              ? CachedNetworkImage(
-                                  imageUrl: stillUrl,
-                                  memCacheWidth: 420,
-                                  fit: BoxFit.cover,
-                                  placeholder: (context, url) => Container(
-                                    color: context.tvHighlightColor(0.05),
-                                  ),
-                                  errorWidget: (context, url, error) =>
-                                      Container(
-                                        color: context.tvHighlightColor(0.08),
-                                        child: Center(
-                                          child: Icon(
-                                            Icons.play_circle_outline,
-                                            color: context.tvTextHintColor,
-                                            size: 32,
-                                          ),
-                                        ),
-                                      ),
-                                )
-                              : Container(
-                                  color: context.tvHighlightColor(0.08),
-                                  child: Center(
-                                    child: Icon(
-                                      Icons.play_circle_outline,
-                                      color: context.tvTextHintColor,
-                                      size: 32,
+                              Positioned.fill(
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      begin: Alignment.topCenter,
+                                      end: Alignment.bottomCenter,
+                                      colors: [
+                                        Colors.transparent,
+                                        Colors.black.withValues(alpha: 0.85),
+                                      ],
+                                      stops: const [0.4, 1.0],
                                     ),
                                   ),
                                 ),
-                        ),
+                              ),
 
-                        Positioned.fill(
-                          child: Container(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                                colors: [
-                                  Colors.transparent,
-                                  Colors.black.withValues(alpha: 0.85),
-                                ],
-                                stops: const [0.4, 1.0],
-                              ),
-                            ),
-                          ),
-                        ),
-
-                        if (isPlaying)
-                          Positioned(
-                            top: 8,
-                            left: 8,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 6,
-                                vertical: 3,
-                              ),
-                              decoration: BoxDecoration(
-                                color: primaryColor,
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: const Icon(
-                                Icons.play_arrow_rounded,
-                                color: Colors.black,
-                                size: 14,
-                              ),
-                            ),
-                          ),
-
-                        Positioned(
-                          left: 10,
-                          right: 10,
-                          bottom: 8,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                'EP ${episodeIndex + 1}',
-                                style: TextStyle(
-                                  color: isPlaying
-                                      ? primaryColor
-                                      : Colors.white.withValues(alpha: 0.7),
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700,
+                              if (isPlaying)
+                                Positioned(
+                                  top: 8,
+                                  left: 8,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                      vertical: 3,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: primaryColor,
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: const Icon(
+                                      Icons.play_arrow_rounded,
+                                      color: Colors.black,
+                                      size: 14,
+                                    ),
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(height: 1),
-                              Text(
-                                epName,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
+
+                              Positioned(
+                                left: 10,
+                                right: 10,
+                                bottom: 8,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      'EP ${episodeIndex + 1}',
+                                      style: TextStyle(
+                                        color: isPlaying
+                                            ? primaryColor
+                                            : Colors.white.withValues(
+                                                alpha: 0.7,
+                                              ),
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 1),
+                                    Text(
+                                      epName,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
                                 ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
                               ),
                             ],
                           ),
                         ),
-                      ],
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-          ),
+            );
+          },
         );
       },
     );

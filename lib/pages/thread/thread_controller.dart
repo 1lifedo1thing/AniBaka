@@ -3,18 +3,11 @@ import 'package:baka/api/post.dart';
 import 'package:baka/api/anibaka_api.dart';
 import 'package:baka/models/watch_party.dart';
 import 'package:baka/core/app_storage.dart';
-import 'package:baka/widgets/comment/comment_card.dart';
-
-/// 讨论区频道
-class ThreadChannel {
-  final String name;
-  final int pid;
-  const ThreadChannel(this.name, this.pid);
-}
 
 /// 单频道运行时状态（数据与加载标志合一，避免平行数组）
 class ThreadTab {
-  final ThreadChannel channel;
+  final String name;
+  final int pid;
   List comments = [];
   final Set<Object?> seenIds = <Object?>{};
   bool isRefreshing = false;
@@ -23,10 +16,8 @@ class ThreadTab {
 
   /// 已成功加载的页数；0 表示尚未加载
   int page = 0;
-  ThreadTab(this.channel);
-
-  int get pid => channel.pid;
-  String get name => channel.name;
+  int revision = 0;
+  ThreadTab(this.name, this.pid);
 }
 
 /// 帖子/讨论区业务逻辑
@@ -42,91 +33,51 @@ class ThreadController {
     ttl: const Duration(hours: 1),
   );
 
-  static const channels = <ThreadChannel>[
-    ThreadChannel('#茶馆', 6),
-    ThreadChannel('#baka', 8),
-    ThreadChannel('#求番报错', 7),
-    ThreadChannel('#反馈', 9),
-    ThreadChannel('#里世界', 10),
+  final tabs = [
+    ThreadTab('#茶馆', 6),
+    ThreadTab('#baka', 8),
+    ThreadTab('#求番报错', 7),
+    ThreadTab('#反馈', 9),
+    ThreadTab('#里世界', 10),
   ];
-
-  final List<ThreadTab> tabs = List.generate(
-    channels.length,
-    (i) => ThreadTab(channels[i]),
-  );
 
   List<WatchPartyInvite> watchRooms = const [];
   bool watchRoomsRefreshing = false;
   String watchRoomsError = '';
   Future<List<WatchPartyInvite>>? _watchRoomsTask;
 
-  Future<List<WatchPartyInvite>> refreshWatchRooms() {
-    final running = _watchRoomsTask;
-    if (running != null) return running;
-    late final Future<List<WatchPartyInvite>> task;
-    task = _refreshWatchRooms().whenComplete(() {
-      if (identical(_watchRoomsTask, task)) _watchRoomsTask = null;
-    });
-    _watchRoomsTask = task;
-    return task;
-  }
-
-  Future<List<WatchPartyInvite>> _refreshWatchRooms() async {
-    watchRoomsRefreshing = true;
-    try {
-      final rooms = await AniBakaApi.listWatchRooms();
-      watchRooms = rooms;
-      watchRoomsError = '';
-      return rooms;
-    } catch (error) {
-      watchRoomsError = error.toString().replaceFirst('Bad state: ', '');
-      debugPrint('刷新一起看房间失败: $error');
-      rethrow;
-    } finally {
-      watchRoomsRefreshing = false;
-    }
-  }
-
-  List? _readCache(int pid, {bool ignoreExpiry = true}) {
-    final data = _commentsCache.read(
-      'comments_$pid',
-      allowExpired: ignoreExpiry,
-    );
-    return data is List ? data : null;
-  }
-
-  Future<void> _writeCache(int pid, List comments) async {
-    try {
-      await _commentsCache.write('comments_$pid', comments);
-    } catch (e) {
-      debugPrint('保存评论缓存失败: $e');
-    }
-  }
-
-  static void _resetSeenIds(ThreadTab tab) {
-    tab.seenIds
-      ..clear()
-      ..addAll(<Object?>[
-        for (final c in tab.comments)
-          if (c is Map) c['id'],
-      ]);
-  }
-
-  Future<List> _fetchPage(int pid, int page) async {
-    return CommentListState.processCommentsList(
-      await getComments(pid, pageSize, '', page: page),
-    );
-  }
+  Future<List<WatchPartyInvite>> refreshWatchRooms() =>
+      _watchRoomsTask ??= () async {
+        watchRoomsRefreshing = true;
+        try {
+          final rooms = await AniBakaApi.listWatchRooms();
+          watchRooms = rooms;
+          watchRoomsError = '';
+          return rooms;
+        } catch (error) {
+          watchRoomsError = error.toString().replaceFirst('Bad state: ', '');
+          debugPrint('刷新一起看房间失败: $error');
+          rethrow;
+        } finally {
+          watchRoomsRefreshing = false;
+          _watchRoomsTask = null;
+        }
+      }();
 
   /// 尝试用本地缓存填充 [tabIndex]；命中返回 true。
   bool loadCached(int tabIndex, {bool ignoreExpiry = true}) {
     final tab = tabs[tabIndex];
     try {
-      final cached = _readCache(tab.pid, ignoreExpiry: ignoreExpiry);
-      if (cached == null || cached.isEmpty) return false;
+      final cached = _commentsCache.read(
+        'raw_comments_${tab.pid}',
+        allowExpired: ignoreExpiry,
+      );
+      if (cached is! List || cached.isEmpty) return false;
       tab.comments = List.of(cached);
-      _resetSeenIds(tab);
-      // 缓存只保证首页数据；hasMore 保守为 true，由后续 loadMore 校正
+      tab.seenIds
+        ..clear()
+        ..addAll(tab.comments.map((c) => c['id']));
+      // 缓存仅包含首页；满页时允许继续分页。
       tab.page = 1;
       tab.hasMore = cached.length >= pageSize;
       return true;
@@ -142,14 +93,21 @@ class ThreadController {
     if (tab.isRefreshing) return tab.comments;
 
     tab.isRefreshing = true;
-    tab.hasMore = true;
+    ++tab.revision;
     try {
-      final list = await _fetchPage(tab.pid, 1);
+      final list = await getComments(tab.pid, pageSize, '');
       tab.comments = list;
-      _resetSeenIds(tab);
+      tab.seenIds
+        ..clear()
+        ..addAll(tab.comments.map((c) => c['id']));
       tab.page = 1;
       tab.hasMore = list.length >= pageSize;
-      await _writeCache(tab.pid, list);
+      try {
+        // Hive retains values in memory: appending later pages must not grow this snapshot.
+        await _commentsCache.write('raw_comments_${tab.pid}', List.of(list));
+      } catch (error) {
+        debugPrint('保存评论缓存失败: $error');
+      }
       return list;
     } catch (e) {
       debugPrint('刷新评论失败: $e');
@@ -162,34 +120,27 @@ class ThreadController {
   bool canLoadMore(int tabIndex) {
     final tab = tabs[tabIndex];
     // page == 0 表示首页还没成功加载过，此时没有「下一页」可言。
-    return tab.page > 0 && !tab.isLoadingMore && tab.hasMore;
+    return tab.page > 0 &&
+        !tab.isRefreshing &&
+        !tab.isLoadingMore &&
+        tab.hasMore;
   }
 
-  /// 加载下一页并 append。无新数据时返回 null。
+  /// 原地追加去重后的下一页；过期请求不修改当前列表。
   Future<List?> loadMore(int tabIndex) async {
     if (!canLoadMore(tabIndex)) return null;
 
     final tab = tabs[tabIndex];
     final nextPage = tab.page + 1;
+    final revision = tab.revision;
     tab.isLoadingMore = true;
     try {
-      final page = await _fetchPage(tab.pid, nextPage);
-      if (page.isEmpty) {
-        tab.hasMore = false;
-        return null;
+      final page = await getComments(tab.pid, pageSize, '', page: nextPage);
+      if (revision != tab.revision) return null;
+      for (final comment in page) {
+        final id = comment['id'];
+        if (id == null || tab.seenIds.add(id)) tab.comments.add(comment);
       }
-
-      final fresh = [
-        for (final c in page)
-          if (c is! Map || tab.seenIds.add(c['id'])) c,
-      ];
-
-      if (fresh.isEmpty) {
-        tab.hasMore = false;
-        return null;
-      }
-
-      tab.comments.addAll(fresh);
       tab.page = nextPage;
       tab.hasMore = page.length >= pageSize;
       return tab.comments;
@@ -198,15 +149,6 @@ class ThreadController {
       return null;
     } finally {
       tab.isLoadingMore = false;
-    }
-  }
-
-  Future<Map?> resolveGvLink(String gvId) async {
-    try {
-      return await getPostDetail(int.parse(gvId));
-    } catch (e) {
-      debugPrint('解析 gv 链接失败: $e');
-      return null;
     }
   }
 }

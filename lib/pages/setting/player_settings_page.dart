@@ -92,6 +92,15 @@ class PlayerSettingsPage extends StatelessWidget {
                               current.copyWith(showNextEpisodeButton: value),
                         ),
                       ),
+                      const PanelDivider(),
+                      PanelSwitchTile(
+                        title: 'HLS 视频去广告',
+                        subtitle: '自动识别并剔除 m3u8 流中插入的广告片段',
+                        value: preferences.filterHlsAds,
+                        onChanged: (value) => _update(
+                          (current) => current.copyWith(filterHlsAds: value),
+                        ),
+                      ),
                       PanelSelectTile(
                         title: '硬件解码',
                         value: preferences.hwdecMode,

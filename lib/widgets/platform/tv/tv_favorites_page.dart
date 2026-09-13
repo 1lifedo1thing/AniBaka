@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import 'package:baka/models/collection.dart';
 import 'package:baka/services/collection/collection_repository.dart';
@@ -16,11 +15,11 @@ class TvFavoritesPage extends StatefulWidget {
 }
 
 class _TvFavoritesPageState extends State<TvFavoritesPage> {
-  bool _isLoading = true;
-  List<AnimeCollection> _allCollections = [];
+  bool _isLoading = false;
+  final _collectionsByStatus = <int, List<AnimeCollection>>{};
   int _selectedTabStatus = 3; // 默认：3 (在看)。1:想看, 2:看过, 3:在看, 4:搁置/抛弃
 
-  final List<({int statusValue, String label, IconData icon})> _tabs = [
+  static const _tabs = [
     (statusValue: 3, label: '在看', icon: Icons.play_circle_outline_rounded),
     (statusValue: 1, label: '想看', icon: Icons.favorite_border_rounded),
     (statusValue: 2, label: '看过', icon: Icons.check_circle_outline_rounded),
@@ -34,12 +33,17 @@ class _TvFavoritesPageState extends State<TvFavoritesPage> {
   }
 
   Future<void> _loadData() async {
+    if (_isLoading) return;
     setState(() => _isLoading = true);
     try {
       final data = await collections.getAll(refreshBangumi: true);
       if (mounted) {
         setState(() {
-          _allCollections = data;
+          _collectionsByStatus.clear();
+          for (final item in data) {
+            final status = item.status == 5 ? 4 : item.status;
+            (_collectionsByStatus[status] ??= []).add(item);
+          }
           _isLoading = false;
         });
       }
@@ -49,22 +53,6 @@ class _TvFavoritesPageState extends State<TvFavoritesPage> {
         setState(() => _isLoading = false);
       }
     }
-  }
-
-  List<AnimeCollection> get _filteredCollections {
-    return _allCollections.where((item) {
-      if (_selectedTabStatus == 4) {
-        return item.status == 4 || item.status == 5;
-      }
-      return item.status == _selectedTabStatus;
-    }).toList();
-  }
-
-  void _onTabPressed(int status) {
-    if (_selectedTabStatus == status) return;
-    setState(() {
-      _selectedTabStatus = status;
-    });
   }
 
   void _openDetail(AnimeCollection item) {
@@ -81,125 +69,119 @@ class _TvFavoritesPageState extends State<TvFavoritesPage> {
 
   @override
   Widget build(BuildContext context) {
-    final filtered = _filteredCollections;
+    final filtered =
+        _collectionsByStatus[_selectedTabStatus] ?? const <AnimeCollection>[];
 
-    return Focus(
-      canRequestFocus: false,
-      onKeyEvent: (node, event) {
-        if (event is KeyDownEvent &&
-            (event.logicalKey == LogicalKeyboardKey.escape ||
-                event.logicalKey == LogicalKeyboardKey.goBack)) {
-          return KeyEventResult.ignored;
-        }
-        return KeyEventResult.ignored;
-      },
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  Icons.star_rounded,
-                  color: Theme.of(context).colorScheme.primary,
-                  size: 28,
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.star_rounded,
+                color: Theme.of(context).colorScheme.primary,
+                size: 28,
+              ),
+              const SizedBox(width: 12),
+              Text(
+                '我的追番',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w900,
+                  color: context.tvTextColor,
+                  letterSpacing: 1.2,
                 ),
-                const SizedBox(width: 12),
-                Text(
-                  '我的追番',
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w900,
-                    color: context.tvTextColor,
-                    letterSpacing: 1.2,
+              ),
+              const Spacer(),
+              TvFocusable(
+                onPressed: _loadData,
+                borderRadius: BorderRadius.circular(20),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
                   ),
-                ),
-                const Spacer(),
-                TvFocusable(
-                  onPressed: _loadData,
-                  borderRadius: BorderRadius.circular(20),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: context.tvHighlightColor(0.08),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.refresh_rounded,
-                          size: 18,
+                  decoration: BoxDecoration(
+                    color: context.tvHighlightColor(0.08),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.refresh_rounded,
+                        size: 18,
+                        color: context.tvTextColor,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        '同步云端',
+                        style: TextStyle(
+                          fontSize: 14,
                           color: context.tvTextColor,
                         ),
-                        const SizedBox(width: 6),
-                        Text(
-                          '同步云端',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: context.tvTextColor,
-                          ),
-                        ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 24),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
 
-            Row(
-              children: _tabs.map((tab) {
-                final isSelected = _selectedTabStatus == tab.statusValue;
-                return Padding(
-                  padding: const EdgeInsets.only(right: 12),
-                  child: TvFocusableChip(
-                    label: tab.label,
-                    icon: tab.icon,
-                    isSelected: isSelected,
-                    onPressed: () => _onTabPressed(tab.statusValue),
-                  ),
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: 24),
+          Row(
+            children: _tabs.map((tab) {
+              final isSelected = _selectedTabStatus == tab.statusValue;
+              return Padding(
+                padding: const EdgeInsets.only(right: 12),
+                child: TvFocusableChip(
+                  label: tab.label,
+                  icon: tab.icon,
+                  isSelected: isSelected,
+                  onPressed: () {
+                    if (!isSelected) {
+                      setState(() => _selectedTabStatus = tab.statusValue);
+                    }
+                  },
+                ),
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 24),
 
-            Expanded(
-              child: _isLoading
-                  ? _buildSkeletonGrid()
-                  : filtered.isEmpty
-                  ? _buildEmptyView()
-                  : FocusTraversalGroup(
-                      policy: ReadingOrderTraversalPolicy(),
-                      child: GridView.builder(
-                        physics: const BouncingScrollPhysics(),
-                        gridDelegate:
-                            const SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: 6,
-                              childAspectRatio: 0.55,
-                              crossAxisSpacing: 16,
-                              mainAxisSpacing: 24,
-                            ),
-                        itemCount: filtered.length,
-                        itemBuilder: (context, index) {
-                          final item = filtered[index];
-                          return _TvFavoriteCard(
-                            key: ValueKey(
-                              'fav_${item.bgmId ?? item.postId ?? index}',
-                            ),
-                            item: item,
-                            onPressed: () => _openDetail(item),
-                          );
-                        },
-                      ),
+          Expanded(
+            child: _isLoading
+                ? _buildSkeletonGrid()
+                : filtered.isEmpty
+                ? _buildEmptyView()
+                : FocusTraversalGroup(
+                    policy: ReadingOrderTraversalPolicy(),
+                    child: GridView.builder(
+                      physics: const BouncingScrollPhysics(),
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 6,
+                            childAspectRatio: 0.55,
+                            crossAxisSpacing: 16,
+                            mainAxisSpacing: 24,
+                          ),
+                      itemCount: filtered.length,
+                      itemBuilder: (context, index) {
+                        final item = filtered[index];
+                        return _TvFavoriteCard(
+                          key: ValueKey(
+                            'fav_${item.bgmId ?? item.postId ?? index}',
+                          ),
+                          item: item,
+                          onPressed: () => _openDetail(item),
+                        );
+                      },
                     ),
-            ),
-          ],
-        ),
+                  ),
+          ),
+        ],
       ),
     );
   }

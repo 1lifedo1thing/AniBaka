@@ -15,7 +15,6 @@ class WindowsEpisodeList extends StatefulWidget {
     required this.onEpisodeSelected,
     super.key,
     this.title,
-    this.summary,
     this.bgmInfo,
     this.followNotifier,
     this.onFollowPressed,
@@ -24,8 +23,6 @@ class WindowsEpisodeList extends StatefulWidget {
     this.onSourceTap,
     this.isSearching = false,
     this.danmakuController,
-    this.onShowDetail,
-    this.cachedTags,
     this.onUrlSelected,
     this.onDownloadPressed,
     this.currUrl,
@@ -47,7 +44,6 @@ class WindowsEpisodeList extends StatefulWidget {
   final String? fallbackCoverUrl;
 
   final String? title;
-  final String? summary;
   final BgmInfo? bgmInfo;
   final ValueNotifier<bool>? followNotifier;
   final VoidCallback? onFollowPressed;
@@ -56,8 +52,6 @@ class WindowsEpisodeList extends StatefulWidget {
   final VoidCallback? onSourceTap;
   final bool isSearching;
   final DanmakuController? danmakuController;
-  final VoidCallback? onShowDetail;
-  final List<String>? cachedTags;
 
   @override
   State<WindowsEpisodeList> createState() => _WindowsEpisodeListState();
@@ -69,7 +63,9 @@ class _WindowsEpisodeListState extends State<WindowsEpisodeList> {
   bool _ascending = true;
   bool _isGridView = false;
   bool _isEpisodesExpanded = true;
-  late List<int> _filteredList = _buildFilteredList();
+  String _searchText = '';
+  // No index array is needed for an unfiltered list. Reverse is a view mapping.
+  List<int>? _filteredList;
 
   @override
   void initState() {
@@ -93,18 +89,22 @@ class _WindowsEpisodeListState extends State<WindowsEpisodeList> {
   }
 
   void _onSearchChanged() {
-    final newList = _buildFilteredList();
-    if (newList.length != _filteredList.length ||
-        !newList.every((idx) => _filteredList.contains(idx))) {
-      setState(() => _filteredList = newList);
-    }
+    if (_searchText == _searchController.text) return;
+    setState(() {
+      final previousQuery = _searchText.trim().toLowerCase();
+      _searchText = _searchController.text;
+      if (previousQuery != _searchText.trim().toLowerCase()) {
+        _filteredList = _buildFilteredList();
+      }
+    });
   }
 
-  List<int> _buildFilteredList() {
+  List<int>? _buildFilteredList() {
+    if (_searchText.trim().isEmpty) return null;
     return PlaybackEpisodeCatalog.filterIndexes(
       widget.videoList,
-      searchQuery: _searchController.text,
-      ascending: _ascending,
+      searchQuery: _searchText,
+      ascending: true,
     );
   }
 
@@ -112,6 +112,41 @@ class _WindowsEpisodeListState extends State<WindowsEpisodeList> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final primaryColor = theme.colorScheme.primary;
+    final source = BgmUtils.trimmed(widget.sourceName) ?? '切换播放源';
+    final line = BgmUtils.trimmed(widget.lineName);
+    final danmaku = widget.danmakuController;
+    final itemCount = _filteredList?.length ?? widget.videoList.length;
+    final episodes = SliverChildBuilderDelegate(
+      (context, index) {
+        final position = _ascending ? index : itemCount - 1 - index;
+        final i = _filteredList?[position] ?? position;
+        final item = widget.videoList[i];
+        if (_isGridView) {
+          return _WindowsEpisodeGridItem(
+            isPlaying: i == widget.currentIndex,
+            title: item.title,
+            primaryColor: primaryColor,
+            onTap: () => widget.onEpisodeSelected(i),
+          );
+        }
+        return _WindowsEpisodeListItem(
+          key: ValueKey((widget.bgmId, i)),
+          index: i,
+          item: item,
+          isPlaying: i == widget.currentIndex,
+          bgmId: widget.bgmId,
+          bgmEpisodes: widget.bgmEpisodes,
+          fallbackCoverUrl: widget.fallbackCoverUrl,
+          currUrl: widget.currUrl,
+          sourceNames: widget.sourceNames,
+          primaryColor: primaryColor,
+          onEpisodeSelected: widget.onEpisodeSelected,
+          onUrlSelected: widget.onUrlSelected,
+        );
+      },
+      childCount: itemCount,
+      addAutomaticKeepAlives: false,
+    );
 
     return CustomScrollView(
       controller: _scrollController,
@@ -121,19 +156,52 @@ class _WindowsEpisodeListState extends State<WindowsEpisodeList> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _buildAnimeHeader(theme, primaryColor),
+              _buildAnimeHeader(),
               const SizedBox(height: 8),
-              _buildSourceRow(theme, primaryColor),
+              _buildActionRow(
+                label: '播放源',
+                action: '切换源',
+                accent: primaryColor,
+                onTap: widget.onSourceTap,
+                child: Text(
+                  widget.isSearching
+                      ? '正在自动匹配源中...'
+                      : line == null
+                      ? source
+                      : '$source · $line',
+                ),
+              ),
               const SizedBox(height: 6),
-              _buildDanmakuRow(theme, primaryColor),
+              _buildActionRow(
+                label: '弹幕库',
+                action: '匹配管理',
+                onTap: danmaku == null
+                    ? null
+                    : () => DanmakuListSheet.show(
+                        context,
+                        danmaku,
+                        defaultTitle: widget.title,
+                        defaultEpisode: widget.currentIndex + 1,
+                      ),
+                child: danmaku == null
+                    ? const Text('未开启', style: TextStyle(color: Colors.white54))
+                    : ListenableBuilder(
+                        listenable: danmaku,
+                        builder: (context, _) => Text(
+                          danmaku.items.isEmpty
+                              ? '暂无关联弹幕'
+                              : '${danmaku.items.length} 条弹幕',
+                        ),
+                      ),
+              ),
               const SizedBox(height: 12),
-              _buildEpisodeHeaderSection(theme, primaryColor),
+              _buildEpisodeHeaderSection(),
               const SizedBox(height: 6),
             ],
           ),
         ),
         if (_isEpisodesExpanded) ...[
-          if (_filteredList.isEmpty)
+          if (itemCount == 0)
             const SliverToBoxAdapter(
               child: Padding(
                 padding: EdgeInsets.symmetric(vertical: 24),
@@ -145,59 +213,21 @@ class _WindowsEpisodeListState extends State<WindowsEpisodeList> {
                 ),
               ),
             )
-          else if (_isGridView)
-            SliverPadding(
-              padding: const EdgeInsets.only(bottom: 20),
-              sliver: SliverGrid(
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 3,
-                  childAspectRatio: 2.0,
-                  crossAxisSpacing: 8,
-                  mainAxisSpacing: 8,
-                ),
-                delegate: SliverChildBuilderDelegate(
-                  (context, index) {
-                    final i = _filteredList[index];
-                    return _WindowsEpisodeGridItem(
-                      index: i,
-                      isPlaying: i == widget.currentIndex,
-                      title: widget.videoList[i].title,
-                      primaryColor: primaryColor,
-                      onTap: () => widget.onEpisodeSelected(i),
-                    );
-                  },
-                  childCount: _filteredList.length,
-                  addAutomaticKeepAlives: false,
-                ),
-              ),
-            )
           else
             SliverPadding(
               padding: const EdgeInsets.only(bottom: 20),
-              sliver: SliverList(
-                delegate: SliverChildBuilderDelegate(
-                  (context, index) {
-                    final i = _filteredList[index];
-                    final item = widget.videoList[i];
-                    return _WindowsEpisodeListItem(
-                      key: ValueKey(i),
-                      index: i,
-                      item: item,
-                      isPlaying: i == widget.currentIndex,
-                      bgmId: widget.bgmId,
-                      bgmEpisodes: widget.bgmEpisodes,
-                      fallbackCoverUrl: widget.fallbackCoverUrl,
-                      currUrl: widget.currUrl,
-                      sourceNames: widget.sourceNames,
-                      primaryColor: primaryColor,
-                      onEpisodeSelected: widget.onEpisodeSelected,
-                      onUrlSelected: widget.onUrlSelected,
-                    );
-                  },
-                  childCount: _filteredList.length,
-                  addAutomaticKeepAlives: false,
-                ),
-              ),
+              sliver: _isGridView
+                  ? SliverGrid(
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 3,
+                            childAspectRatio: 2.0,
+                            crossAxisSpacing: 8,
+                            mainAxisSpacing: 8,
+                          ),
+                      delegate: episodes,
+                    )
+                  : SliverList(delegate: episodes),
             ),
         ] else
           const SliverToBoxAdapter(child: SizedBox(height: 12)),
@@ -205,7 +235,7 @@ class _WindowsEpisodeListState extends State<WindowsEpisodeList> {
     );
   }
 
-  Widget _buildAnimeHeader(ThemeData theme, Color primaryColor) {
+  Widget _buildAnimeHeader() {
     final title = widget.title?.trim() ?? '';
 
     return Padding(
@@ -244,62 +274,61 @@ class _WindowsEpisodeListState extends State<WindowsEpisodeList> {
     );
   }
 
-  Widget _buildSourceRow(ThemeData theme, Color primaryColor) {
-    final source = widget.sourceName?.isNotEmpty == true
-        ? widget.sourceName!
-        : '切换播放源';
-    final line = widget.lineName;
-    final label = (line != null && line.isNotEmpty)
-        ? '$source · $line'
-        : source;
-
+  Widget _buildActionRow({
+    required String label,
+    required String action,
+    required Widget child,
+    VoidCallback? onTap,
+    Color? accent,
+  }) {
     return Material(
       color: const Color(0xFF1B1B1F),
-      borderRadius: BorderRadius.circular(6),
-      child: InkWell(
-        onTap: widget.onSourceTap,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(6),
-        child: Container(
+        side: const BorderSide(color: Colors.white10, width: 0.8),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: Colors.white10, width: 0.8),
-          ),
           child: Row(
             children: [
-              const Text(
-                '播放源',
-                style: TextStyle(
-                  fontSize: 12.0,
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 12,
                   color: Colors.white54,
                   fontWeight: FontWeight.w500,
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Text(
-                  widget.isSearching ? '正在自动匹配源中...' : label,
+                child: DefaultTextStyle(
                   style: const TextStyle(
-                    fontSize: 13.0,
+                    fontSize: 13,
                     fontWeight: FontWeight.w600,
                     color: Colors.white,
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
+                  child: child,
                 ),
               ),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
-                  color: primaryColor.withValues(alpha: 0.15),
+                  color: accent?.withValues(alpha: 0.15) ?? Colors.white10,
                   borderRadius: BorderRadius.circular(4),
                 ),
                 child: Text(
-                  '切换源',
+                  action,
                   style: TextStyle(
-                    fontSize: 11.0,
-                    color: primaryColor,
-                    fontWeight: FontWeight.w600,
+                    fontSize: 11,
+                    color: accent ?? Colors.white70,
+                    fontWeight: accent == null
+                        ? FontWeight.w500
+                        : FontWeight.w600,
                   ),
                 ),
               ),
@@ -310,89 +339,7 @@ class _WindowsEpisodeListState extends State<WindowsEpisodeList> {
     );
   }
 
-  Widget _buildDanmakuRow(ThemeData theme, Color primaryColor) {
-    return Material(
-      color: const Color(0xFF1B1B1F),
-      borderRadius: BorderRadius.circular(6),
-      child: InkWell(
-        onTap: () {
-          if (widget.danmakuController != null) {
-            DanmakuListSheet.show(
-              context,
-              widget.danmakuController!,
-              defaultTitle: widget.title,
-              defaultEpisode: widget.currentIndex + 1,
-            );
-          }
-        },
-        borderRadius: BorderRadius.circular(6),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: Colors.white10, width: 0.8),
-          ),
-          child: Row(
-            children: [
-              const Text(
-                '弹幕库',
-                style: TextStyle(
-                  fontSize: 12.0,
-                  color: Colors.white54,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: widget.danmakuController != null
-                    ? ListenableBuilder(
-                        listenable: widget.danmakuController!,
-                        builder: (context, _) {
-                          final count = widget.danmakuController!.items.length;
-                          return Text(
-                            count > 0 ? '$count 条弹幕' : '暂无关联弹幕',
-                            style: const TextStyle(
-                              fontSize: 13.0,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.white,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          );
-                        },
-                      )
-                    : const Text(
-                        '未开启',
-                        style: TextStyle(
-                          fontSize: 13.0,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white54,
-                        ),
-                      ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: Colors.white10,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: const Text(
-                  '匹配管理',
-                  style: TextStyle(
-                    fontSize: 11.0,
-                    color: Colors.white70,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildEpisodeHeaderSection(ThemeData theme, Color primaryColor) {
+  Widget _buildEpisodeHeaderSection() {
     final hasQuery = _searchController.text.isNotEmpty;
 
     return Column(
@@ -493,7 +440,6 @@ class _WindowsEpisodeListState extends State<WindowsEpisodeList> {
                     : Icons.arrow_downward_rounded,
                 onPressed: () => setState(() {
                   _ascending = !_ascending;
-                  _filteredList = _buildFilteredList();
                 }),
                 tooltip: _ascending ? '升序' : '降序',
               ),
@@ -529,7 +475,7 @@ class _WindowsEpisodeListState extends State<WindowsEpisodeList> {
   }
 }
 
-class _WindowsEpisodeListItem extends StatelessWidget {
+class _WindowsEpisodeListItem extends StatefulWidget {
   final int index;
   final PlaybackEpisode item;
   final bool isPlaying;
@@ -558,88 +504,64 @@ class _WindowsEpisodeListItem extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    if (bgmId != null && bgmId! > 0) {
-      return FutureBuilder<Map<String, dynamic>?>(
-        future: AniBakaApi.getEpisodeStills(
-          bgmId: bgmId,
+  State<_WindowsEpisodeListItem> createState() =>
+      _WindowsEpisodeListItemState();
+}
+
+class _WindowsEpisodeListItemState extends State<_WindowsEpisodeListItem> {
+  // The key includes subject and episode; a mounted row owns one request.
+  late final _still = widget.bgmId != null && widget.bgmId! > 0
+      ? AniBakaApi.getEpisodeStills(
+          bgmId: widget.bgmId,
           season: 1,
-          episode: index + 1,
-        ),
-        builder: (context, snapshot) {
-          return _buildItemContent(context, snapshot.data);
-        },
-      );
-    }
-    return _buildItemContent(context, null);
-  }
+          episode: widget.index + 1,
+        )
+      : null;
 
-  String _resolveTitle(Map<String, dynamic>? still) {
-    if (bgmEpisodes != null && index >= 0 && index < bgmEpisodes!.length) {
-      final ep = bgmEpisodes![index];
-      final cn = ep['name_cn']?.toString().trim();
-      final jp = ep['name']?.toString().trim();
-      final name = (cn != null && cn.isNotEmpty)
-          ? cn
-          : (jp != null && jp.isNotEmpty ? jp : item.title);
-      if (name.startsWith('S') || name.startsWith('第')) return name;
-      return 'S1E${index + 1}: $name';
-    }
-    final stillName = BgmUtils.trimmed(still?['name']);
-    if (stillName != null && stillName.isNotEmpty) {
-      if (stillName.startsWith('S') || stillName.startsWith('第')) {
-        return stillName;
-      }
-      return 'S1E${index + 1}: $stillName';
-    }
-    final raw = item.title.trim();
-    if (raw.startsWith('S') ||
-        raw.startsWith('第') ||
-        raw.contains('话') ||
-        raw.contains('集')) {
-      return raw;
-    }
-    return 'S1E${index + 1}: $raw';
-  }
-
-  String _resolveAirDate(Map<String, dynamic>? still) {
-    if (bgmEpisodes != null && index >= 0 && index < bgmEpisodes!.length) {
-      final ep = bgmEpisodes![index];
-      final airdate = ep['airdate']?.toString().trim();
-      if (airdate != null && airdate.isNotEmpty) return airdate;
-    }
-    final stillDate = BgmUtils.trimmed(still?['air_date']);
-    if (stillDate != null && stillDate.isNotEmpty) return stillDate;
-    return '';
-  }
-
-  String _resolveOverview(Map<String, dynamic>? still) {
-    final stillOverview = BgmUtils.trimmed(still?['overview']);
-    if (stillOverview != null && stillOverview.isNotEmpty) return stillOverview;
-
-    if (bgmEpisodes != null && index >= 0 && index < bgmEpisodes!.length) {
-      final ep = bgmEpisodes![index];
-      final desc = ep['desc']?.toString().trim();
-      if (desc != null && desc.isNotEmpty) return desc;
-    }
-    return '暂无本集剧情简介';
-  }
-
-  String _resolveStillUrl(Map<String, dynamic>? still) {
-    if (still != null) {
-      final url =
-          BgmUtils.trimmed(still['still_url']) ??
-          BgmUtils.trimmed(still['still_thumb']);
-      if (url != null && url.isNotEmpty) return url;
-    }
-    return fallbackCoverUrl ?? '';
-  }
+  @override
+  Widget build(BuildContext context) => _still == null
+      ? _buildItemContent(context, null)
+      : FutureBuilder<Map<String, dynamic>?>(
+          future: _still,
+          builder: (context, snapshot) =>
+              _buildItemContent(context, snapshot.data),
+        );
 
   Widget _buildItemContent(BuildContext context, Map<String, dynamic>? still) {
-    final title = _resolveTitle(still);
-    final airDate = _resolveAirDate(still);
-    final overview = _resolveOverview(still);
-    final stillUrl = _resolveStillUrl(still);
+    final index = widget.index;
+    final item = widget.item;
+    final bgmEpisodes = widget.bgmEpisodes;
+    final episode = bgmEpisodes != null && index < bgmEpisodes.length
+        ? bgmEpisodes[index]
+        : null;
+    final name = episode != null
+        ? BgmUtils.trimmed(episode['name_cn']) ??
+              BgmUtils.trimmed(episode['name']) ??
+              item.title
+        : BgmUtils.trimmed(still?['name']) ?? item.title.trim();
+    final rawTitle =
+        episode == null && BgmUtils.trimmed(still?['name']) == null;
+    final title =
+        name.startsWith('S') ||
+            name.startsWith('第') ||
+            (rawTitle && (name.contains('话') || name.contains('集')))
+        ? name
+        : 'S1E${index + 1}: $name';
+    final airDate =
+        BgmUtils.trimmed(episode?['airdate']) ??
+        BgmUtils.trimmed(still?['air_date']) ??
+        '';
+    final overview =
+        BgmUtils.trimmed(still?['overview']) ??
+        BgmUtils.trimmed(episode?['desc']) ??
+        '暂无本集剧情简介';
+    final stillUrl =
+        BgmUtils.trimmed(still?['still_url']) ??
+        BgmUtils.trimmed(still?['still_thumb']) ??
+        widget.fallbackCoverUrl ??
+        '';
+    final isPlaying = widget.isPlaying;
+    final primaryColor = widget.primaryColor;
     final lineCount = item.lineCount;
 
     return AnimatedContainer(
@@ -659,7 +581,7 @@ class _WindowsEpisodeListItem extends StatelessWidget {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: () => onEpisodeSelected(index),
+          onTap: () => widget.onEpisodeSelected(index),
           borderRadius: BorderRadius.circular(8),
           child: Padding(
             padding: const EdgeInsets.all(10),
@@ -762,10 +684,10 @@ class _WindowsEpisodeListItem extends StatelessWidget {
                   ),
                   WindowsLineSelector(
                     lineCount: lineCount,
-                    currUrl: currUrl ?? 1,
+                    currUrl: widget.currUrl ?? 1,
                     onUrlChanged: (urlIndex) =>
-                        onUrlSelected?.call(index, urlIndex),
-                    sourceNames: sourceNames,
+                        widget.onUrlSelected?.call(index, urlIndex),
+                    sourceNames: widget.sourceNames,
                     isInline: true,
                   ),
                 ],
@@ -799,13 +721,13 @@ class _WindowsEpisodeListItem extends StatelessWidget {
               )
             else
               _placeholderIcon(),
-            if (isPlaying)
+            if (widget.isPlaying)
               Container(
                 color: Colors.black45,
                 child: Center(
                   child: Icon(
                     Icons.play_circle_fill_rounded,
-                    color: primaryColor,
+                    color: widget.primaryColor,
                     size: 24,
                   ),
                 ),
@@ -824,14 +746,12 @@ class _WindowsEpisodeListItem extends StatelessWidget {
 }
 
 class _WindowsEpisodeGridItem extends StatelessWidget {
-  final int index;
   final bool isPlaying;
   final String title;
   final Color primaryColor;
   final VoidCallback onTap;
 
   const _WindowsEpisodeGridItem({
-    required this.index,
     required this.isPlaying,
     required this.title,
     required this.primaryColor,

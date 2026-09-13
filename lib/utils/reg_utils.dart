@@ -18,10 +18,6 @@ String getSuo(String? content) {
   return src == null ? kDefaultImage : Uri.decodeComponent(src);
 }
 
-/// 纯数字视为 QQ 号走 QQ 头像，否则取 MD5 走 cravatar。
-///
-/// 这个函数在评论列表 / 首页头像的 build 里被逐条调用，非 QQ 号分支每次都要跑
-/// 一次 MD5，因此结果按 avatar 串记忆化（小表，超出容量丢最早一条）。
 String getAvatar({String avatar = ''}) {
   if (_pureDigitsRe.hasMatch(avatar)) {
     return 'https://q1.qlogo.cn/g?b=qq&nk=$avatar&s=640';
@@ -73,9 +69,6 @@ class RegUtils {
   }
 
   /// 提取番剧核心标题：剥离尾部季/篇标识（含括号形式）。结果为空时回退原标题。
-  ///
-  /// 两条正则各自的末字符集互不相交，用 O(1) 的尾字符判断代替无条件的两次
-  /// 全串扫描——任一守卫不成立时，对应的 `replaceFirst` 本就是空操作。
   static String extractBaseTitle(String fullTitle) {
     if (fullTitle.isEmpty) return '';
 

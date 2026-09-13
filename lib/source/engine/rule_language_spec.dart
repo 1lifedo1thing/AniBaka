@@ -10,6 +10,7 @@ class RuleLanguageSpec {
     'query': 'Build or transform URL query parameters.',
     'fetch': 'Perform an HTTP request and place its body in current.',
     'follow': 'Resolve and fetch a URL found in current content.',
+    'delay': 'Pause execution for a given duration in milliseconds.',
     'select': 'Select HTML with css and extract text/html/attribute.',
     'regex': 'Extract a regex capture from current text.',
     'replace': 'Replace literal or regex text in current.',
@@ -53,6 +54,17 @@ with an op field. Supported recipes: maccms, player_aaaa.
 
 Supported operations:
 $ops
+
+Stage flags are optional booleans on play-stage steps (branch steps included):
+- materializeHls: serve a complete VOD HLS manifest through the app, so segment
+  requests keep the rule's Referer/Cookie headers.
+- filterHlsAds: drop HLS segments whose video encoding differs from the rest of
+  the playlist, which removes ads spliced into the stream. Implies
+  materializeHls; also resolves a master playlist down to one bitrate variant.
+- resolveMediaRedirects: follow the media URL redirect chain before playback.
+- validateWithCookies: validate the media URL with the play-stage cookies.
+- followEmbeddedPlayer: follow embedded iframe players while sniffing.
+- playbackKeepAlive: repeat this step's request while the media is playing.
 
 The search stage must produce Series results, detail must produce playback
 lines and episodes, and play must produce a direct media URL. Prefer generic

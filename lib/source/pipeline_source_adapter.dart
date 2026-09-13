@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:dio_cookie_manager/dio_cookie_manager.dart';
@@ -9,7 +10,11 @@ import 'package:html/parser.dart' show parse;
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:xpath_selector_html_parser/xpath_selector_html_parser.dart';
 
+import 'package:baka/services/playback/playback_settings.dart';
 import 'package:baka/source/adapter_base.dart';
+import 'package:baka/source/hls/hls_ad_filter.dart';
+import 'package:baka/source/hls/hls_master_playlist.dart';
+import 'package:baka/source/hls/mpeg_ts_fingerprint.dart';
 import 'package:baka/source/models/episode.dart';
 import 'package:baka/source/models/series.dart';
 import 'package:baka/source/models/source.dart';
@@ -42,12 +47,10 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
   int? _playbackKeepAliveInFlightGeneration;
   HttpServer? _hlsProxyServer;
   StreamSubscription<HttpRequest>? _hlsProxySubscription;
-  Map<String, Uri> _hlsProxyTargets = const {};
+  List<Uri> _hlsProxyTargets = const [];
   Map<String, String> _hlsProxyHeaders = const {};
+  final Map<String, HlsVideoFingerprint?> _hlsProbeCache = {};
   late final _playFeatures = _inspectPlayFeatures(rule.play);
-  bool get _followsEmbeddedPlayer => _playFeatures.followsEmbeddedPlayer;
-  bool get _materializesHls => _playFeatures.materializesHls;
-  bool get _resolvesMediaRedirects => _playFeatures.resolvesMediaRedirects;
   // 同一页面 HTML 常被连续多个 select/searchList/episodes 步骤解析；
   // 按 identity 缓存最近一次的 DOM，避免重复全量解析（消费方均只读）。
   String? _lastParsedHtml;
@@ -55,6 +58,18 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
 
   static final RegExp _whitespacePattern = RegExp(r'\s+');
   static final RegExp _hlsUriAttrPattern = RegExp(r'URI="([^"]+)"');
+
+  /// HLS 指纹探测只取分片前缀。实测 16 KB 已足够读到 PAT/PMT 与首个 SPS。
+  static const int _hlsProbePrefixBytes = 16 * 1024;
+
+  /// 单个分片指纹探测的超时；探不到按「与正片一致」处理，不阻塞播放。
+  static const Duration _hlsProbeTimeout = Duration(seconds: 8);
+
+  /// 前缀取够后主动断连的取消理由。
+  static const String _hlsProbeCancelReason = 'HLS 指纹探测已取够前缀';
+
+  /// 指纹缓存条数上限；同一集反复物化时不必重复探测。
+  static const int _hlsProbeCacheLimit = 512;
 
   @override
   String get baseUrl => rule.baseUrl;
@@ -91,12 +106,17 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
   Future<MediaReachabilityVerdict> probeMediaReachability(
     String url, {
     Duration? timeout,
+    Map<String, String>? headers,
   }) {
     final minimumMs = rule.mediaValidationTimeoutMs;
     final effectiveTimeout = minimumMs > (timeout?.inMilliseconds ?? 0)
         ? Duration(milliseconds: minimumMs)
         : timeout;
-    return super.probeMediaReachability(url, timeout: effectiveTimeout);
+    return super.probeMediaReachability(
+      url,
+      timeout: effectiveTimeout,
+      headers: headers,
+    );
   }
 
   @override
@@ -122,32 +142,28 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
   }) async {
     try {
       final series = await _interpreter.runSearch(rule, this, query);
-      if (enhanceWithBgm) await _enhanceWithBgmInfo(series);
+      if (enhanceWithBgm) {
+        var next = 0;
+        // Five workers keep requests bounded without waiting for each batch's slowest item.
+        await Future.wait(
+          List.generate(series.length.clamp(0, 5), (_) async {
+            while (next < series.length) {
+              final item = series[next++];
+              try {
+                final subject = await resolveBgmSubject(title: item.name);
+                item.image = subject?.imageUrl ?? item.image;
+                item.description =
+                    subject?.summary ?? item.description ?? '暂无简介';
+                item.bgmId = subject?.subjectId ?? item.bgmId;
+                item.score = subject?.score ?? item.score;
+              } catch (_) {}
+            }
+          }),
+        );
+      }
       return series;
     } finally {
       _dropParseCache();
-    }
-  }
-
-  Future<void> _enhanceWithBgmInfo(
-    List<Series> seriesList, {
-    int concurrency = 5,
-  }) async {
-    for (var i = 0; i < seriesList.length; i += concurrency) {
-      final end = (i + concurrency).clamp(0, seriesList.length);
-      await Future.wait(
-        List<Future<void>>.generate(end - i, (offset) async {
-          final series = seriesList[i + offset];
-          try {
-            final subject = await resolveBgmSubject(title: series.name);
-            series.image = subject?.imageUrl ?? series.image;
-            series.description =
-                subject?.summary ?? series.description ?? '暂无简介';
-            series.bgmId = subject?.subjectId ?? series.bgmId;
-            series.score = subject?.score ?? series.score;
-          } catch (_) {}
-        }, growable: false),
-      );
     }
   }
 
@@ -187,10 +203,12 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
       if (media.url.isEmpty) {
         return (url: '', httpHeaders: const <String, String>{});
       }
+      final headers = await _resolveMediaHeaders(media);
       if (!skipValidation) {
         final verdict = await probeMediaReachability(
           media.url,
           timeout: reachTimeout,
+          headers: headers,
         );
         if (verdict == MediaReachabilityVerdict.rejected) {
           debugPrint('$name: 动态媒体被服务器拒绝，丢弃: ${media.url}');
@@ -203,7 +221,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
           );
         }
       }
-      return (url: media.url, httpHeaders: await _resolveMediaHeaders(media));
+      return (url: media.url, httpHeaders: headers);
     }).whenComplete(_dropParseCache);
   }
 
@@ -277,13 +295,15 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
 
   @override
   Future<({String url, Map<String, String> httpHeaders})> preparePlaybackMedia(
-    ({String url, Map<String, String> httpHeaders}) media,
-  ) async {
+    ({String url, Map<String, String> httpHeaders}) media, {
+    bool? filterHlsAds,
+  }) async {
     var prepared = media;
-    if (_resolvesMediaRedirects) {
+    if (_playFeatures.resolvesMediaRedirects) {
       final resolvedUrl =
-          await (_mediaRedirectResolver ??= RemoteMediaRedirectResolver())
-              .resolve(media.url, headers: media.httpHeaders);
+          await (_mediaRedirectResolver ??= RemoteMediaRedirectResolver(
+            useSystemProxy: useSystemProxy,
+          )).resolve(media.url, headers: media.httpHeaders);
       if (resolvedUrl != media.url) {
         prepared = (
           url: resolvedUrl,
@@ -292,37 +312,76 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
       }
     }
 
-    if (!_materializesHls || !prepared.url.toLowerCase().contains('.m3u8')) {
+    final filtersAds =
+        filterHlsAds ??
+        (_playFeatures.filtersHlsAds ||
+            PlaybackSettingsService.getFilterHlsAds());
+    if ((!_playFeatures.materializesHls && !filtersAds) ||
+        !prepared.url.toLowerCase().contains('.m3u8')) {
       return prepared;
     }
     final manifestUri = Uri.tryParse(prepared.url);
     if (manifestUri == null || !manifestUri.hasScheme) return prepared;
 
     try {
-      final response = await dio.getUri<String>(
-        manifestUri,
-        options: Options(
-          headers: prepared.httpHeaders,
-          responseType: ResponseType.plain,
-          validateStatus: (_) => true,
-        ),
-      );
-      final body = response.data ?? '';
-      final status = response.statusCode ?? 0;
-      if (status < 200 ||
-          status >= 300 ||
-          !body.startsWith('#EXTM3U') ||
-          !body.contains('#EXT-X-ENDLIST')) {
+      var playlist = await _fetchHlsPlaylist(manifestUri, prepared.httpHeaders);
+      if (!_playlistLooksFetchable(playlist)) {
         debugPrint(
           '${rule.id}: unable to materialize complete HLS manifest '
-          '(HTTP $status, ${body.length} chars)',
+          '(HTTP ${playlist.status}, ${playlist.body.length} chars)',
         );
         return prepared;
       }
 
+      // 主清单只有码率变体、没有分片，去广告得先落到一个具体变体上。
+      // 这一步固定了码率，所以只在规则显式开启 filterHlsAds 时做。
+      if (HlsMasterPlaylist.isMaster(playlist.body)) {
+        if (!filtersAds) {
+          debugPrint('${rule.id}: HLS 主清单不做物化（未开启 filterHlsAds）');
+          return prepared;
+        }
+        final variant = HlsMasterPlaylist.selectVariant(
+          playlist.body,
+          playlist.uri,
+        );
+        if (variant == null) {
+          debugPrint('${rule.id}: HLS 主清单无法选定单一变体，放弃去广告');
+          return prepared;
+        }
+        playlist = await _fetchHlsPlaylist(variant.uri, prepared.httpHeaders);
+        if (!_playlistLooksFetchable(playlist)) {
+          debugPrint(
+            '${rule.id}: unable to materialize HLS variant '
+            '(HTTP ${playlist.status}, ${playlist.body.length} chars)',
+          );
+          return prepared;
+        }
+        debugPrint('${rule.id}: HLS 主清单选定变体 ${variant.label}');
+      }
+
+      if (!playlist.body.contains('#EXT-X-ENDLIST')) {
+        debugPrint(
+          '${rule.id}: unable to materialize complete HLS manifest '
+          '(直播清单无 #EXT-X-ENDLIST, ${playlist.body.length} chars)',
+        );
+        return prepared;
+      }
+
+      var body = playlist.body;
+      if (filtersAds) {
+        final outcome = await HlsAdFilter.apply(
+          manifest: body,
+          manifestUri: playlist.uri,
+          probe: (segmentUri) =>
+              _probeHlsSegmentFingerprint(segmentUri, prepared.httpHeaders),
+        );
+        debugPrint('${rule.id}: HLS 去广告 ${outcome.detail}');
+        body = outcome.manifest;
+      }
+
       final proxyUrl = await _startHlsProxy(
         body,
-        manifestUri,
+        playlist.uri,
         prepared.httpHeaders,
       );
       return (url: proxyUrl, httpHeaders: const <String, String>{});
@@ -330,6 +389,101 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
       debugPrint('${rule.id}: HLS manifest materialization failed: $error');
       return prepared;
     }
+  }
+
+  /// 抓一份 HLS 清单正文。清单地址本身可能 302，分片相对地址要按跳转后的
+  /// 地址解析，所以同时返回 [Uri realUri]。
+  Future<({String body, Uri uri, int status})> _fetchHlsPlaylist(
+    Uri uri,
+    Map<String, String> headers,
+  ) async {
+    final response = await dio.getUri<String>(
+      uri,
+      options: Options(
+        headers: headers,
+        responseType: ResponseType.plain,
+        validateStatus: (_) => true,
+        extra: const {SchedulerInterceptor.priorityKey: RequestPriority.play},
+      ),
+    );
+    return (
+      body: response.data ?? '',
+      uri: response.realUri,
+      status: response.statusCode ?? 0,
+    );
+  }
+
+  static bool _playlistLooksFetchable(
+    ({String body, Uri uri, int status}) playlist,
+  ) {
+    return playlist.status >= 200 &&
+        playlist.status < 300 &&
+        playlist.body.startsWith('#EXTM3U');
+  }
+
+  /// 只取分片前缀（默认 16 KB）读取编码指纹，供 [HlsAdFilter] 判断某个分片
+  /// 是否与正片同一次编码。任何失败都返回 null，调用方按「与正片一致」处理。
+  Future<HlsVideoFingerprint?> _probeHlsSegmentFingerprint(
+    Uri segmentUri,
+    Map<String, String> headers,
+  ) async {
+    final cacheKey = segmentUri.toString();
+    if (_hlsProbeCache.containsKey(cacheKey)) {
+      return _hlsProbeCache[cacheKey];
+    }
+    final fingerprint = await _readHlsSegmentFingerprint(segmentUri, headers);
+    if (_hlsProbeCache.length >= _hlsProbeCacheLimit) _hlsProbeCache.clear();
+    _hlsProbeCache[cacheKey] = fingerprint;
+    return fingerprint;
+  }
+
+  Future<HlsVideoFingerprint?> _readHlsSegmentFingerprint(
+    Uri segmentUri,
+    Map<String, String> headers,
+  ) {
+    final cancelToken = CancelToken();
+    Future<HlsVideoFingerprint?> read() async {
+      final response = await dio.requestUri<ResponseBody>(
+        segmentUri,
+        cancelToken: cancelToken,
+        options: Options(
+          headers: {
+            ...headers,
+            HttpHeaders.rangeHeader: 'bytes=0-${_hlsProbePrefixBytes - 1}',
+          },
+          responseType: ResponseType.stream,
+          validateStatus: (_) => true,
+          extra: const {SchedulerInterceptor.priorityKey: RequestPriority.play},
+        ),
+      );
+      final status = response.statusCode ?? 0;
+      if (status != HttpStatus.ok && status != HttpStatus.partialContent) {
+        return null;
+      }
+      final stream = response.data?.stream;
+      if (stream == null) return null;
+
+      final prefix = BytesBuilder(copy: false);
+      try {
+        await for (final chunk in stream) {
+          prefix.add(chunk);
+          // 服务器忽略 Range 时不必把整片读进内存。
+          if (prefix.length >= _hlsProbePrefixBytes) break;
+        }
+      } catch (_) {
+        // 主动断连可能让流以错误收尾；已经攒到的前缀仍然可用。
+      }
+      return MpegTsFingerprint.read(prefix.toBytes());
+    }
+
+    return read()
+        .timeout(_hlsProbeTimeout, onTimeout: () => null)
+        .whenComplete(() {
+          // 取够前缀或超时后都断掉连接。取消理由取同一个常量，避免重复取消
+          // 触发 CancelToken 的断言。
+          cancelToken.cancel(_hlsProbeCancelReason);
+        })
+        .catchError((Object _) => null);
   }
 
   static Map<String, String> _headersForRedirectTarget(
@@ -366,17 +520,11 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final secret = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
     final baseUrl = 'http://${server.address.address}:${server.port}/$secret';
-    final targets = <String, Uri>{};
-    final targetIds = <String, String>{};
+    final targetIds = <Uri, int>{};
 
     String proxyUrlFor(Uri target) {
-      final targetKey = target.toString();
-      final existing = targetIds[targetKey];
-      if (existing != null) return '$baseUrl/media/$existing';
-      final id = targets.length.toRadixString(36);
-      targets[id] = target;
-      targetIds[targetKey] = id;
-      return '$baseUrl/media/$id';
+      final id = targetIds.putIfAbsent(target, () => targetIds.length);
+      return '$baseUrl/media/${id.toRadixString(36)}';
     }
 
     final materialized = _materializeHlsManifest(
@@ -384,14 +532,14 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
       manifestUri,
       proxyUrlFor,
     );
-    if (!materialized.contains('#EXT-X-MEDIA-SEQUENCE:0') ||
+    if (!materialized.contains('#EXTM3U') ||
         !materialized.contains('#EXT-X-ENDLIST')) {
       await server.close(force: true);
       throw const FormatException('incomplete VOD manifest');
     }
 
     _hlsProxyServer = server;
-    _hlsProxyTargets = Map<String, Uri>.unmodifiable(targets);
+    _hlsProxyTargets = targetIds.keys.toList(growable: false);
     _hlsProxyHeaders = Map<String, String>.unmodifiable(headers);
     _hlsProxySubscription = server.listen(
       (request) =>
@@ -429,8 +577,8 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
         await response.close();
         return;
       }
-      final target = _hlsProxyTargets[segments[2]];
-      if (target == null) {
+      final id = int.tryParse(segments[2], radix: 36);
+      if (id == null || id < 0 || id >= _hlsProxyTargets.length) {
         response.statusCode = HttpStatus.notFound;
         await response.close();
         return;
@@ -447,7 +595,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
         if (value != null && value.isNotEmpty) headers[name] = value;
       }
       final remote = await dio.requestUri<ResponseBody>(
-        target,
+        _hlsProxyTargets[id],
         options: Options(
           method: request.method == 'HEAD' ? 'HEAD' : 'GET',
           headers: headers,
@@ -491,7 +639,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
     final server = _hlsProxyServer;
     _hlsProxySubscription = null;
     _hlsProxyServer = null;
-    _hlsProxyTargets = const {};
+    _hlsProxyTargets = const [];
     _hlsProxyHeaders = const {};
     try {
       await subscription?.cancel();
@@ -629,6 +777,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
     bool usesCookies,
     bool validatesWithCookies,
     bool materializesHls,
+    bool filtersHlsAds,
     bool resolvesMediaRedirects,
     bool followsEmbeddedPlayer,
     PipelineStep? keepAliveStep,
@@ -638,6 +787,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
     var usesCookies = false;
     var validatesWithCookies = false;
     var materializesHls = false;
+    var filtersHlsAds = false;
     var resolvesMediaRedirects = false;
     var followsEmbeddedPlayer = false;
     PipelineStep? keepAliveStep;
@@ -650,6 +800,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
         if (step.op == 'anime1Play') usesCookies = true;
         validatesWithCookies |= step.flag('validateWithCookies');
         materializesHls |= step.flag('materializeHls');
+        filtersHlsAds |= step.flag('filterHlsAds');
         resolvesMediaRedirects |= step.flag('resolveMediaRedirects');
         followsEmbeddedPlayer |= step.flag('followEmbeddedPlayer');
         if (keepAliveStep == null && step.flag('playbackKeepAlive')) {
@@ -667,6 +818,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
       usesCookies: usesCookies,
       validatesWithCookies: validatesWithCookies,
       materializesHls: materializesHls,
+      filtersHlsAds: filtersHlsAds,
       resolvesMediaRedirects: resolvesMediaRedirects,
       followsEmbeddedPlayer: followsEmbeddedPlayer,
       keepAliveStep: keepAliveStep,
@@ -927,7 +1079,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
             url,
             userAgent: requestUserAgent,
             cookieHeader: cookieHeader.isEmpty ? null : cookieHeader,
-            followEmbeddedPlayer: _followsEmbeddedPlayer,
+            followEmbeddedPlayer: _playFeatures.followsEmbeddedPlayer,
             taskScope: _webViewTaskScope ??= WebViewTaskScope(),
           ) ??
           '';
@@ -955,10 +1107,16 @@ class RemoteMediaRedirectResolver {
     'upgrade',
   };
 
-  final HttpClient _client = SystemProxyService.createHttpClient()
-    ..connectionTimeout = _requestTimeout
-    ..idleTimeout = const Duration(seconds: 15)
-    ..userAgent = 'Baka Media Resolver';
+  RemoteMediaRedirectResolver({bool useSystemProxy = true})
+    : _client =
+          (useSystemProxy
+                ? SystemProxyService.createHttpClient()
+                : SystemProxyService.createDirectHttpClient())
+            ..connectionTimeout = _requestTimeout
+            ..idleTimeout = const Duration(seconds: 15)
+            ..userAgent = 'Baka Media Resolver';
+
+  final HttpClient _client;
 
   Future<String> resolve(
     String remoteUrl, {

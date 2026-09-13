@@ -24,7 +24,6 @@ import 'package:baka/source/source_registry.dart';
 
 import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/utils/toast_utils.dart';
-import 'package:baka/utils/platform_page_route.dart';
 import 'package:baka/widgets/baka_player/index.dart';
 import 'package:baka/widgets/comment/comment_widget.dart';
 import 'package:baka/widgets/common/tab_indicator.dart';
@@ -86,21 +85,18 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
   late final TabController _tabController;
   StreamSubscription<void>? _completedSubscription;
   StreamSubscription<Duration>? _seekSubscription;
+  Future<void>? _playerReady;
   List<String> _cachedTags = const [];
-  late final String _fixedSummary;
-  late final String _taskIdPrefix;
   String _resolvedUrl = '';
   final GlobalKey<CIslandCommentWidgetState> commentKey = GlobalKey();
   final PlaybackController ctr = PlaybackController();
   final DanmakuController danmakuController = DanmakuController();
   final ValueNotifier<bool> _followNotifier = ValueNotifier<bool>(false);
-  final ValueNotifier<bool> _initedNotifier = ValueNotifier<bool>(false);
-  final ValueNotifier<int> _pageDataVersion = ValueNotifier<int>(0);
+  bool inited = false;
   final ValueNotifier<bool> _showDetailNotifier = ValueNotifier<bool>(false);
   final ValueNotifier<bool> _sortAscendingNotifier = ValueNotifier<bool>(true);
   final ValueNotifier<bool> _playerFullscreen = ValueNotifier<bool>(false);
-  final ValueNotifier<PlayerFailureContext?> _terminalFailureNotifier =
-      ValueNotifier<PlayerFailureContext?>(null);
+  PlayerFailureContext? _terminalFailure;
   int _playbackGeneration = 0;
   bool _lastPlaybackOpenSucceeded = false;
   Object? _lastPlaybackFailure;
@@ -109,13 +105,12 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
 
   void _bumpPageData() {
     if (!mounted) return;
-    _pageDataVersion.value = _pageDataVersion.value + 1;
+    setState(() {});
   }
 
   List<PlaybackEpisode> get videoList => _svc.videoList;
   int get currPlayIndex => _svc.currPlayIndex;
   int get currUrl => _svc.currUrl;
-  bool get inited => _initedNotifier.value;
   bool get isWindows => Instances.isDesktopPlatform;
   bool get _isAdapter => _svc.isAdapter;
   bool get _isLocalSource => _svc.isLocalSource;
@@ -126,12 +121,31 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
   int _nextPlaybackGeneration() => ++_playbackGeneration;
   bool _isStale(int requestId) => !mounted || requestId != _playbackGeneration;
 
+  /// 下载任务 id 由「源 + 剧集 id + 集数」拼成，必须在接管新数据后跟着变，
+  /// 否则下载进度条会匹配不到本地任务。
+  String get _taskIdPrefix {
+    final source = _svc.data['source']?.toString() ?? '';
+    final id = _svc.data['id'];
+    return source.isNotEmpty ? '${source}_${id}_' : '${id}_';
+  }
+
+  /// 外部简介：贴文的 `content` 里 `>` 之前是站点信息，之后才是简介。
+  String get _fixedSummary {
+    final raw = _svc.data['content'] as String?;
+    if (raw == null) return '';
+    final cut = raw.indexOf('>');
+    return cut != -1 ? raw.substring(cut + 1).trim() : raw;
+  }
+
   VideoSourceSearchController? _autoMatchController;
   VideoSourceSearchController? _sourceSearchController;
 
   Future<void> _saveProgress() {
     final position = ctr.timeline.value.position;
-    return _svc.saveProgress(position, ctr.preferences.value.rememberLastPosition);
+    return _svc.saveProgress(
+      position,
+      ctr.preferences.value.rememberLastPosition,
+    );
   }
 
   Future<void> _saveHistory() {
@@ -165,16 +179,7 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
     _mediaSession = Get.find<MediaSessionService>();
     Get.find<AppRuntime>().playbacks.add(ctr);
     _tabController = TabController(length: 2, vsync: this);
-    final source = _svc.data['source']?.toString() ?? '';
-    final id = _svc.data['id'];
-    _taskIdPrefix = source.isNotEmpty ? '${source}_${id}_' : '${id}_';
     _updateCachedTagsFromBgm();
-    final raw = _svc.data['content'] as String?;
-    final cut = raw?.indexOf('>') ?? -1;
-    _fixedSummary = raw == null
-        ? ''
-        : (cut != -1 ? raw.substring(cut + 1).trim() : raw);
-
     ctr.setMediaInfo(_svc.initialMediaInfo);
     _followNotifier.value = _svc.isFollow();
     ctr.core.addListener(_onPlaybackCoreChanged);
@@ -204,31 +209,16 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
         _autoMatchController = null;
         controller?.cancelSearch();
         controller?.dispose();
-        final playerData = resolvedData;
-        Navigator.of(context).pushReplacement(
-          platformPageRoute<void>(
-            builder: (_) => PlayerPage(
-              request: playerData,
-              posIndex: playerData.episodeIndex,
-              autoMatch: false,
-            ),
-            transitionDuration: const Duration(milliseconds: 220),
-            transitionsBuilder:
-                (context, animation, secondaryAnimation, child) =>
-                    FadeTransition(opacity: animation, child: child),
-          ),
-        );
+        unawaited(_adoptPlaybackSource(resolvedData.metadata));
       },
       onMatchFailed: () {
         if (!mounted) return;
         final controller = _autoMatchController;
         _autoMatchController = null;
         controller?.dispose();
-        // 仅失败时才走原片 loadDetail，避免匹配阶段双倍带宽。
         _loadInitialData();
       },
     );
-    // 关键：匹配进行中不调用 loadDetail/initVideo，避免与探针抢带宽。
     _autoMatchController?.startSearch();
     unawaited(_loadBgmMetaOnly());
   }
@@ -272,13 +262,16 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
     try {
       final bgmFuture = _isLocalSource ? null : _svc.ensureBgmInfo();
       await _svc.loadDetail();
+      if (!mounted) return;
       if (videoList.isNotEmpty) {
         await initVideoController(_playbackGeneration);
       }
       _bumpPageData();
       if (!_isLocalSource) {
         await bgmFuture;
+        if (!mounted) return;
         await _svc.ensureBgmDetail();
+        if (!mounted) return;
         _updateCachedTagsFromBgm();
       }
     } catch (e) {
@@ -304,18 +297,18 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
       }
     }
 
-    final rawTags = (_svc.data['tag']?.toString().split(' ') ?? const [])
-        .map((t) => t.trim())
-        .where((t) => t.isNotEmpty)
-        .toList();
     final sourceDisplayName = _svc.data['sourceDisplayName']?.toString();
     final sourceVal = _svc.data['source']?.toString();
-    _cachedTags = rawTags
-        .where((t) {
-          if (t == sourceDisplayName || t == sourceVal) return false;
-          if (t == _currentSourceName) return false;
-          return true;
-        })
+    final sourceName = _currentSourceName;
+    _cachedTags = (_svc.data['tag']?.toString().split(' ') ?? const <String>[])
+        .map((t) => t.trim())
+        .where(
+          (t) =>
+              t.isNotEmpty &&
+              t != sourceDisplayName &&
+              t != sourceVal &&
+              t != sourceName,
+        )
         .take(5)
         .toList();
   }
@@ -338,18 +331,17 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
     unawaited(_svc.dispose());
     _tabController.dispose();
     _followNotifier.dispose();
-    _initedNotifier.dispose();
-    _pageDataVersion.dispose();
     _showDetailNotifier.dispose();
     _sortAscendingNotifier.dispose();
     _playerFullscreen.dispose();
-    _terminalFailureNotifier.dispose();
     SystemChrome.setSystemUIOverlayStyle(_exitStatusBarStyle);
     super.dispose();
   }
 
   void showCast(BuildContext context) {
-    final castUrl = _getCurrentVideoUrl();
+    final castUrl = _resolvedUrl.isNotEmpty
+        ? _resolvedUrl
+        : (_isAdapter ? ctr.currentMediaUri ?? '' : '');
     if (castUrl.isEmpty) {
       showSnackBar('无法获取视频地址，无法投屏');
       return;
@@ -371,9 +363,30 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
     );
   }
 
+  /// 播放订阅由页面持有，重试地址时复用同一次初始化。
+  Future<void> _initializePlayer() async {
+    ctr.attachDanmaku(danmakuController);
+    DanmakuController.loadSettings(danmakuController);
+    await Future.wait([ctr.initialize(), _mediaSession.init()]);
+    if (!mounted) return;
+    _completedSubscription = ctr.completed.listen((_) => _playNextEpisode());
+    _seekSubscription = ctr.seekEvents.listen(
+      (_) => unawaited(_saveProgress()),
+    );
+    _mediaSession.attach(
+      ctr,
+      onNextEpisode: _playNextEpisode,
+      onPreviousEpisode: _playPreviousEpisode,
+    );
+    _watchParty.attachPlayer(ctr, _svc, onEpisodeRequested: _switchEpisode);
+  }
+
   Future<void> initVideoController(int requestId) async {
     if (_isStale(requestId)) return;
-    _terminalFailureNotifier.value = null;
+    if (_terminalFailure != null) {
+      _terminalFailure = null;
+      _bumpPageData();
+    }
     _lastPlaybackOpenSucceeded = false;
     _lastPlaybackFailure = null;
     _resolvedUrl = '';
@@ -385,31 +398,11 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
       if (_isStale(requestId)) return;
 
       ctr.setMediaInfo(_svc.currentMediaInfo);
-      if (!inited) {
-        ctr.attachDanmaku(danmakuController);
-        DanmakuController.loadSettings(danmakuController);
-        await Future.wait([ctr.initialize(), _mediaSession.init()]);
-        if (_isStale(requestId)) return;
-
-        _completedSubscription = ctr.completed.listen((_) => _playNextEpisode());
-        _seekSubscription = ctr.seekEvents.listen((_) => unawaited(_saveProgress()));
-        _mediaSession.attach(
-          ctr,
-          onNextEpisode: _playNextEpisode,
-          onPreviousEpisode: _playPreviousEpisode,
-        );
-        _watchParty.attachPlayer(
-          ctr,
-          _svc,
-          onEpisodeRequested: (episodeIndex) => _switchEpisode(episodeIndex),
-        );
-
-        if (ctr.preferences.value.rememberLastPosition) {
-          final position = _svc.getSavedProgress();
-          if (position.inSeconds > 10) {
-            resumePosition = position;
-          }
-        }
+      await (_playerReady ??= _initializePlayer());
+      if (_isStale(requestId)) return;
+      if (!inited && ctr.preferences.value.rememberLastPosition) {
+        final position = _svc.getSavedProgress();
+        if (position.inSeconds > 10) resumePosition = position;
       }
 
       if (localPath != null) {
@@ -472,8 +465,11 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
       _lastPlaybackFailure = null;
       await _svc.rememberCurrentEpisode();
       if (_isStale(requestId)) return;
-      if (!inited) _initedNotifier.value = true;
-      _terminalFailureNotifier.value = null;
+      if (!inited || _terminalFailure != null) {
+        inited = true;
+        _terminalFailure = null;
+        _bumpPageData();
+      }
       if (resumePosition != null) {
         ctr.showJumpToPositionPrompt(resumePosition);
       }
@@ -481,7 +477,8 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
       if (localPath != null) {
         final content = await _svc.readLocalDanmakuFile(localPath);
         if (!_isStale(requestId) && content != null) {
-          danmakuController.setItems(await DanmakuController.decode(content));
+          final items = await DanmakuController.decode(content);
+          if (!_isStale(requestId)) danmakuController.setItems(items);
         }
       } else {
         final episodeIndex = currPlayIndex;
@@ -512,6 +509,10 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
 
   Future<void> _handlePlaybackInitializationFailure(Object error) async {
     if (!mounted || _isAutoSwitchingSource) return;
+    if (_isLocalSource) {
+      _setTerminalPlaybackFailure(error);
+      return;
+    }
     _isAutoSwitchingSource = true;
 
     try {
@@ -586,17 +587,18 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
 
   void _setTerminalPlaybackFailure(Object error) {
     if (!mounted) return;
-    _terminalFailureNotifier.value = PlayerFailureContext(
+    _terminalFailure = PlayerFailureContext(
       message: error.toString(),
       title: _svc.data['title']?.toString() ?? '',
       sourceKey: _svc.data['source']?.toString() ?? '',
       seriesId: (_svc.data['seriesId'] ?? _svc.data['seriesUrl'])?.toString(),
       episodeId: _svc.currentEpisodeId,
     );
+    _bumpPageData();
   }
 
   Future<void> _openAiRuleRepair() async {
-    final failure = _terminalFailureNotifier.value;
+    final failure = _terminalFailure;
     if (failure == null || Instances.isTV) return;
     await sourceRepository.init();
     final sourceKey = failure.sourceKey;
@@ -629,7 +631,8 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
       ),
     );
     if (!mounted || saved != true) return;
-    _terminalFailureNotifier.value = null;
+    _terminalFailure = null;
+    _bumpPageData();
     _failedSourceKeys.clear();
     if (repairing) {
       await initVideoController(_nextPlaybackGeneration());
@@ -657,6 +660,7 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
     await ctr.stop();
     _svc.stopAdapterPlaybackKeepAlive();
     await initVideoController(currentRequestId);
+    if (_isStale(currentRequestId)) return;
     _watchParty.publishCurrentMedia();
     // 播放器与弹幕在 initVideoController 内完成局部更新，无需重建整页。
   }
@@ -666,119 +670,103 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
   Future<void> changeUrl(int urlIndex) =>
       _switchEpisode(currPlayIndex, lineIndex: urlIndex);
 
+  Future<void> _adoptPlaybackSource(
+    Map<String, dynamic> sourceData, {
+    bool resetPlayback = false,
+  }) async {
+    if (!mounted) return;
+    final requestId = _nextPlaybackGeneration();
+    if (resetPlayback) {
+      await _saveAndResetForSwitch();
+      if (_isStale(requestId)) return;
+    }
+    _svc.adoptPlaybackData(sourceData);
+    _bumpPageData();
+    await ctr.stop();
+    _svc.stopAdapterPlaybackKeepAlive();
+    await initVideoController(requestId);
+    if (_isStale(requestId)) return;
+    _watchParty.publishCurrentMedia();
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLocalSource) return _buildLocalLayout(context);
-    // 仅在 _pageDataVersion 触发时重建顶层布局分发（videoList / 剧集 / BGM 元数据等）
-    return ListenableBuilder(
-      listenable: _pageDataVersion,
-      builder: (context, _) {
-        final source = _svc.data['source']?.toString().trim();
-        final isPureBgmSubject =
-            source == null || source.isEmpty || source == 'bgm';
+    final source = _svc.data['source']?.toString().trim();
+    final isPureBgmSubject =
+        source == null || source.isEmpty || source == 'bgm';
 
-        if (isPureBgmSubject && _autoMatchController == null) {
-          return Instances.isTV
-              ? TvAnimeDetailPlaceholder(data: _svc.data)
-              : AnimeDetailPlaceholder(data: _svc.data);
-        }
-        if (Instances.isTV) return _buildTvLayout(context);
-        if (isWindows || context.isTablet) {
-          return _buildWindowsTabletLayout(context);
-        }
-        return _buildMobileLayout(context);
-      },
-    );
+    if (isPureBgmSubject && _autoMatchController == null) {
+      return Instances.isTV
+          ? TvAnimeDetailPlaceholder(data: _svc.data)
+          : AnimeDetailPlaceholder(data: _svc.data);
+    }
+    if (Instances.isTV) return _buildTvLayout(context);
+    if (isWindows || context.isTablet) {
+      return _buildWindowsTabletLayout(context);
+    }
+    return _buildMobileLayout(context);
   }
 
   Widget _buildTvLayout(BuildContext context) {
-    return ValueListenableBuilder<bool>(
-      valueListenable: _initedNotifier,
-      builder: (context, isInited, _) {
-        return TvPlayerLayout(
-          data: _svc.data,
-          videoList: videoList,
-          currPlayIndex: currPlayIndex,
-          currUrl: currUrl,
-          sourceNames: _sourceNames,
-          inited: isInited,
-          controller: ctr,
-          danmakuController: danmakuController,
-          onEpisodeChanged: changePlayIndex,
-          onUrlChanged: changeUrl,
-          onWatchPartyPressed: () => WatchPartySheet.show(context, _watchParty),
-          isSearching: _autoMatchController != null,
-        );
-      },
+    return TvPlayerLayout(
+      data: _svc.data,
+      videoList: videoList,
+      currPlayIndex: currPlayIndex,
+      currUrl: currUrl,
+      sourceNames: _sourceNames,
+      inited: inited,
+      controller: ctr,
+      danmakuController: danmakuController,
+      onEpisodeChanged: changePlayIndex,
+      onUrlChanged: changeUrl,
+      onWatchPartyPressed: () => WatchPartySheet.show(context, _watchParty),
+      isSearching: _autoMatchController != null,
     );
   }
 
   Widget _buildWindowsTabletLayout(BuildContext context) {
     return _withImmersiveStatusBar(
-      ListenableBuilder(
-        listenable: Listenable.merge([
-          _initedNotifier,
-          _terminalFailureNotifier,
-        ]),
-        builder: (context, _) {
-          return WindowsPlayerLayout(
-            torrent: _svc.torrent,
-            data: _svc.data,
-            videoList: videoList,
-            currPlayIndex: currPlayIndex,
-            currUrl: currUrl,
-            sourceNames: _sourceNames,
-            inited: _initedNotifier.value,
-            controller: ctr,
-            danmakuController: danmakuController,
-            bgmInfo: _bgmInfo,
-            followNotifier: _followNotifier,
-            cachedTags: _cachedTags,
-            sourceName: _currentSourceName,
-            lineName: _currentLineName,
-            isSearching: _autoMatchController != null,
-            onShowDetail: () => BgmDetailPage.show(
-              context,
-              title: _svc.title,
-              subjectId: _bgmInfo.subjectId,
-              imageUrl: _svc.coverImageUrl ?? '',
-              fixedSummary: _fixedSummary,
-              initialScore: _bgmInfo.score,
-            ),
-            onSourceTap: _openSourceSwitchSheet,
-            commentKey: commentKey,
-            onEpisodeChanged: changePlayIndex,
-            onCastPressed: () => showCast(context),
-            onWatchPartyPressed: () =>
-                WatchPartySheet.show(context, _watchParty),
-            onPickEpisode: () => _showEpisodePicker(),
-            onFullScreenChanged: (value) {
-              _playerFullscreen.value = value;
-            },
-            onUrlChanged: changeUrl,
-            onCommentLinkTap: (text, url, title) => handleCommentLinkTap(
-              text: text,
-              url: url,
-              title: title,
-              controller: ctr,
-              currentPlayIndex: currPlayIndex,
-              videoList: videoList,
-              onChangePlayIndex: changePlayIndex,
-            ),
-            onDownloadPressed: () => _showEpisodePicker(downloadMode: true),
-            onFollowPressed: toggleFollow,
-            terminalPlaybackFailure: _terminalFailureNotifier.value != null,
-            onAiRepair: _openAiRuleRepair,
-          );
+      WindowsPlayerLayout(
+        torrent: _svc.torrent,
+        data: _svc.data,
+        videoList: videoList,
+        currPlayIndex: currPlayIndex,
+        currUrl: currUrl,
+        sourceNames: _sourceNames,
+        inited: inited,
+        controller: ctr,
+        danmakuController: danmakuController,
+        bgmInfo: _bgmInfo,
+        followNotifier: _followNotifier,
+        sourceName: _currentSourceName,
+        lineName: _currentLineName,
+        isSearching: _autoMatchController != null,
+        onSourceTap: _openSourceSwitchSheet,
+        commentKey: commentKey,
+        onEpisodeChanged: changePlayIndex,
+        onCastPressed: () => showCast(context),
+        onWatchPartyPressed: () => WatchPartySheet.show(context, _watchParty),
+        onPickEpisode: () => _showEpisodePicker(),
+        onFullScreenChanged: (value) {
+          _playerFullscreen.value = value;
         },
+        onUrlChanged: changeUrl,
+        onCommentLinkTap: (text, url, title) => handleCommentLinkTap(
+          text: text,
+          url: url,
+          title: title,
+          controller: ctr,
+          currentPlayIndex: currPlayIndex,
+          videoList: videoList,
+          onChangePlayIndex: changePlayIndex,
+        ),
+        onDownloadPressed: () => _showEpisodePicker(downloadMode: true),
+        onFollowPressed: toggleFollow,
+        terminalPlaybackFailure: _terminalFailure != null,
+        onAiRepair: _openAiRuleRepair,
       ),
     );
-  }
-
-  String _getCurrentVideoUrl() {
-    if (_resolvedUrl.isNotEmpty) return _resolvedUrl;
-    if (!_isAdapter) return '';
-    return ctr.currentMediaUri ?? '';
   }
 
   String get _currentSourceName {
@@ -823,34 +811,8 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
         _svc.data['source'] == nextData['source'] &&
         _svc.data['seriesUrl'] == nextData['seriesUrl'];
     final selectedLine = BgmUtils.toInt(nextData['currUrl']) ?? currUrl;
-    final isSameLine = currUrl == selectedLine;
-
-    if (isSameSource) {
-      _svc.adoptPlaybackData(nextData);
-      if (!isSameLine) {
-        changeUrl(selectedLine);
-      }
-      return;
-    }
-
-    await _saveProgress();
-    if (!mounted) return;
-    _svc.saveHistory(
-      positionMs: ctr.timeline.value.position.inMilliseconds,
-      durationMs: ctr.timeline.value.duration.inMilliseconds,
-    );
-
-    Navigator.of(context).pushReplacement(
-      platformPageRoute<void>(
-        builder: (_) => PlayerPage(
-          request: PlaybackRequest.fromMap(nextData),
-          posIndex: currPlayIndex,
-        ),
-        transitionDuration: const Duration(milliseconds: 220),
-        transitionsBuilder: (context, animation, secondaryAnimation, child) =>
-            FadeTransition(opacity: animation, child: child),
-      ),
-    );
+    if (isSameSource && currUrl == selectedLine) return;
+    await _adoptPlaybackSource(nextData, resetPlayback: true);
   }
 
   Widget _withImmersiveStatusBar(Widget child) {
@@ -862,15 +824,11 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
   }
 
   Widget _buildLocalLayout(BuildContext context) {
-    // 仅在 _initedNotifier 切换时重建本地播放器的 body，外层 Scaffold/AnnotatedRegion 保持稳定
     return _withImmersiveStatusBar(
       Scaffold(
         backgroundColor: Colors.black,
-        body: ValueListenableBuilder<bool>(
-          valueListenable: _initedNotifier,
-          builder: (context, isInited, _) {
-            if (isInited) {
-              return BakaPlayer(
+        body: inited
+            ? BakaPlayer(
                 controller: ctr,
                 full: true,
                 hasNextEpisode: currPlayIndex + 1 < videoList.length,
@@ -900,16 +858,15 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
                   ),
                 ),
                 danmakuEnabled: true,
-              );
-            }
-            if (_svc.localFilePath != null) {
-              return const Center(
-                child: CircularProgressIndicator(color: Colors.white),
-              );
-            }
-            return const SizedBox.shrink();
-          },
-        ),
+              )
+            : Center(
+                child: _terminalFailure == null
+                    ? const CircularProgressIndicator(color: Colors.white)
+                    : const Text(
+                        '视频打开失败',
+                        style: TextStyle(color: Colors.white),
+                      ),
+              ),
       ),
     );
   }
@@ -941,19 +898,10 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
                   color: Colors.black,
                   child: AspectRatio(
                     aspectRatio: 16 / 9,
-                    child: AnimatedBuilder(
-                      animation: Listenable.merge([
-                        _initedNotifier,
-                        _terminalFailureNotifier,
-                      ]),
-                      builder: (context, _) {
-                        final failure = _terminalFailureNotifier.value;
-                        final isInited = _initedNotifier.value;
-                        if (failure != null && !isInited) {
-                          return _buildMobileTerminalFailure();
-                        }
-                        if (isInited) {
-                          return BakaPlayer(
+                    child: _terminalFailure != null && !inited
+                        ? _buildMobileTerminalFailure()
+                        : inited
+                        ? BakaPlayer(
                             controller: ctr,
                             canSearchSource: true,
                             danmakuEnabled: true,
@@ -966,38 +914,34 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
                               _playerFullscreen.value = value;
                             },
                             full: false,
-                            showPlaybackError: failure != null,
+                            showPlaybackError: _terminalFailure != null,
                             onAiRepair: _openAiRuleRepair,
-                          );
-                        }
-                        return Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              const SizedBox(
-                                width: 24,
-                                height: 24,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.white70,
+                          )
+                        : Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const SizedBox(
+                                  width: 24,
+                                  height: 24,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white70,
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(height: 12),
-                              Text(
-                                (_autoMatchController != null ||
-                                        widget.autoMatch)
-                                    ? '正在自动匹配源中...'
-                                    : '正在加载播放器...',
-                                style: const TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 13,
+                                const SizedBox(height: 12),
+                                Text(
+                                  _autoMatchController != null
+                                      ? '正在自动匹配源中...'
+                                      : '正在加载播放器...',
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 13,
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
-                        );
-                      },
-                    ),
                   ),
                 ),
                 Expanded(

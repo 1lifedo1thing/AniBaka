@@ -269,6 +269,11 @@ class PipelineInterpreter {
       case 'fetch':
       case 'follow':
         return _opFetch(step, ctx);
+      case 'delay':
+        final ms = step.intValue('ms') ?? step.intValue('delay') ?? 0;
+        if (ms > 0) {
+          return Future<void>.delayed(Duration(milliseconds: ms));
+        }
       case 'select':
         _opSelect(step, ctx);
       case 'regex':
@@ -330,6 +335,10 @@ class PipelineInterpreter {
   /// `fetch` / `follow`：发起 HTTP 请求，当前值变为响应体。
   /// `follow` 默认使用当前值作为 URL。
   Future<void> _opFetch(PipelineStep step, _PipelineContext ctx) async {
+    final delayMs = step.intValue('delayMs') ?? step.intValue('delay') ?? 0;
+    if (delayMs > 0) {
+      await Future<void>.delayed(Duration(milliseconds: delayMs));
+    }
     final template = step.str('url');
     final rawUrl = template != null && template.isNotEmpty
         ? _render(template, ctx)

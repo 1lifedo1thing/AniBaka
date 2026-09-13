@@ -38,10 +38,9 @@ final class AniBakaApi {
     return value == null ? null : parse(value);
   }
 
-  static Future<bool> _deleted(String url) async =>
-      ApiTransport.accepted(
-        await apiTransport.deleteJson<Map<String, dynamic>>(url),
-      );
+  static Future<bool> _deleted(String url) async => ApiTransport.accepted(
+    await apiTransport.deleteJson<Map<String, dynamic>>(url),
+  );
 
   static Future<AnimeCollection?> saveCollection(AnimeCollection collection) =>
       _read(
@@ -85,7 +84,9 @@ final class AniBakaApi {
   );
 
   static Future<AnimeCollection?> getCollectionByBgmId(int bgmId) => _read(
-    apiTransport.getData<Map<String, dynamic>>('$_baseUrl/bgm-collection/$bgmId'),
+    apiTransport.getData<Map<String, dynamic>>(
+      '$_baseUrl/bgm-collection/$bgmId',
+    ),
     AnimeCollection.fromJson,
   );
 
@@ -123,6 +124,9 @@ final class AniBakaApi {
         ),
       );
 
+  static Map<String, dynamic>? peekAnimeDetail(int bgmId) =>
+      _animeDetails.peek(bgmId);
+
   static Future<Map<String, dynamic>?> getEpisodeStills({
     int? bgmId,
     int? tmdbId,
@@ -156,16 +160,17 @@ final class AniBakaApi {
 
   static String get _watchBaseUrl => '$_baseUrl/watch';
 
-  static Future<WatchPartyInvite> createWatchRoom(WatchPartyMedia media) async =>
-      WatchPartyInvite.fromJson(
-        await _requiredData(
-          apiTransport.postJson<Map<String, dynamic>>('$_watchBaseUrl/rooms', {
-            'media': media.toJson(),
-          }, notifyOnError: false),
-          unavailable: '一起看服务暂时不可用',
-          failed: '创建一起看房间失败',
-        ),
-      );
+  static Future<WatchPartyInvite> createWatchRoom(
+    WatchPartyMedia media,
+  ) async => WatchPartyInvite.fromJson(
+    await _requiredData(
+      apiTransport.postJson<Map<String, dynamic>>('$_watchBaseUrl/rooms', {
+        'media': media.toJson(),
+      }, notifyOnError: false),
+      unavailable: '一起看服务暂时不可用',
+      failed: '创建一起看房间失败',
+    ),
+  );
 
   static Future<List<WatchPartyInvite>> listWatchRooms() async {
     final data = await _requiredData(
@@ -209,11 +214,12 @@ final class AniBakaApi {
   }
 
   static Future<void> closeWatchRoom(String roomId) => _requiredData(
-    apiTransport.deleteJson<Map<String, dynamic>>('$_watchBaseUrl/rooms/$roomId'),
+    apiTransport.deleteJson<Map<String, dynamic>>(
+      '$_watchBaseUrl/rooms/$roomId',
+    ),
     unavailable: '无法结束房间',
     failed: '无法结束房间',
   ).then((_) {});
-
 
   static Future<Map<String, dynamic>> _requiredData(
     Future<Map<String, dynamic>?> request, {

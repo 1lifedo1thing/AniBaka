@@ -80,27 +80,30 @@ class BakaApp extends StatelessWidget {
           lightColorScheme: useDynamicColor ? lightDynamic : null,
           darkColorScheme: useDynamicColor ? darkDynamic : null,
         );
-        final mediaQuery = MediaQuery.of(context);
-        return MediaQuery(
-          data: mediaQuery.copyWith(
-            textScaler: TextScaler.linear(appState.fontScale),
-            disableAnimations:
-                mediaQuery.disableAnimations || appState.reduceVisualEffects,
-          ),
-          child: MaterialApp(
-            debugShowCheckedModeBanner: false,
-            scrollBehavior: const AppScrollBehavior(),
-            navigatorKey: Instances.navigatorKey,
-            scaffoldMessengerKey: scaffoldMessengerKey,
-            themeMode: Instances.isTV
-                ? ThemeMode.dark
-                : appState.currentThemeMode,
-            theme: themes.light,
-            darkTheme: themes.dark,
-            home: const MyHomePage(),
-            title: 'Baka',
-            onGenerateRoute: _onGenerateRoute,
-          ),
+        return MaterialApp(
+          debugShowCheckedModeBanner: false,
+          scrollBehavior: const AppScrollBehavior(),
+          navigatorKey: Instances.navigatorKey,
+          scaffoldMessengerKey: scaffoldMessengerKey,
+          themeMode: Instances.isTV
+              ? ThemeMode.dark
+              : appState.currentThemeMode,
+          theme: themes.light,
+          darkTheme: themes.dark,
+          home: const MyHomePage(),
+          title: 'Baka',
+          onGenerateRoute: _onGenerateRoute,
+          builder: (context, child) {
+            final mediaQuery = MediaQuery.of(context);
+            return MediaQuery(
+              data: mediaQuery.copyWith(
+                textScaler: TextScaler.linear(appState.fontScale),
+                disableAnimations:
+                    mediaQuery.disableAnimations || appState.reduceVisualEffects,
+              ),
+              child: child ?? const SizedBox.shrink(),
+            );
+          },
         );
       }),
     );

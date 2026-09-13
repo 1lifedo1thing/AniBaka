@@ -13,11 +13,7 @@ import 'package:baka/instance.dart';
 import 'package:baka/source/runtime/scheduler_interceptor.dart';
 
 /// 直链可达性探测的结论。
-enum MediaReachabilityVerdict {
-  reachable,
-  rejected,
-  unknown,
-}
+enum MediaReachabilityVerdict { reachable, rejected, unknown }
 
 /// Base class for all video source adapters.
 abstract class AdapterBase {
@@ -84,7 +80,10 @@ abstract class AdapterBase {
   static const Duration _reachCacheTtl = Duration(minutes: 3);
   static const Duration _reachNegCacheTtl = Duration(minutes: 8);
   static const int _reachCacheLimit = 256;
-  static final Map<String, ({bool ok, int expiresAt, int timeoutMs})>
+  static final Map<
+    (String, bool),
+    ({bool ok, int expiresAt, int timeoutMs, Map<String, String> headers})
+  >
   _reachCache = {};
 
   bool get validatesOwnUrls => false;
@@ -117,7 +116,7 @@ abstract class AdapterBase {
       maxAttempts: maxAttempts,
     );
     if (url.isEmpty) {
-      debugPrint('$name: resolveDownloadUrl 解析结果为空');
+      debugPrint('$name: resolveDownloadUrl(episodeId: $episodeId) 解析结果为空');
       return '';
     }
 
@@ -131,9 +130,7 @@ abstract class AdapterBase {
         return '';
       }
       if (verdict == MediaReachabilityVerdict.unknown) {
-        debugPrint(
-          '$name: 直链结论不确定（超时/临时缺失/网络异常），保留待播放器验证: $url',
-        );
+        debugPrint('$name: 直链结论不确定（超时/临时缺失/网络异常），保留待播放器验证: $url');
       }
     }
 
@@ -156,6 +153,7 @@ abstract class AdapterBase {
   Future<MediaReachabilityVerdict> probeMediaReachability(
     String url, {
     Duration? timeout,
+    Map<String, String>? headers,
   }) async {
     final value = url.trim();
     if (value.isEmpty) return MediaReachabilityVerdict.rejected;
@@ -169,19 +167,26 @@ abstract class AdapterBase {
     if (validatesOwnUrls) return MediaReachabilityVerdict.reachable;
 
     final probeTimeoutMs = timeout?.inMilliseconds ?? 0;
-    final cached = _reachCache[value];
+    final effectiveHeaders = headers ?? mediaValidationHeaders;
+    final key = (value, useSystemProxy);
+    final cached = _reachCache[key];
     final now = DateTime.now().millisecondsSinceEpoch;
     if (cached != null) {
       if (cached.expiresAt > now &&
+          mapEquals(cached.headers, effectiveHeaders) &&
           (cached.ok || probeTimeoutMs <= cached.timeoutMs)) {
         return cached.ok
             ? MediaReachabilityVerdict.reachable
             : MediaReachabilityVerdict.rejected;
       }
-      _reachCache.remove(value);
+      _reachCache.remove(key);
     }
 
-    final verdict = await _probeDirectUrl(value, timeout: timeout);
+    final verdict = await _probeDirectUrl(
+      value,
+      timeout: timeout,
+      headers: effectiveHeaders,
+    );
     // 只缓存明确结论。「未知」一旦被负缓存，同一个可用地址会在之后数分钟
     // 里持续被误杀（负缓存 TTL 是 8 分钟）；临时媒体地址随时可能被重新
     // 生成，同样不做负缓存。
@@ -192,25 +197,21 @@ abstract class AdapterBase {
         !VideoUrlExtractor.isOnDemandMediaPath(value),
     };
     if (cacheable) {
-      _putReachCache(
-        value,
-        verdict == MediaReachabilityVerdict.reachable,
-        probeTimeoutMs,
+      if (_reachCache.length >= _reachCacheLimit &&
+          !_reachCache.containsKey(key)) {
+        _reachCache.remove(_reachCache.keys.first);
+      }
+      final ok = verdict == MediaReachabilityVerdict.reachable;
+      _reachCache[key] = (
+        ok: ok,
+        expiresAt:
+            DateTime.now().millisecondsSinceEpoch +
+            (ok ? _reachCacheTtl : _reachNegCacheTtl).inMilliseconds,
+        timeoutMs: probeTimeoutMs,
+        headers: Map.of(effectiveHeaders),
       );
     }
     return verdict;
-  }
-
-  static void _putReachCache(String url, bool ok, int timeoutMs) {
-    if (_reachCache.length >= _reachCacheLimit) {
-      _reachCache.remove(_reachCache.keys.first);
-    }
-    final ttl = ok ? _reachCacheTtl : _reachNegCacheTtl;
-    _reachCache[url] = (
-      ok: ok,
-      expiresAt: DateTime.now().millisecondsSinceEpoch + ttl.inMilliseconds,
-      timeoutMs: timeoutMs,
-    );
   }
 
   Future<String> _getDownloadUrlWithRetry(
@@ -230,19 +231,21 @@ abstract class AdapterBase {
     return '';
   }
 
-  static Dio _createValidationDio(bool useSystemProxy) => Dio(
-    BaseOptions(
-      followRedirects: true,
-      maxRedirects: 3,
-      receiveTimeout: const Duration(milliseconds: 2500),
-      sendTimeout: const Duration(milliseconds: 2000),
-      validateStatus: (_) => true,
-    ),
-  )..httpClientAdapter = IOHttpClientAdapter(
-    createHttpClient: useSystemProxy
-        ? SystemProxyService.createHttpClient
-        : SystemProxyService.createDirectHttpClient,
-  );
+  static Dio _createValidationDio(bool useSystemProxy) =>
+      Dio(
+          BaseOptions(
+            followRedirects: true,
+            maxRedirects: 3,
+            receiveTimeout: const Duration(milliseconds: 2500),
+            sendTimeout: const Duration(milliseconds: 2000),
+            validateStatus: (_) => true,
+          ),
+        )
+        ..httpClientAdapter = IOHttpClientAdapter(
+          createHttpClient: useSystemProxy
+              ? SystemProxyService.createHttpClient
+              : SystemProxyService.createDirectHttpClient,
+        );
 
   /// 探测用的共享客户端。路由必须和规则本身一致：声明 `directConnection`
   /// 的源若被拿去做代理探测，会因出口不同被判成死链。
@@ -264,46 +267,19 @@ abstract class AdapterBase {
     HttpStatus.gatewayTimeout,
   };
 
-  static const Set<int> _headFallbackStatuses = {
-    ..._rejectedStatuses,
-    HttpStatus.methodNotAllowed,
-  };
-
-  /// 「现在没有」类状态：内容可能只是尚未生成、刚被回收或后端抖动。
-  /// 命中这些状态时，临时媒体地址只记为「未知」，交给播放器验证。
-  static const Set<int> _transientRejectStatuses = {
-    HttpStatus.notFound,
-    HttpStatus.gone,
-    HttpStatus.internalServerError,
-    HttpStatus.badGateway,
-    HttpStatus.serviceUnavailable,
-    HttpStatus.gatewayTimeout,
-  };
-
-  /// 「凭据没对上」类状态：临时媒体地址带 token / 绑定会话，裸探测
-  /// （HEAD、`bytes=0-0` 这类请求）与播放器的完整请求并非同一种请求，
-  /// 401/403 往往只说明探测这一次没被放行。
-  static const Set<int> _authRejectStatuses = {
-    HttpStatus.unauthorized,
-    HttpStatus.forbidden,
-  };
-
-  /// 临时媒体地址上不足以判死链的状态。
-  static const Set<int> _ephemeralRejectStatuses = {
-    ..._transientRejectStatuses,
-    ..._authRejectStatuses,
-  };
-
-  /// 临时媒体地址的「保留待播放器验证」判定：只有明确说明「现在没有」
-  /// 或「这次没放行」的状态才放行；网页/JSON 形态的拒绝页仍判死链。
-  static bool _shouldKeepEphemeralOnReject(int statusCode, String? contentType) {
-    if (!_ephemeralRejectStatuses.contains(statusCode)) return false;
-    if (contentType != null && _htmlLikeContentType.hasMatch(contentType)) {
-      // 403 也可能是 WAF 拦截页：拿到网页就说明这不是媒体响应。
-      if (_authRejectStatuses.contains(statusCode)) return false;
-    }
-    return true;
-  }
+  // Temporary media may not exist yet; an HTML/JSON auth rejection is definitive.
+  static bool _shouldKeepEphemeralOnReject(int status, String? contentType) =>
+      switch (status) {
+        HttpStatus.unauthorized || HttpStatus.forbidden =>
+          contentType == null || !_htmlLikeContentType.hasMatch(contentType),
+        HttpStatus.notFound ||
+        HttpStatus.gone ||
+        HttpStatus.internalServerError ||
+        HttpStatus.badGateway ||
+        HttpStatus.serviceUnavailable ||
+        HttpStatus.gatewayTimeout => true,
+        _ => false,
+      };
 
   static final RegExp _htmlLikeContentType = RegExp(
     r'^\s*(?:text/html|application/xhtml|text/xml|application/xml|'
@@ -311,22 +287,39 @@ abstract class AdapterBase {
     caseSensitive: false,
   );
 
-  static Future<Response<dynamic>> _runValidationProbe(
-    Future<Response<dynamic>> Function(CancelToken cancelToken) send,
-    Duration timeout,
-  ) {
+  Future<Response<dynamic>> _requestProbe(
+    String url,
+    Duration timeout, {
+    required Map<String, String> headers,
+    String method = 'GET',
+    ResponseType responseType = ResponseType.stream,
+  }) {
     final cancelToken = CancelToken();
-    return send(cancelToken).timeout(
-      timeout,
-      onTimeout: () {
-        cancelToken.cancel('media reachability probe timed out');
-        throw TimeoutException('media reachability probe timed out', timeout);
-      },
-    );
+    return _probeDio
+        .request(
+          url,
+          cancelToken: cancelToken,
+          options: Options(
+            method: method,
+            headers: headers,
+            responseType: responseType,
+            receiveTimeout: timeout,
+            sendTimeout: timeout,
+          ),
+        )
+        .then((response) async {
+          if (response.data case final ResponseBody body) {
+            await body.stream.listen(null, onError: (Object _) {}).cancel();
+          }
+          return response;
+        })
+        .timeout(timeout)
+        .whenComplete(() => cancelToken.cancel('media probe complete'));
   }
 
   Future<MediaReachabilityVerdict> _probeDirectUrl(
     String url, {
+    required Map<String, String> headers,
     Duration? timeout,
   }) async {
     if (!url.startsWith('http')) return MediaReachabilityVerdict.rejected;
@@ -343,31 +336,20 @@ abstract class AdapterBase {
         (Instances.isTV
             ? const Duration(milliseconds: 2200)
             : const Duration(milliseconds: 1800));
-    final client = _probeDio;
 
     try {
-      final headers = mediaValidationHeaders;
       final isHls = VideoUrlExtractor.isHlsUrl(url);
 
       if (isHls) {
-        final resp = await _runValidationProbe(
-          (cancelToken) => client.get(
-            url,
-            cancelToken: cancelToken,
-            options: Options(
-              headers: {
-                ...headers,
-                'Range': 'bytes=0-2047',
-                'Accept':
-                    'application/vnd.apple.mpegurl,application/x-mpegURL,*/*',
-              },
-              responseType: ResponseType.plain,
-              receiveTimeout: probeTimeout,
-              sendTimeout: probeTimeout,
-              extra: const {'__reach_probe': true},
-            ),
-          ),
+        final resp = await _requestProbe(
+          url,
           probeTimeout,
+          headers: {
+            ...headers,
+            'Range': 'bytes=0-2047',
+            'Accept': 'application/vnd.apple.mpegurl,application/x-mpegURL,*/*',
+          },
+          responseType: ResponseType.plain,
         );
         if (_playlistLooksAlive(resp.statusCode, resp.data?.toString())) {
           return MediaReachabilityVerdict.reachable;
@@ -384,23 +366,18 @@ abstract class AdapterBase {
       }
 
       // 非 HLS：先 HEAD（快失败），再必要时 Range GET 一轮。
-      var resp = await _runValidationProbe(
-        (cancelToken) => client.head(
-          url,
-          cancelToken: cancelToken,
-          options: Options(
-            headers: headers,
-            receiveTimeout: probeTimeout,
-            sendTimeout: probeTimeout,
-          ),
-        ),
+      var resp = await _requestProbe(
+        url,
         probeTimeout,
+        method: 'HEAD',
+        headers: headers,
       );
 
       var code = resp.statusCode ?? 0;
       var contentType = resp.headers.value(HttpHeaders.contentTypeHeader);
       if (code != HttpStatus.ok && code != HttpStatus.partialContent) {
-        if (!_headFallbackStatuses.contains(code)) {
+        if (code != HttpStatus.methodNotAllowed &&
+            !_rejectedStatuses.contains(code)) {
           // 405/416/429/3xx 之类既非成功也非拒绝，不足以判死链。
           return MediaReachabilityVerdict.unknown;
         }
@@ -408,18 +385,10 @@ abstract class AdapterBase {
         final getTimeout = Duration(
           milliseconds: (probeTimeout.inMilliseconds * 0.85).round(),
         );
-        resp = await _runValidationProbe(
-          (cancelToken) => client.get(
-            url,
-            cancelToken: cancelToken,
-            options: Options(
-              headers: {...headers, 'Range': 'bytes=0-0'},
-              responseType: ResponseType.bytes,
-              receiveTimeout: getTimeout,
-              sendTimeout: getTimeout,
-            ),
-          ),
+        resp = await _requestProbe(
+          url,
           getTimeout,
+          headers: {...headers, 'Range': 'bytes=0-0'},
         );
         code = resp.statusCode ?? 0;
         contentType = resp.headers.value(HttpHeaders.contentTypeHeader);
@@ -432,9 +401,6 @@ abstract class AdapterBase {
         return MediaReachabilityVerdict.reachable;
       }
       if (_rejectedStatuses.contains(code)) {
-        // 404/410/5xx 说的是「现在没有」，401/403 说的是「这次没放行」。
-        // 按需生成的临时媒体（`/temp/...`）首次访问常常如此，几秒后同一
-        // 地址就能播：此类只保留，不判死。
         if (VideoUrlExtractor.isOnDemandMediaPath(url) &&
             _shouldKeepEphemeralOnReject(code, contentType)) {
           return MediaReachabilityVerdict.unknown;
@@ -442,12 +408,8 @@ abstract class AdapterBase {
         return MediaReachabilityVerdict.rejected;
       }
       return MediaReachabilityVerdict.unknown;
-    } on TimeoutException {
-      // 探不到 ≠ 死链：冷 CDN、整集大文件的首包常常超出竞速预算。
-      return MediaReachabilityVerdict.unknown;
-    } on DioException {
-      return MediaReachabilityVerdict.unknown;
     } catch (_) {
+      // A timeout or transport failure does not establish a dead URL.
       return MediaReachabilityVerdict.unknown;
     }
   }
@@ -497,8 +459,9 @@ abstract class AdapterBase {
   /// Allows adapters to prepare a stable player-facing representation of a
   /// resolved media URL, for example by materializing a remote HLS manifest.
   Future<({String url, Map<String, String> httpHeaders})> preparePlaybackMedia(
-    ({String url, Map<String, String> httpHeaders}) media,
-  ) => SynchronousFuture(media);
+    ({String url, Map<String, String> httpHeaders}) media, {
+    bool? filterHlsAds,
+  }) => SynchronousFuture(media);
 
   /// Stops the active playback authorization refresh, if any.
   void stopPlaybackKeepAlive() {}

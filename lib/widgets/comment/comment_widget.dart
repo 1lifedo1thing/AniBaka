@@ -221,7 +221,6 @@ class _CommentInputWidgetState extends State<CommentInputWidget> {
   }
 
   void _handleFocusChange() {
-    if (!mounted) return;
     setState(() {
       if (!_focusNode.hasFocus) _showEmoji = false;
     });
@@ -455,9 +454,6 @@ class CIslandCommentWidget extends StatefulWidget {
   State<CIslandCommentWidget> createState() => CIslandCommentWidgetState();
 }
 
-Color? _mutedColor(ThemeData theme, {double alpha = 0.35}) =>
-    theme.textTheme.bodySmall?.color?.withValues(alpha: alpha);
-
 class CIslandCommentWidgetState extends State<CIslandCommentWidget>
     with AutomaticKeepAliveClientMixin<CIslandCommentWidget> {
   final _commentKey = GlobalKey<CommentListState>();
@@ -471,7 +467,7 @@ class CIslandCommentWidgetState extends State<CIslandCommentWidget>
     super.didUpdateWidget(oldWidget);
     if (widget.bgmSubjectId != oldWidget.bgmSubjectId ||
         widget.episodeIndex != oldWidget.episodeIndex) {
-      setState(() => _bgmRequest = _loadBgmComments());
+      _bgmRequest = _loadBgmComments();
     }
   }
 
@@ -505,11 +501,7 @@ class CIslandCommentWidgetState extends State<CIslandCommentWidget>
   Future<void> sendComment(String rawText) async {
     final text = rawText.trim();
     if (text.isEmpty) return;
-    if (apiTransport.session.token.isNotEmpty) {
-      await _commentKey.currentState?.sendComment(text, 0, '');
-      return;
-    }
-    if (!bangumiSession.isConnected) {
+    if (apiTransport.session.token.isNotEmpty || !bangumiSession.isConnected) {
       await _commentKey.currentState?.sendComment(text, 0, '');
       return;
     }
@@ -721,7 +713,7 @@ class CIslandCommentWidgetState extends State<CIslandCommentWidget>
   }
 
   Widget _buildBgmComment(_BgmComment comment, ThemeData theme) {
-    final mutedColor = _mutedColor(theme, alpha: 0.4);
+    final mutedColor = theme.textTheme.bodySmall?.color?.withValues(alpha: 0.4);
     final badge = Container(
       padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
       decoration: BoxDecoration(
@@ -843,7 +835,6 @@ class CIslandCommentWidgetState extends State<CIslandCommentWidget>
             : '',
         content: content,
         replies: replies,
-        avatarSize: 36,
         avatarPadding: 2,
         spacing: 12,
       ),

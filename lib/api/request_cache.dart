@@ -41,6 +41,7 @@ final class RequestCache<K, V> {
               _evictForRoom();
               _entries[key] = _RequestEntry(
                 request,
+                value,
                 ttl == null
                     ? null
                     : DateTime.now().millisecondsSinceEpoch +
@@ -64,6 +65,18 @@ final class RequestCache<K, V> {
     _pending.remove(key);
   }
 
+  /// Reads a completed, unexpired value for first-frame UI initialization.
+  /// Pending requests never supply a partial/default value.
+  V? peek(K key) {
+    final entry = _entries.remove(key);
+    if (entry == null) return null;
+    if (entry.expiresAt != null &&
+        DateTime.now().millisecondsSinceEpoch >= entry.expiresAt!)
+      return null;
+    _entries[key] = entry;
+    return entry.result;
+  }
+
   /// 直接登记一个已算好的值（例如探针已解析出的播放数据）。
   void put(K key, V value) {
     _pending.remove(key);
@@ -72,6 +85,7 @@ final class RequestCache<K, V> {
     _evictForRoom();
     _entries[key] = _RequestEntry(
       Future<V>.value(value),
+      value,
       ttl == null
           ? null
           : DateTime.now().millisecondsSinceEpoch + ttl!.inMilliseconds,
@@ -113,8 +127,9 @@ final class RequestDeduplicator<K, V> {
 }
 
 final class _RequestEntry<V> {
-  const _RequestEntry(this.value, this.expiresAt);
+  const _RequestEntry(this.value, this.result, this.expiresAt);
 
   final Future<V> value;
+  final V result;
   final int? expiresAt;
 }

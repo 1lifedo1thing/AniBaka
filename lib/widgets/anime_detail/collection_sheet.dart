@@ -70,20 +70,23 @@ class CollectionStatusSheet extends StatelessWidget {
               ),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: [
-                    for (final status in CollectionStatus.values)
-                      _StatusChip(
-                        status: status,
-                        isSelected: currentStatus == status,
-                        onTap: () {
-                          HapticFeedback.selectionClick();
-                          onSelect(status);
-                        },
-                      ),
-                  ],
+                child: LayoutBuilder(
+                  builder: (context, constraints) => Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      for (final status in CollectionStatus.values)
+                        _StatusChip(
+                          width: (constraints.maxWidth - 10) / 2,
+                          status: status,
+                          isSelected: currentStatus == status,
+                          onTap: () {
+                            HapticFeedback.selectionClick();
+                            onSelect(status);
+                          },
+                        ),
+                    ],
+                  ),
                 ),
               ),
               if (onRemove != null) ...[
@@ -161,11 +164,13 @@ class _CurrentBadge extends StatelessWidget {
 }
 
 class _StatusChip extends StatelessWidget {
+  final double width;
   final CollectionStatus status;
   final bool isSelected;
   final VoidCallback onTap;
 
   const _StatusChip({
+    required this.width,
     required this.status,
     required this.isSelected,
     required this.onTap,
@@ -179,7 +184,7 @@ class _StatusChip extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        width: (MediaQuery.sizeOf(context).width - 42) / 2,
+        width: width,
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           color: isSelected
@@ -252,7 +257,6 @@ class _RemoveButton extends StatelessWidget {
       onTap: () {
         HapticFeedback.heavyImpact();
         onTap();
-        Navigator.of(context).pop();
       },
       child: Container(
         width: double.infinity,

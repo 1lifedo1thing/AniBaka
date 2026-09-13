@@ -25,6 +25,14 @@ final _relatedCache = RequestCache<int, List<Map<String, dynamic>>>(
   limit: 16,
   ttl: _bgmCacheTtl,
 );
+final _characterInfoCache = RequestCache<int, Map<String, dynamic>>(
+  limit: 16,
+  ttl: _bgmCacheTtl,
+);
+final _characterCommentsCache = RequestCache<int, List<Map<String, dynamic>>>(
+  limit: 8,
+  ttl: _bgmCacheTtl,
+);
 final _subjectCommentsCache = RequestCache<String, BgmCommentPage>(
   limit: 4,
   ttl: _bgmCacheTtl,
@@ -39,6 +47,9 @@ final _searchCache = RequestCache<String, List<BgmSubjectInfo>>(
 );
 
 /// v0 条目原始响应（含 infobox / tags / rating.count / collection）。
+Map<String, dynamic>? peekBgmSubject(int subjectId) =>
+    _subjectCache.peek(subjectId);
+
 Future<Map<String, dynamic>> getBgmSubject(int subjectId) => _subjectCache.get(
   subjectId,
   () => apiTransport.getMap('$_bgmApiBase/v0/subjects/$subjectId'),
@@ -129,15 +140,20 @@ Future<List<Map<String, dynamic>>> getBgmEpisodeComments(int episodeId) =>
     );
 
 Future<Map<String, dynamic>> getBgmCharacterInfo(int characterId) =>
-    apiTransport.getMap('$_bgmNextBase/p1/characters/$characterId');
+    _characterInfoCache.get(
+      characterId,
+      () => apiTransport.getMap('$_bgmNextBase/p1/characters/$characterId'),
+    );
 
-Future<List<Map<String, dynamic>>> getBgmCharacterComments(
-  int characterId,
-) async => BgmUtils.asMapList(
-  await apiTransport.getRawList(
-    '$_bgmNextBase/p1/characters/$characterId/comments',
-  ),
-);
+Future<List<Map<String, dynamic>>> getBgmCharacterComments(int characterId) =>
+    _characterCommentsCache.get(
+      characterId,
+      () async => BgmUtils.asMapList(
+        await apiTransport.getRawList(
+          '$_bgmNextBase/p1/characters/$characterId/comments',
+        ),
+      ),
+    );
 
 /// 通过标签搜索 BGM 动画
 ///
@@ -210,7 +226,8 @@ Future<({int? episodeId, String name})?> resolveBgmEpisodeByIndex(
   final episode = rawEpisodes[episodeIndex];
   return (
     episodeId: BgmUtils.toInt(episode['id']),
-    name: BgmUtils.trimmed(episode['name_cn']) ??
+    name:
+        BgmUtils.trimmed(episode['name_cn']) ??
         BgmUtils.trimmed(episode['name']) ??
         '',
   );
@@ -305,9 +322,8 @@ Future<List<BgmSubjectInfo>> _search(String keyword) async {
       final items = response['data'] as List<dynamic>;
       return List<BgmSubjectInfo>.generate(
         items.length,
-        (index) => BgmSubjectInfo.fromJson(
-          items[index] as Map<String, dynamic>,
-        ),
+        (index) =>
+            BgmSubjectInfo.fromJson(items[index] as Map<String, dynamic>),
         growable: false,
       );
     });

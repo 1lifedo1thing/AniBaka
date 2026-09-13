@@ -1,7 +1,5 @@
 import 'package:baka/core/api_transport.dart';
 import 'package:baka/services/account/bangumi_session.dart';
-import 'package:baka/core/account_session.dart';
-import 'package:baka/models/app_user.dart';
 import 'package:baka/api/post.dart';
 import 'package:baka/utils/date_util.dart';
 import 'package:baka/utils/image_utils.dart';
@@ -14,11 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:get/get.dart' hide ContextExtensionss;
 import 'package:url_launcher/url_launcher_string.dart';
-
-Color? _commentMutedColor(ThemeData theme, {double alpha = 0.35}) =>
-    theme.textTheme.bodySmall?.color?.withValues(alpha: alpha);
 
 class CommentTile extends StatelessWidget {
   const CommentTile({
@@ -29,11 +23,8 @@ class CommentTile extends StatelessWidget {
     required this.content,
     this.badge,
     this.replies,
-    this.actions,
-    this.avatarSize = 40,
     this.avatarPadding = 4,
     this.spacing = 14,
-    this.showDivider = false,
     super.key,
   });
 
@@ -44,83 +35,64 @@ class CommentTile extends StatelessWidget {
   final Widget content;
   final Widget? badge;
   final Widget? replies;
-  final Widget? actions;
-  final double avatarSize;
   final double avatarPadding;
   final double spacing;
-  final bool showDivider;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.symmetric(horizontal: showDivider ? 4 : 0),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: EdgeInsets.only(top: avatarPadding),
-            child: avatar,
-          ),
-          SizedBox(width: spacing),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.baseline,
-                  textBaseline: TextBaseline.alphabetic,
-                  children: [
-                    Flexible(
-                      child: Text(
-                        name,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: showDivider ? 0.2 : 0,
-                          color: nameColor,
-                        ),
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: EdgeInsets.only(top: avatarPadding),
+          child: avatar,
+        ),
+        SizedBox(width: spacing),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
+                children: [
+                  Flexible(
+                    child: Text(
+                      name,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0,
+                        color: nameColor,
                       ),
-                    ),
-                    if (badge case final badge?) ...[
-                      const SizedBox(width: 6),
-                      badge,
-                    ],
-                    const SizedBox(width: 8),
-                    if (time.isNotEmpty)
-                      Text(
-                        time,
-                        style: TextStyle(
-                          fontSize: showDivider ? 12 : 11,
-                          letterSpacing: showDivider ? 0.2 : 0,
-                          fontWeight: showDivider ? FontWeight.w500 : null,
-                          color: _commentMutedColor(
-                            Theme.of(context),
-                            alpha: showDivider ? 0.35 : 0.4,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-                SizedBox(height: showDivider ? 6 : 4),
-                content,
-                ?actions,
-                ?replies,
-                if (showDivider)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 12),
-                    child: Divider(
-                      height: 0.5,
-                      color: Theme.of(
-                        context,
-                      ).dividerColor.withValues(alpha: 0.08),
                     ),
                   ),
-              ],
-            ),
+                  if (badge case final badge?) ...[
+                    const SizedBox(width: 6),
+                    badge,
+                  ],
+                  const SizedBox(width: 8),
+                  if (time.isNotEmpty)
+                    Text(
+                      time,
+                      style: TextStyle(
+                        fontSize: 11,
+                        letterSpacing: 0,
+                        color: Theme.of(
+                          context,
+                        ).textTheme.bodySmall?.color?.withValues(alpha: 0.4),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              content,
+              ?replies,
+            ],
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
@@ -133,6 +105,7 @@ class CommentList extends StatefulWidget {
     this.onTapLink,
     this.autoLoad = true,
     this.asSliver = false,
+    this.onRefresh,
     super.key,
   });
 
@@ -141,6 +114,7 @@ class CommentList extends StatefulWidget {
   final int? size;
   final Function(String, String?, String)? onTapLink;
   final bool autoLoad;
+  final Future<void> Function()? onRefresh;
 
   /// 嵌入 [CustomScrollView] 时直接生成惰性 Sliver，避免 shrinkWrap 全量构建。
   final bool asSliver;
@@ -151,20 +125,18 @@ class CommentList extends StatefulWidget {
 
 class CommentListState extends State<CommentList> {
   static final _contentLinkPattern = RegExp(
-    r'gv(\d+)'
+    r'```[\s\S]*?```|`[^`\n]*`|!?\[[^\[\]\n]*\]\([^\s()]*\)|https?://[^\s<>]+'
+    r'|gv(\d+)'
     r'|[Pp](\d+)\s*(\d{1,2}:\d{2}(?::\d{2})?)'
     r'|\b(\d{1,2}:\d{2}(?::\d{2})?)\b',
   );
 
-  AppUser get _user => Get.find<AccountSession>().user.value;
   List? _internalComments;
   int _requestSerial = 0;
   late MarkdownStyleSheet _markdownStyle;
   ThemeData? _markdownTheme;
 
   List? get _effectiveComments => widget.comments ?? _internalComments;
-  bool get needsLoad => _effectiveComments == null;
-  List get comments => _effectiveComments ?? const [];
 
   @override
   void initState() {
@@ -211,9 +183,10 @@ class CommentListState extends State<CommentList> {
   @override
   void didUpdateWidget(covariant CommentList oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.pid != oldWidget.pid && widget.comments == null) {
+    if (widget.pid != oldWidget.pid || widget.autoLoad != oldWidget.autoLoad) {
+      ++_requestSerial;
       _internalComments = null;
-      _loadComments();
+      if (widget.comments == null && widget.autoLoad) _loadComments();
     }
   }
 
@@ -222,9 +195,7 @@ class CommentListState extends State<CommentList> {
     List result;
 
     try {
-      result = processCommentsList(
-        await getComments(widget.pid, widget.size ?? 80, ''),
-      );
+      result = await getComments(widget.pid, widget.size ?? 80, '');
     } catch (error) {
       debugPrint('获取评论失败: $error');
       result = [];
@@ -260,31 +231,6 @@ class CommentListState extends State<CommentList> {
     });
   }
 
-  /// 接口数据只预处理一次；原地更新可避免为整棵回复树创建副本。
-  static List processCommentsList(List? data) {
-    if (data == null || data.isEmpty) return [];
-
-    for (final item in data) {
-      if (item is! Map) continue;
-      final content = item['content'];
-      if (content != null) item['content'] = processContent(content.toString());
-
-      final replies = item['replies'];
-      if (replies is! List) continue;
-      for (final reply in replies) {
-        if (reply is Map && reply['content'] != null) {
-          reply['content'] = processContent(reply['content'].toString());
-        }
-      }
-    }
-    return data;
-  }
-
-  void setComments(List newComments) {
-    if (!mounted) return;
-    setState(() => _internalComments = newComments);
-  }
-
   static final Map<String, dynamic> _dummyComment = {
     'uname': '用户名称占位符',
     'time': '2026-08-06 12:00:00',
@@ -298,7 +244,6 @@ class CommentListState extends State<CommentList> {
     final comments = _effectiveComments;
 
     if (comments == null) {
-      final nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
       final loading = AppSkeletonizer(
         enabled: true,
         child: Column(
@@ -306,12 +251,10 @@ class CommentListState extends State<CommentList> {
             3,
             (_) => Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
-              child: _buildCommentItem(
-                context,
-                _dummyComment,
-                theme,
-                _markdownStyle,
-                nowSeconds,
+              child: _CommentCard(
+                comment: _dummyComment,
+                markdownStyle: _markdownStyle,
+                onReply: sendComment,
               ),
             ),
           ),
@@ -347,13 +290,12 @@ class CommentListState extends State<CommentList> {
       return widget.asSliver ? SliverToBoxAdapter(child: empty) : empty;
     }
 
-    final nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    Widget buildComment(int index) => _buildCommentItem(
-      context,
-      comments[index] as Map,
-      theme,
-      _markdownStyle,
-      nowSeconds,
+    Widget buildComment(int index) => _CommentCard(
+      key: ValueKey(comments[index]['id'] ?? index),
+      comment: comments[index] as Map,
+      markdownStyle: _markdownStyle,
+      onTapLink: widget.onTapLink,
+      onReply: sendComment,
     );
 
     Widget buildSeparator() => Padding(
@@ -385,13 +327,96 @@ class CommentListState extends State<CommentList> {
     );
   }
 
-  Widget _buildCommentItem(
-    BuildContext context,
-    Map comment,
-    ThemeData theme,
-    MarkdownStyleSheet markdownStyle,
-    int nowSeconds,
-  ) {
+  Future<void> sendComment(String text, int rid, String runame) async {
+    if (!mounted) return;
+    final pid = widget.pid;
+    final refresh = widget.onRefresh ?? _loadComments;
+    final content = text.trim();
+    if (content.isEmpty) {
+      showSnackBar('要写内容~');
+      return;
+    }
+    final user = apiTransport.session.user.value;
+    if (!user.isLoggedIn) {
+      showSnackBar(
+        bangumiSession.isConnected
+            ? 'Bangumi 登录不能回复 AniBaka 评论，请先登录 AniBaka'
+            : '登录后才能评论~',
+      );
+      return;
+    }
+
+    try {
+      final success = await addComment({
+        'content': content,
+        'pid': pid,
+        'uid': user.id,
+        'rid': rid,
+        'runame': runame,
+        'read': 0,
+      });
+      if (success) {
+        showSnackBar('发射成功');
+        if (mounted && widget.pid == pid) await refresh();
+      }
+    } catch (error) {
+      showSnackBar(error.toString());
+    }
+  }
+}
+
+class _CommentCard extends StatefulWidget {
+  const _CommentCard({
+    required this.comment,
+    required this.markdownStyle,
+    required this.onReply,
+    this.onTapLink,
+    super.key,
+  });
+
+  final Map comment;
+  final MarkdownStyleSheet markdownStyle;
+  final Future<void> Function(String, int, String) onReply;
+  final MarkdownTapLinkCallback? onTapLink;
+
+  @override
+  State<_CommentCard> createState() => _CommentCardState();
+}
+
+class _CommentCardState extends State<_CommentCard> {
+  String? _rawContent;
+  MarkdownStyleSheet? _style;
+  late Widget _body;
+  bool _liking = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final comment = widget.comment;
+    final theme = Theme.of(context);
+    final nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final raw = comment['content']?.toString() ?? '';
+    if (raw != _rawContent || _style != widget.markdownStyle) {
+      _rawContent = raw;
+      _style = widget.markdownStyle;
+      _body = MarkdownBody(
+        selectable: true,
+        data: CommentListState.processContent(raw),
+        onTapLink: (text, url, title) {
+          if (url == null) return;
+          if (widget.onTapLink != null) {
+            widget.onTapLink!(text, url, title);
+          } else if (!url.startsWith('time')) {
+            launchUrlString(
+              url.startsWith('gv') ? 'https://www.anibaka.com/play/$url' : url,
+              mode: LaunchMode.externalApplication,
+            );
+          }
+        },
+        styleSheetTheme: MarkdownStyleSheetBaseTheme.platform,
+        styleSheet: widget.markdownStyle,
+        sizedImageBuilder: (config) => _buildMarkdownImage(config.uri, theme),
+      );
+    }
     final isVip = (comment['uviptime'] as num? ?? 0) > nowSeconds;
     final isUp = (comment['ulevel'] as num? ?? 0) > 1;
     final nameColor = isUp
@@ -402,7 +427,7 @@ class CommentListState extends State<CommentList> {
     final mutedColor = theme.textTheme.bodySmall?.color?.withValues(
       alpha: 0.35,
     );
-    final user = _user;
+    final user = apiTransport.session.user.value;
     final userName = user.isLoggedIn ? user.name : null;
     final likes = comment['uv']?.toString() ?? '';
     final isLiked = userName != null && likes.contains(userName);
@@ -446,27 +471,7 @@ class CommentListState extends State<CommentList> {
       content: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          MarkdownBody(
-            selectable: true,
-            data: comment['content']?.toString() ?? '',
-            onTapLink: (text, url, title) {
-              if (url == null) return;
-              if (widget.onTapLink != null) {
-                widget.onTapLink!(text, url, title);
-              } else if (!url.startsWith('time')) {
-                launchUrlString(
-                  url.startsWith('gv')
-                      ? 'https://www.anibaka.com/play/$url'
-                      : url,
-                  mode: LaunchMode.externalApplication,
-                );
-              }
-            },
-            styleSheetTheme: MarkdownStyleSheetBaseTheme.platform,
-            styleSheet: markdownStyle,
-            sizedImageBuilder: (config) =>
-                _buildMarkdownImage(config.uri, theme),
-          ),
+          _body,
           const SizedBox(height: 10),
           if (user.isLoggedIn)
             Row(
@@ -491,6 +496,8 @@ class CommentListState extends State<CommentList> {
                       : Icons.favorite_border_rounded,
                   color: isLiked ? theme.colorScheme.primary : mutedColor,
                   onTap: () async {
+                    if (_liking) return;
+                    _liking = true;
                     HapticFeedback.selectionClick();
                     try {
                       comment['uv'] = await updateCommentUv(
@@ -501,6 +508,8 @@ class CommentListState extends State<CommentList> {
                       setState(() {});
                     } catch (_) {
                       showSnackBar('操作失败');
+                    } finally {
+                      _liking = false;
                     }
                   },
                 ),
@@ -512,7 +521,7 @@ class CommentListState extends State<CommentList> {
                     HapticFeedback.selectionClick();
                     final result = await CommentInputWidget.show(context);
                     if (result != null) {
-                      await sendComment(
+                      await widget.onReply(
                         result,
                         comment['id'] as int,
                         comment['uname']?.toString() ?? '',
@@ -601,7 +610,7 @@ class CommentListState extends State<CommentList> {
                 HapticFeedback.lightImpact();
                 final result = await CommentInputWidget.show(context);
                 if (result != null) {
-                  await sendComment(
+                  await widget.onReply(
                     result,
                     parentComment['id'] as int,
                     reply['uname']?.toString() ?? '',
@@ -710,39 +719,5 @@ class CommentListState extends State<CommentList> {
         child: Icon(icon, size: 18, color: color),
       ),
     );
-  }
-
-  Future<void> sendComment(String text, int rid, String runame) async {
-    final content = text.trim();
-    if (content.isEmpty) {
-      showSnackBar('要写内容~');
-      return;
-    }
-    final user = _user;
-    if (!user.isLoggedIn) {
-      showSnackBar(
-        bangumiSession.isConnected
-            ? 'Bangumi 登录不能回复 AniBaka 评论，请先登录 AniBaka'
-            : '登录后才能评论~',
-      );
-      return;
-    }
-
-    try {
-      final success = await addComment({
-        'content': content,
-        'pid': widget.pid,
-        'uid': user.id,
-        'rid': rid,
-        'runame': runame,
-        'read': 0,
-      });
-      if (success) {
-        showSnackBar('发射成功');
-        await _loadComments();
-      }
-    } catch (error) {
-      showSnackBar(error.toString());
-    }
   }
 }

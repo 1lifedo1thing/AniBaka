@@ -27,10 +27,8 @@ class WindowsPlayerLayout extends StatefulWidget {
   final DanmakuController danmakuController;
   final BgmInfo bgmInfo;
   final ValueNotifier<bool> followNotifier;
-  final List<String> cachedTags;
   final String sourceName;
   final String? lineName;
-  final VoidCallback onShowDetail;
   final VoidCallback onSourceTap;
   final GlobalKey<CIslandCommentWidgetState> commentKey;
   final void Function(int) onEpisodeChanged;
@@ -56,10 +54,8 @@ class WindowsPlayerLayout extends StatefulWidget {
     required this.controller,
     required this.danmakuController,
     required this.followNotifier,
-    required this.cachedTags,
     required this.sourceName,
     required this.lineName,
-    required this.onShowDetail,
     required this.onSourceTap,
     required this.commentKey,
     required this.onEpisodeChanged,
@@ -85,8 +81,14 @@ class WindowsPlayerLayout extends StatefulWidget {
 
 class _WindowsPlayerLayoutState extends State<WindowsPlayerLayout> {
   bool _showSidebar = true;
-  int _sidebarTabIndex = 0;
+  final _sidebarTabIndex = ValueNotifier<int>(0);
   bool _isFullScreen = false;
+
+  @override
+  void dispose() {
+    _sidebarTabIndex.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -110,7 +112,13 @@ class _WindowsPlayerLayoutState extends State<WindowsPlayerLayout> {
                     minWidth: 380,
                     maxWidth: 380,
                     alignment: Alignment.topLeft,
-                    child: _buildSidebar(context),
+                    child: TickerMode(
+                      enabled: shouldShowSidebar,
+                      child: ValueListenableBuilder<int>(
+                        valueListenable: _sidebarTabIndex,
+                        builder: (context, _, _) => _buildSidebar(context),
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -157,8 +165,8 @@ class _WindowsPlayerLayoutState extends State<WindowsPlayerLayout> {
               },
               showPlaybackError: false,
             ),
-          if (!widget.inited) _buildLoadingState(context),
-          if (widget.terminalPlaybackFailure) _buildErrorState(context),
+          if (!widget.inited || widget.terminalPlaybackFailure)
+            _buildPlaybackStatus(context),
         ],
       ),
     );
@@ -300,7 +308,7 @@ class _WindowsPlayerLayoutState extends State<WindowsPlayerLayout> {
     );
   }
 
-  Widget _buildLoadingState(BuildContext context) {
+  Widget _buildPlaybackStatus(BuildContext context) {
     final primaryColor = Theme.of(context).colorScheme.primary;
 
     return Container(
@@ -317,94 +325,72 @@ class _WindowsPlayerLayoutState extends State<WindowsPlayerLayout> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                SizedBox(
-                  width: 32,
-                  height: 32,
-                  child: CircularProgressIndicator(
-                    color: primaryColor,
-                    strokeWidth: 2.5,
+                if (!widget.terminalPlaybackFailure) ...[
+                  SizedBox(
+                    width: 32,
+                    height: 32,
+                    child: CircularProgressIndicator(
+                      color: primaryColor,
+                      strokeWidth: 2.5,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 14),
-                Text(
-                  widget.isSearching ? '正在自动匹配源中...' : '正在加载视频...',
-                  style: const TextStyle(color: Colors.white70, fontSize: 13),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildErrorState(BuildContext context) {
-    final primaryColor = Theme.of(context).colorScheme.primary;
-
-    return Container(
-      color: Colors.black,
-      child: Stack(
-        children: [
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: _buildTopHeaderBar(context),
-          ),
-          Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  Icons.error_outline_rounded,
-                  color: Colors.redAccent,
-                  size: 42,
-                ),
-                const SizedBox(height: 10),
-                const Text(
-                  '播放失败，请换源或重试',
-                  style: TextStyle(color: Colors.white, fontSize: 13.5),
-                ),
-                const SizedBox(height: 14),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  alignment: WrapAlignment.center,
-                  children: [
-                    ElevatedButton.icon(
-                      onPressed: widget.onSourceTap,
-                      icon: const Icon(Icons.swap_horiz_rounded, size: 17),
-                      label: const Text('切换播放源'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: primaryColor,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 8,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(6),
+                  const SizedBox(height: 14),
+                  Text(
+                    widget.isSearching ? '正在自动匹配源中...' : '正在加载视频...',
+                    style: const TextStyle(color: Colors.white70, fontSize: 13),
+                  ),
+                ] else ...[
+                  const Icon(
+                    Icons.error_outline_rounded,
+                    color: Colors.redAccent,
+                    size: 42,
+                  ),
+                  const SizedBox(height: 10),
+                  const Text(
+                    '播放失败，请换源或重试',
+                    style: TextStyle(color: Colors.white, fontSize: 13.5),
+                  ),
+                  const SizedBox(height: 14),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    alignment: WrapAlignment.center,
+                    children: [
+                      ElevatedButton.icon(
+                        onPressed: widget.onSourceTap,
+                        icon: const Icon(Icons.swap_horiz_rounded, size: 17),
+                        label: const Text('切换播放源'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: primaryColor,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 8,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(6),
+                          ),
                         ),
                       ),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: widget.onAiRepair,
-                      icon: const Icon(Icons.auto_awesome_rounded, size: 17),
-                      label: const Text('AI 修复当前源'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.white,
-                        side: const BorderSide(color: Colors.white54),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 8,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(6),
+                      OutlinedButton.icon(
+                        onPressed: widget.onAiRepair,
+                        icon: const Icon(Icons.auto_awesome_rounded, size: 17),
+                        label: const Text('AI 修复当前源'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.white,
+                          side: const BorderSide(color: Colors.white54),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 8,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(6),
+                          ),
                         ),
                       ),
-                    ),
-                  ],
-                ),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),
@@ -426,7 +412,7 @@ class _WindowsPlayerLayoutState extends State<WindowsPlayerLayout> {
           Expanded(
             child: AnimatedSwitcher(
               duration: const Duration(milliseconds: 180),
-              child: _sidebarTabIndex == 0
+              child: _sidebarTabIndex.value == 0
                   ? _buildPlaylistTab()
                   : _buildCommentTab(),
             ),
@@ -470,12 +456,12 @@ class _WindowsPlayerLayoutState extends State<WindowsPlayerLayout> {
     required IconData icon,
     required String title,
   }) {
-    final isSelected = _sidebarTabIndex == index;
+    final isSelected = _sidebarTabIndex.value == index;
     return Material(
       color: Colors.transparent,
       borderRadius: BorderRadius.circular(6),
       child: InkWell(
-        onTap: () => setState(() => _sidebarTabIndex = index),
+        onTap: () => _sidebarTabIndex.value = index,
         borderRadius: BorderRadius.circular(6),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
@@ -516,11 +502,6 @@ class _WindowsPlayerLayoutState extends State<WindowsPlayerLayout> {
         ? rawEpisodes.cast<Map<String, dynamic>>()
         : null;
 
-    final summary =
-        widget.data['summary']?.toString() ??
-        widget.data['content']?.toString() ??
-        '';
-
     return Padding(
       key: const ValueKey('intro_tab'),
       padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -539,7 +520,6 @@ class _WindowsPlayerLayoutState extends State<WindowsPlayerLayout> {
           bgmInfo: widget.bgmInfo,
         ),
         title: widget.data['title']?.toString() ?? '',
-        summary: summary,
         bgmInfo: widget.bgmInfo,
         followNotifier: widget.followNotifier,
         onFollowPressed: widget.onFollowPressed,
@@ -548,8 +528,6 @@ class _WindowsPlayerLayoutState extends State<WindowsPlayerLayout> {
         onSourceTap: widget.onSourceTap,
         isSearching: widget.isSearching,
         danmakuController: widget.danmakuController,
-        onShowDetail: widget.onShowDetail,
-        cachedTags: widget.cachedTags,
       ),
     );
   }

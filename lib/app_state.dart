@@ -4,7 +4,7 @@ import 'package:baka/instance.dart';
 import 'package:baka/theme.dart';
 
 /// 应用级共享状态：主界面壳和主题。
-class AppState extends GetxService {
+class AppState extends GetxService with WidgetsBindingObserver {
   static const themeModeLabels = <String>['跟随系统', '浅色模式', '深色模式'];
   static const _themeModeKey = 'theme_mode';
   static const _dynamicColorKey = 'dynamic_color';
@@ -55,12 +55,14 @@ class AppState extends GetxService {
     _fontWeightIndex.value = AppFonts.getSavedFontWeightIndex();
     _reduceVisualEffects.value =
         Instances.sp.getBool(_reduceVisualEffectsKey) ?? false;
-    WidgetsBinding.instance.platformDispatcher.onPlatformBrightnessChanged =
-        () {
-          if (_themeMode.value == 0) {
-            _themeMode.refresh();
-          }
-        };
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangePlatformBrightness() {
+    if (_themeMode.value == 0) {
+      _themeMode.refresh();
+    }
   }
 
   void changePage(int index) {
@@ -122,8 +124,7 @@ class AppState extends GetxService {
 
   @override
   void onClose() {
-    WidgetsBinding.instance.platformDispatcher.onPlatformBrightnessChanged =
-        null;
+    WidgetsBinding.instance.removeObserver(this);
     super.onClose();
   }
 }

@@ -130,7 +130,6 @@ class AnimeDetailHeader extends StatelessWidget {
                         ),
                       ],
                       const SizedBox(height: 16),
-                      // 限高标签区：约 3 行，超出可滚动
                       ConstrainedBox(
                         constraints: const BoxConstraints(
                           minHeight: 36,
@@ -333,9 +332,12 @@ class _CoverImage extends StatelessWidget {
                   useOldImageOnUrlChange: true,
                   fadeInDuration: Duration.zero,
                   fadeOutDuration: Duration.zero,
-                  // Reuse the card's decoded image during the Hero flight.
-                  // Upgrade to the larger detail image after the route settles.
-                  memCacheWidth: enableEffects ? (width * 2).round() : 300,
+                  // The mobile cover already fits the card's 300 px decode.
+                  // Do not decode the same AVIF again at 260 px after entry.
+                  // Only the larger desktop cover needs an upgrade.
+                  memCacheWidth: enableEffects && width > 150
+                      ? (width * 2).round()
+                      : 300,
                   placeholder: (context, url) => fallback,
                   errorWidget: (context, url, error) => fallback,
                 ),
@@ -498,7 +500,7 @@ class _TagsWrap extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final limited = limit;
-    final shown = limited == null ? tags : tags.take(limited).toList();
+    final shown = limited == null ? tags : tags.take(limited);
     final overflow = limited != null && tags.length > limited
         ? tags.length - limited
         : 0;
@@ -513,25 +515,7 @@ class _TagsWrap extends StatelessWidget {
 
     if (allPills.isEmpty) return const SizedBox.shrink();
 
-    final List<Widget> chunkedWraps = [];
-    for (var i = 0; i < allPills.length; i += 7) {
-      final chunk = allPills.sublist(
-        i,
-        i + 7 > allPills.length ? allPills.length : i + 7,
-      );
-      chunkedWraps.add(Wrap(spacing: 6, runSpacing: 6, children: chunk));
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (var i = 0; i < chunkedWraps.length; i++) ...[
-          if (i > 0) const SizedBox(height: 6),
-          chunkedWraps[i],
-        ],
-      ],
-    );
+    return Wrap(spacing: 6, runSpacing: 6, children: allPills);
   }
 
   Widget _buildPill(String text) {

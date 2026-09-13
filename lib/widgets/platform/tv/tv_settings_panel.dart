@@ -255,6 +255,23 @@ class _TvSettingsPanelState extends State<TvSettingsPanel> {
 
                   ValueListenableBuilder<PlaybackPreferences>(
                     valueListenable: _ctrl.preferences,
+                    builder: (context, preferences, _) => _buildToggleItem(
+                      icon: Icons.filter_alt,
+                      title: 'HLS 视频去广告',
+                      value: preferences.filterHlsAds,
+                      onToggle: () {
+                        _ctrl.updatePreferences(
+                          preferences.copyWith(
+                            filterHlsAds: !preferences.filterHlsAds,
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+
+                  ValueListenableBuilder<PlaybackPreferences>(
+                    valueListenable: _ctrl.preferences,
                     builder: (context, preferences, _) {
                       final hwdecOptions =
                           PlaybackSettingsService.hwdecModeOptionsForPlatform;

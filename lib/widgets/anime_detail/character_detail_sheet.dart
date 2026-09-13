@@ -31,17 +31,14 @@ class _NetImage extends StatelessWidget {
     final fallbackBg = (isDark ? Colors.white : Colors.black).withValues(alpha: 0.05);
     final iconColor = (isDark ? Colors.white : Colors.black).withValues(alpha: 0.24);
 
-    Widget child;
-    if (proxyUrl.isEmpty) {
-      child = Container(
-        width: width,
-        height: height,
-        color: fallbackBg,
-        alignment: Alignment.center,
-        child: Icon(Icons.person_off, color: iconColor, size: (width != null && width! < 50) ? 18 : 32),
-      );
-    } else {
-      child = CachedNetworkImage(
+    final fallback = Container(
+      width: width,
+      height: height,
+      color: fallbackBg,
+      alignment: Alignment.center,
+      child: Icon(Icons.person_off, color: iconColor, size: (width != null && width! < 50) ? 18 : 32),
+    );
+    final child = proxyUrl.isEmpty ? fallback : CachedNetworkImage(
         imageUrl: proxyUrl,
         width: width,
         height: height,
@@ -53,15 +50,8 @@ class _NetImage extends StatelessWidget {
           height: height,
           color: fallbackBg,
         ),
-        errorWidget: (_, _, _) => Container(
-          width: width,
-          height: height,
-          color: fallbackBg,
-          alignment: Alignment.center,
-          child: Icon(Icons.person_off, color: iconColor, size: (width != null && width! < 50) ? 18 : 32),
-        ),
+        errorWidget: (_, _, _) => fallback,
       );
-    }
 
     return borderRadius > 0
         ? ClipRRect(borderRadius: BorderRadius.circular(borderRadius), child: child)
@@ -140,35 +130,80 @@ class CharacterCard extends StatelessWidget {
 }
 
 /// 角色 Tab 的网格布局
-class CharactersSection extends StatelessWidget {
-  final List<Map<String, dynamic>> characters;
+class CharactersSection extends StatefulWidget {
+  final int subjectId;
   final ValueChanged<Map<String, dynamic>>? onCharacterTap;
 
   const CharactersSection({
-    required this.characters,
+    required this.subjectId,
     this.onCharacterTap,
     super.key,
   });
 
   @override
+  State<CharactersSection> createState() => _CharactersSectionState();
+}
+
+class _CharactersSectionState extends State<CharactersSection>
+    with AutomaticKeepAliveClientMixin {
+  late Future<List<Map<String, dynamic>>> _characters =
+      getBgmCharacters(widget.subjectId);
+
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  void didUpdateWidget(covariant CharactersSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.subjectId != widget.subjectId) {
+      _characters = getBgmCharacters(widget.subjectId);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final columns = math.max(3, (constraints.maxWidth / 120).floor());
-        final itemWidth = (constraints.maxWidth - (12 * (columns - 1))) / columns;
-        return Wrap(
-          spacing: 12,
-          runSpacing: 24,
-          children: characters.map((character) {
-            return SizedBox(
-              width: itemWidth,
-              child: GestureDetector(
-                onTap: () => onCharacterTap?.call(character),
+    super.build(context);
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _characters,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snapshot.hasError) {
+          return Center(child: TextButton(
+            onPressed: () => setState(() {
+              _characters = getBgmCharacters(widget.subjectId);
+            }),
+            child: const Text('角色加载失败，点击重试'),
+          ));
+        }
+        final characters = snapshot.data!;
+        if (characters.isEmpty) return const Center(child: Text('暂无角色信息'));
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final columns = math.max(3, ((constraints.maxWidth - 8) / 120).floor());
+            final width = (constraints.maxWidth - 8 - 12 * (columns - 1)) / columns;
+            final textScaler = MediaQuery.textScalerOf(context);
+            return GridView.builder(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 16),
+              physics: const BouncingScrollPhysics(),
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: columns,
+                crossAxisSpacing: 12,
+                mainAxisSpacing: 24,
+                mainAxisExtent: width * 4 / 3 + 18 +
+                    (textScaler.scale(13) * 1.2).ceilToDouble() +
+                    (textScaler.scale(11) * 1.2).ceilToDouble() +
+                    (textScaler.scale(10) * 1.2).ceilToDouble(),
+              ),
+              itemCount: characters.length,
+              itemBuilder: (context, index) => GestureDetector(
+                onTap: () => widget.onCharacterTap?.call(characters[index]),
                 behavior: HitTestBehavior.opaque,
-                child: CharacterCard(character: character),
+                child: CharacterCard(character: characters[index]),
               ),
             );
-          }).toList(),
+          },
         );
       },
     );
@@ -213,25 +248,21 @@ class _CharacterDetailSheetState extends State<CharacterDetailSheet> {
   Map<String, dynamic>? _charInfo;
   List<Map<String, dynamic>> _charComments = [];
   bool _isLoading = true;
+  bool _commentsLoading = true;
 
   @override
   void initState() {
     super.initState();
     // 秒开预览：优先保留外部传入的角色基础信息
     _charInfo = widget.initialData;
-    _loadData();
+    _loadInfo();
+    _loadComments();
   }
 
-  Future<void> _loadData() async {
+  Future<void> _loadInfo() async {
     try {
-      final results = await Future.wait<Object>([
-        getBgmCharacterInfo(widget.characterId),
-        getBgmCharacterComments(widget.characterId),
-      ]);
+      final infoData = await getBgmCharacterInfo(widget.characterId);
       if (!mounted) return;
-
-      final infoData = results[0] as Map<String, dynamic>;
-      final commentsList = results[1] as List<Map<String, dynamic>>;
 
       setState(() {
         if (infoData.isNotEmpty) {
@@ -240,12 +271,22 @@ class _CharacterDetailSheetState extends State<CharacterDetailSheet> {
             ...infoData,
           };
         }
-        _charComments = commentsList;
         _isLoading = false;
       });
     } catch (e) {
       debugPrint('获取角色详情失败: $e');
       if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _loadComments() async {
+    try {
+      final comments = await getBgmCharacterComments(widget.characterId);
+      if (mounted) setState(() => _charComments = comments);
+    } catch (e) {
+      debugPrint('获取角色评论失败: $e');
+    } finally {
+      if (mounted) setState(() => _commentsLoading = false);
     }
   }
 
@@ -268,42 +309,7 @@ class _CharacterDetailSheetState extends State<CharacterDetailSheet> {
             color: isDark ? const Color(0xFF121212) : const Color(0xFFF9F9F9),
             borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
           ),
-          child: (_isLoading && !hasBasicData)
-              ? AppSkeletonizer(
-                  enabled: true,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const _CharHeader(
-                          info: {
-                            'name': '角色名称占位',
-                            'nameCN': '角色中文名占位',
-                            'role_name': '主角',
-                            'actors': [
-                              {'name': '声优名称占位'}
-                            ],
-                            'collects': 100,
-                            'comment': 50,
-                            'info': '性别: 女性\n生日: 1月1日',
-                            'images': {'large': ''},
-                          },
-                        ),
-                        const SizedBox(height: 24),
-                        Text(
-                          '这是一段用于自动骨架遮罩的角色详细介绍文本，展示真实的人物背景和设定描述...',
-                          style: TextStyle(
-                            color: textColor.withValues(alpha: 0.8),
-                            fontSize: 14,
-                            height: 1.7,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                )
-              : CustomScrollView(
+          child: CustomScrollView(
                   controller: scrollController,
                   physics: const BouncingScrollPhysics(),
                   slivers: [
@@ -320,7 +326,14 @@ class _CharacterDetailSheetState extends State<CharacterDetailSheet> {
                         ),
                       ),
                     ),
-                    if (_charInfo != null) SliverToBoxAdapter(child: _CharHeader(info: _charInfo!)),
+                    SliverToBoxAdapter(
+                      child: AppSkeletonizer(
+                        enabled: _isLoading && !hasBasicData,
+                        child: _CharHeader(info: _charInfo ?? {
+                          'name': _isLoading ? '角色名称占位' : '暂无角色信息',
+                        }),
+                      ),
+                    ),
                     if (summary.isNotEmpty)
                       SliverToBoxAdapter(
                         child: Padding(
@@ -350,7 +363,7 @@ class _CharacterDetailSheetState extends State<CharacterDetailSheet> {
                         ),
                       ),
                     ),
-                    if (_isLoading && _charComments.isEmpty)
+                    if (_commentsLoading && _charComments.isEmpty)
                       const SliverToBoxAdapter(
                         child: Padding(
                           padding: EdgeInsets.all(40),

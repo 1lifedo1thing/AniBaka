@@ -19,9 +19,9 @@ import 'package:baka/utils/reg_utils.dart';
 
 final _reAliasSep = RegExp(r'[/／、,，;；\n]');
 final _reBrackets = RegExp(r'[（(].*?[）)]');
+final _reWhitespace = RegExp(r'\s+');
 
-String _norm(String value) =>
-    value.toLowerCase().replaceAll(RegExp(r'\s+'), '');
+String _norm(String value) => value.toLowerCase().replaceAll(_reWhitespace, '');
 
 class SearchResultItem {
   SearchResultItem({
@@ -206,6 +206,7 @@ class VideoSourceSearchController extends ChangeNotifier {
   final Set<String> activeAutoAliases = {};
 
   Iterable<SearchResultItem> get results => _results.values;
+  int resultCountFor(String source) => _sourceCounts[source] ?? 0;
   Set<String> get progressingSources => _progressing;
   Set<String> get finishedSources => _finished;
   List<String> get searchErrors => _errors;
@@ -221,11 +222,14 @@ class VideoSourceSearchController extends ChangeNotifier {
   final _errors = <String>[];
   final _finished = <String>{};
   final _progressing = <String>{};
+
   /// 已解析的完整播放数据（含在途请求去重）；有界 LRU，避免长时间搜索堆积。
   final _resolved = RequestCache<String, Map<String, dynamic>>(limit: 32);
   final _probes = <String, SourceProbeState>{};
   final _rankCache = <String, SourceMatchScore>{};
   SourceMatchContext? _matchContext;
+  (SourceMatchContext, int, int, int)? _switchKey;
+  List<SourceCandidateState> _switchCandidates = const [];
   final _autoProbesBySource = <String, int>{};
   final _prefetched = <String>{};
   int _autoProbesTotal = 0;
@@ -325,6 +329,8 @@ class VideoSourceSearchController extends ChangeNotifier {
 
   /// 清空一次搜索会话的全部派生数据。
   void _releaseRetainedData() {
+    _switchKey = null;
+    _switchCandidates = const [];
     _results.clear();
     _sourceCounts.clear();
     _errors.clear();
@@ -657,6 +663,7 @@ class VideoSourceSearchController extends ChangeNotifier {
     _completeAutoMatchGate(false);
     if (!_disposed) {
       isSearching = false;
+      _progressing.clear();
       _emitProgress();
     }
   }
@@ -717,19 +724,14 @@ class VideoSourceSearchController extends ChangeNotifier {
       }
     }
 
-    List<SearchResultItem> parseRaw(List<Map<String, dynamic>> raw) {
-      final seen = <String>{};
-      final items = <SearchResultItem>[];
-      for (final r in raw) {
-        final item = SearchResultItem(
+    List<SearchResultItem> parseRaw(List<Map<String, dynamic>> raw) => [
+      for (final r in raw)
+        SearchResultItem(
           title: r['title']?.toString() ?? '',
           sourceType: sourceKey,
           data: r,
-        );
-        if (seen.add(item.key)) items.add(item);
-      }
-      return items;
-    }
+        ),
+    ];
 
     final keywordPlan = SourceMatchEngine.planKeywords(
       autoMatch: autoMatchMode,
@@ -962,8 +964,7 @@ class VideoSourceSearchController extends ChangeNotifier {
       if (probe.isInstantPlayable && probe.data != null) {
         _claimAutoMatch(runId, item, probe.data!);
       }
-    } catch (_) {
-    }
+    } catch (_) {}
   }
 
   Future<Map<String, dynamic>?> findNextPlayableCandidate({
@@ -1063,29 +1064,32 @@ class VideoSourceSearchController extends ChangeNotifier {
     String? currentSource,
   }) {
     final context = _syncContext(currentSource: currentSource);
-    int scoreOf(SearchResultItem item) =>
-        (_rankCache[item.key] ??= _engine.score(
-          item.matchCandidate,
-          context,
-        )).score;
-
-    final scored =
-        [
-          for (final item in _results.values)
-            SourceCandidateState(
-              item: item,
-              score: scoreOf(item),
-              probe: _probeFor(item, episodeIndex, preferredLine),
-            ),
-        ]..sort((a, b) {
-          final byStatus = _statusRank(
-            a.status,
-          ).compareTo(_statusRank(b.status));
-          return byStatus != 0 ? byStatus : b.score.compareTo(a.score);
-        });
-
+    final key = (context, episodeIndex, preferredLine, _results.length);
+    if (_switchKey != key) {
+      _switchKey = key;
+      _switchCandidates =
+          [
+            for (final item in _results.values)
+              SourceCandidateState(
+                item: item,
+                score: (_rankCache[item.key] ??= _engine.score(
+                  item.matchCandidate,
+                  context,
+                )).score,
+                probe: _probeFor(item, episodeIndex, preferredLine),
+              ),
+          ]..sort((a, b) {
+            final score = b.score.compareTo(a.score);
+            return score != 0 ? score : a.item.key.compareTo(b.item.key);
+          });
+    }
+    // 匹配分只在候选/上下文变化时排序；探针更新按五种状态线性分桶。
+    final buckets = List.generate(5, (_) => <SourceCandidateState>[]);
+    for (final candidate in _switchCandidates) {
+      buckets[_statusRank(candidate.status)].add(candidate);
+    }
     final grouped = <String, List<SourceCandidateState>>{};
-    for (final c in scored) {
+    for (final c in buckets.expand((bucket) => bucket)) {
       final key = c.probe.routeKey ?? 'candidate:${c.item.key}';
       (grouped[key] ??= []).add(c);
     }
@@ -1100,12 +1104,13 @@ class VideoSourceSearchController extends ChangeNotifier {
   }
 
   void startSwitchProbes(Iterable<SourceCandidateState> candidates) {
-    var active = 0;
+    var active = candidates
+        .where((c) => c.status == SourceProbeStatus.resolving)
+        .length;
+    if (active >= 4) return;
     for (final c in candidates) {
-      if (c.status == SourceProbeStatus.resolving) {
-        if (++active >= 4) return;
-      } else if (c.status == SourceProbeStatus.pending ||
-          (c.status == SourceProbeStatus.playable && !c.isInstantPlayable)) {
+      if (c.status == SourceProbeStatus.pending ||
+          c.status == SourceProbeStatus.playable) {
         unawaited(
           ensureCandidatePlayable(
             c.item,
@@ -1395,7 +1400,9 @@ class VideoSourceSearchController extends ChangeNotifier {
     if (planned.isEmpty) return _failProbe(probe, readyData, '无线路可播');
 
     final done =
-        Completer<(int, String, ({String url, Map<String, String> httpHeaders}))?>();
+        Completer<
+          (int, String, ({String url, Map<String, String> httpHeaders}))?
+        >();
     var remaining = planned.length;
     var timedOut = false;
     Object? lastError;
@@ -1450,11 +1457,7 @@ class VideoSourceSearchController extends ChangeNotifier {
         _emitProgress();
         return probe;
       }
-      return _failProbe(
-        probe,
-        readyData,
-        lastError?.toString() ?? '无法解析播放地址',
-      );
+      return _failProbe(probe, readyData, lastError?.toString() ?? '无法解析播放地址');
     }
 
     final (lineIndex, token, media) = winner;
@@ -1631,9 +1634,7 @@ class VideoSourceSearchController extends ChangeNotifier {
             probe.data = readyData;
             _resolved.put(probe.item.key, readyData);
             if (kDebugMode) {
-              debugPrint(
-                '[AutoMatch] late media accepted: ${media.url}',
-              );
+              debugPrint('[AutoMatch] late media accepted: ${media.url}');
             }
             _emitProgress();
             if (autoMatchMode &&

@@ -1,5 +1,6 @@
 import 'package:audio_video_progress_bar/audio_video_progress_bar.dart';
 import 'package:baka/models/playback_state.dart';
+import 'package:baka/widgets/common/value_selector.dart';
 import '../controller.dart';
 import 'package:baka/utils/duration_utils.dart';
 import 'package:flutter/material.dart';
@@ -45,7 +46,9 @@ class BottomControl extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (danmakuBar != null || extraButtons != null || episodeTitle != null)
+          if (danmakuBar != null ||
+              extraButtons != null ||
+              episodeTitle != null)
             Padding(
               padding: EdgeInsets.only(
                 bottom: isWide ? 12 : 8,
@@ -114,9 +117,10 @@ class BottomControl extends StatelessWidget {
     if (!updatesEnabled) {
       return buildBtn(controller.core.value.playing);
     }
-    return ValueListenableBuilder<PlaybackCoreState>(
+    return ValueSelector<PlaybackCoreState, bool>(
       valueListenable: controller.core,
-      builder: (context, core, _) => buildBtn(core.playing),
+      select: (state) => state.playing,
+      builder: (context, playing) => buildBtn(playing),
     );
   }
 
@@ -151,9 +155,10 @@ class BottomControl extends StatelessWidget {
     if (!updatesEnabled) {
       return buildBtn(controller.overlay.value.showDanmaku);
     }
-    return ValueListenableBuilder<PlayerOverlayState>(
+    return ValueSelector<PlayerOverlayState, bool>(
       valueListenable: controller.overlay,
-      builder: (context, overlay, _) => buildBtn(overlay.showDanmaku),
+      select: (state) => state.showDanmaku,
+      builder: (context, show) => buildBtn(show),
     );
   }
 }
@@ -181,17 +186,17 @@ class _PlayerIconButton extends StatelessWidget {
     return SizedBox(
       width: buttonSize,
       height: buttonSize,
-      child: IconButton(
-        padding: EdgeInsets.zero,
-        tooltip: tooltip,
-        onPressed: () {
-          HapticFeedback.lightImpact();
-          onTap();
-        },
-        icon: Icon(
-          icon,
-          color: color,
-          size: isWide ? size * 1.15 : size,
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkResponse(
+          radius: buttonSize / 2,
+          onTap: () {
+            HapticFeedback.lightImpact();
+            onTap();
+          },
+          child: Center(
+            child: Icon(icon, color: color, size: isWide ? size * 1.15 : size),
+          ),
         ),
       ),
     );
@@ -278,4 +283,3 @@ class _TimelineControl extends StatelessWidget {
     );
   }
 }
-

@@ -13,6 +13,7 @@ import 'package:fullscreen_window/fullscreen_window.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:baka/services/playback/danmaku_controller.dart';
 import 'package:baka/widgets/danmaku/view.dart';
+import 'package:baka/widgets/common/value_selector.dart';
 import 'controller.dart';
 import 'package:baka/utils/duration_utils.dart';
 import 'package:ios_orientation/ios_orientation.dart';
@@ -165,11 +166,22 @@ class _BakaPlayerState extends State<BakaPlayer> {
   }
 
   @override
+  void didUpdateWidget(covariant BakaPlayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.core.removeListener(_maybeAutoEnterFullscreen);
+      widget.controller.core.addListener(_maybeAutoEnterFullscreen);
+      _autoFullscreenTriggered = false;
+      _maybeAutoEnterFullscreen();
+    }
+  }
+
+  @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     // 在 didChangeDependencies 中判断设备类型，
     // 因为 dispose 时无法安全使用 MediaQuery，所以缓存到变量中
-    final shortestSide = MediaQuery.of(context).size.shortestSide;
+    final shortestSide = MediaQuery.sizeOf(context).shortestSide;
     _isTablet = shortestSide >= 600;
   }
 
@@ -191,19 +203,18 @@ class _BakaPlayerState extends State<BakaPlayer> {
 
   void _initializeControls() {
     if (widget.full) return;
-    final controller = widget.controller;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       try {
         FlutterVolumeController.updateShowSystemUI(true);
-        controller.setVolume(
-          (await FlutterVolumeController.getVolume()) ?? 0.0,
-        );
+        final volume = await FlutterVolumeController.getVolume();
+        if (!mounted) return;
+        widget.controller.setVolume(volume ?? 0.0);
         if (!Platform.isAndroid) {
           FlutterVolumeController.addListener((double value) {
             if (mounted &&
                 _visibleVerticalIndicator != _VerticalControl.volume) {
-              controller.setVolume(value);
+              widget.controller.setVolume(value);
             }
           });
         }
@@ -211,7 +222,8 @@ class _BakaPlayerState extends State<BakaPlayer> {
 
       if (_canAdjustScreenBrightness) {
         try {
-          controller.setBrightness(await ScreenBrightness().application);
+          final brightness = await ScreenBrightness().application;
+          if (mounted) widget.controller.setBrightness(brightness);
         } catch (_) {}
       }
     });
@@ -400,10 +412,11 @@ class _BakaPlayerState extends State<BakaPlayer> {
   }
 
   Widget _buildDanmakuInputOverlay() {
-    return ValueListenableBuilder<PlayerOverlayState>(
+    return ValueSelector<PlayerOverlayState, bool>(
       valueListenable: widget.controller.overlay,
-      builder: (context, overlay, _) {
-        if (!overlay.showDanmakuInput) {
+      select: (state) => state.showDanmakuInput,
+      builder: (context, visible) {
+        if (!visible) {
           return const SizedBox.shrink();
         }
 
@@ -501,9 +514,10 @@ class _BakaPlayerState extends State<BakaPlayer> {
         (!widget.full && !Instances.isDesktopPlatform)) {
       return const SizedBox.shrink();
     }
-    return ValueListenableBuilder<PlayerOverlayState>(
+    return ValueSelector<PlayerOverlayState, bool>(
       valueListenable: widget.controller.overlay,
-      builder: (context, overlay, _) => overlay.showDanmaku
+      select: (state) => state.showDanmaku,
+      builder: (context, visible) => visible
           ? Positioned.fill(
               top: 10,
               child: RepaintBoundary(
@@ -617,25 +631,16 @@ class _BakaPlayerState extends State<BakaPlayer> {
           }
         });
         return KeyEventResult.handled;
-      } else if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
-        if (Instances.isTV) {
-          return KeyEventResult.ignored;
-        }
-        final newVolume = (controller.overlay.value.volume + _volumeStep).clamp(
-          0.0,
-          1.0,
+      } else if (event.logicalKey == LogicalKeyboardKey.arrowUp ||
+          event.logicalKey == LogicalKeyboardKey.arrowDown) {
+        if (Instances.isTV) return KeyEventResult.ignored;
+        final step = event.logicalKey == LogicalKeyboardKey.arrowUp
+            ? _volumeStep
+            : -_volumeStep;
+        _setVerticalLevel(
+          _VerticalControl.volume,
+          controller.overlay.value.volume + step,
         );
-        _setVerticalLevel(_VerticalControl.volume, newVolume);
-        return KeyEventResult.handled;
-      } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
-        if (Instances.isTV) {
-          return KeyEventResult.ignored;
-        }
-        final newVolume = (controller.overlay.value.volume - _volumeStep).clamp(
-          0.0,
-          1.0,
-        );
-        _setVerticalLevel(_VerticalControl.volume, newVolume);
         return KeyEventResult.handled;
       } else if (event.logicalKey == LogicalKeyboardKey.space) {
         widget.controller.togglePlayback();
@@ -708,26 +713,19 @@ class _BakaPlayerState extends State<BakaPlayer> {
   }
 
   void _applyVerticalDrag() {
-    if (!mounted || _pendingVerticalDelta == 0) return;
+    if (!mounted ||
+        _pendingVerticalDelta == 0 ||
+        _verticalControl == _VerticalControl.none) {
+      return;
+    }
     final delta =
         _pendingVerticalDelta * _verticalGestureSensitivity / _verticalExtent;
     _pendingVerticalDelta = 0;
     final overlay = widget.controller.overlay.value;
-    if (_verticalControl == _VerticalControl.brightness) {
-      unawaited(
-        _setVerticalLevel(
-          _VerticalControl.brightness,
-          (overlay.brightness - delta).clamp(0.0, 1.0),
-        ),
-      );
-    } else if (_verticalControl == _VerticalControl.volume) {
-      unawaited(
-        _setVerticalLevel(
-          _VerticalControl.volume,
-          (overlay.volume - delta).clamp(0.0, 1.0),
-        ),
-      );
-    }
+    final level = _verticalControl == _VerticalControl.brightness
+        ? overlay.brightness
+        : overlay.volume;
+    unawaited(_setVerticalLevel(_verticalControl, level - delta));
   }
 
   void _endVerticalDrag() {
@@ -742,19 +740,15 @@ class _BakaPlayerState extends State<BakaPlayer> {
     final episodeTitle = _buildEpisodeTitle(isWide);
     final extraButtons = _buildExtraBottomButtons(isWide);
 
-    return ValueListenableBuilder<PlayerOverlayState>(
+    return ValueSelector<PlayerOverlayState, bool>(
       valueListenable: controller.overlay,
-      builder: (context, overlay, _) {
-        final showControls = overlay.controlsVisible;
-        final isLocked = overlay.controlsLocked;
-
+      select: (state) => state.controlsVisible && !state.controlsLocked,
+      builder: (context, showControls) {
         return Column(
           children: [
             ClipRect(
               child: AnimatedSlide(
-                offset: !isLocked && showControls
-                    ? Offset.zero
-                    : const Offset(0, -1),
+                offset: showControls ? Offset.zero : const Offset(0, -1),
                 duration: const Duration(milliseconds: 200),
                 curve: Curves.easeOutCubic,
                 child: Padding(
@@ -770,9 +764,7 @@ class _BakaPlayerState extends State<BakaPlayer> {
             const Spacer(),
             ClipRect(
               child: AnimatedSlide(
-                offset: !isLocked && showControls
-                    ? Offset.zero
-                    : const Offset(0, 1),
+                offset: showControls ? Offset.zero : const Offset(0, 1),
                 duration: const Duration(milliseconds: 200),
                 curve: Curves.easeOutCubic,
                 child: BottomControl(
@@ -780,7 +772,7 @@ class _BakaPlayerState extends State<BakaPlayer> {
                   triggerFullScreen: _triggerFullScreen,
                   isFullScreen: widget.full,
                   isWideLayout: isWide,
-                  updatesEnabled: !isLocked && showControls,
+                  updatesEnabled: showControls,
                   danmakuBar: danmakuBar,
                   extraButtons: extraButtons,
                   episodeTitle: episodeTitle,
@@ -970,32 +962,7 @@ class _BakaPlayerState extends State<BakaPlayer> {
   }
 
   Widget _buildPlayerTitleOrLogo(String title, String logoUrl, bool isWide) {
-    if (logoUrl.isNotEmpty) {
-      return Container(
-        constraints: BoxConstraints(maxHeight: isWide ? 58 : 46, maxWidth: 280),
-        alignment: Alignment.centerLeft,
-        child: CachedNetworkImage(
-          key: ValueKey(logoUrl),
-          imageUrl: logoUrl,
-          memCacheHeight: 170,
-          fit: BoxFit.contain,
-          alignment: Alignment.centerLeft,
-          errorWidget: (context, url, error) => Text(
-            title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: isWide ? 20 : 16,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 0.3,
-            ),
-          ),
-        ),
-      );
-    }
-
-    return Text(
+    final titleWidget = Text(
       title,
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
@@ -1006,6 +973,22 @@ class _BakaPlayerState extends State<BakaPlayer> {
         letterSpacing: 0.3,
       ),
     );
+    if (logoUrl.isNotEmpty) {
+      return Container(
+        constraints: BoxConstraints(maxHeight: isWide ? 58 : 46, maxWidth: 280),
+        alignment: Alignment.centerLeft,
+        child: CachedNetworkImage(
+          key: ValueKey(logoUrl),
+          imageUrl: logoUrl,
+          memCacheHeight: 170,
+          fit: BoxFit.contain,
+          alignment: Alignment.centerLeft,
+          errorWidget: (context, url, error) => titleWidget,
+        ),
+      );
+    }
+
+    return titleWidget;
   }
 
   Widget? _buildEpisodeTitle(bool isWide) {
@@ -1101,10 +1084,11 @@ class _BakaPlayerState extends State<BakaPlayer> {
     if (!widget.danmakuEnabled || !widget.full) return null;
     final controller = widget.controller;
 
-    return ValueListenableBuilder<PlayerOverlayState>(
+    return ValueSelector<PlayerOverlayState, bool>(
       valueListenable: controller.overlay,
-      builder: (context, overlay, _) {
-        if (!overlay.showDanmaku) return const SizedBox.shrink();
+      select: (state) => state.showDanmaku,
+      builder: (context, visible) {
+        if (!visible) return const SizedBox.shrink();
 
         return _buildCapsule(
           radius: isWide ? 22 : 18,
@@ -1132,41 +1116,37 @@ class _BakaPlayerState extends State<BakaPlayer> {
                     ),
                   ),
                 ),
-                if (overlay.showDanmaku) ...[
-                  Container(
-                    width: 1,
-                    height: 14,
-                    color: Colors.white.withValues(alpha: 0.15),
+                Container(
+                  width: 1,
+                  height: 14,
+                  color: Colors.white.withValues(alpha: 0.15),
+                ),
+                InkWell(
+                  borderRadius: BorderRadius.horizontal(
+                    right: Radius.circular(isWide ? 22 : 18),
                   ),
-                  InkWell(
-                    borderRadius: BorderRadius.horizontal(
-                      right: Radius.circular(isWide ? 22 : 18),
-                    ),
-                    onTap: () {
-                      final mediaInfo = widget.controller.mediaInfo.value;
-                      final epIndex = mediaInfo.episodeIndex >= 0
-                          ? mediaInfo.episodeIndex + 1
-                          : 1;
-                      DanmakuSettingsPage.show(
-                        context,
-                        widget.controller.danmakuController,
-                        defaultTitle: mediaInfo.title,
-                        defaultEpisode: epIndex,
-                      );
-                    },
+                  onTap: () {
+                    final mediaInfo = widget.controller.mediaInfo.value;
+                    final epIndex = mediaInfo.episodeIndex >= 0
+                        ? mediaInfo.episodeIndex + 1
+                        : 1;
+                    DanmakuSettingsPage.show(
+                      context,
+                      widget.controller.danmakuController,
+                      defaultTitle: mediaInfo.title,
+                      defaultEpisode: epIndex,
+                    );
+                  },
 
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: isWide ? 12 : 10,
-                      ),
-                      child: Icon(
-                        Icons.tune_rounded,
-                        size: isWide ? 18 : 15,
-                        color: Colors.white.withValues(alpha: 0.7),
-                      ),
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(horizontal: isWide ? 12 : 10),
+                    child: Icon(
+                      Icons.tune_rounded,
+                      size: isWide ? 18 : 15,
+                      color: Colors.white.withValues(alpha: 0.7),
                     ),
                   ),
-                ],
+                ),
               ],
             ),
           ),
@@ -1240,12 +1220,11 @@ class _BakaPlayerState extends State<BakaPlayer> {
   }
 
   Widget _buildLockButton() {
-    return ValueListenableBuilder<PlayerOverlayState>(
+    return ValueSelector<PlayerOverlayState, (bool, bool)>(
       valueListenable: widget.controller.overlay,
-      builder: (context, overlay, _) {
-        final showControls = overlay.controlsVisible;
-        final isLocked = overlay.controlsLocked;
-
+      select: (state) => (state.controlsVisible, state.controlsLocked),
+      builder: (context, state) {
+        final (showControls, isLocked) = state;
         return Visibility(
           visible: showControls,
           child: Align(

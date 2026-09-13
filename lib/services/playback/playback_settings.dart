@@ -31,6 +31,7 @@ class PlaybackSettingsService {
   static const _showSubtitleKey = 'player_showSubtitle';
   static const _hwdecModeKey = 'player_hwdecMode';
   static const _videoRendererKey = 'player_videoRenderer';
+  static const _filterHlsAdsKey = 'player_filterHlsAds';
 
   static const hwdecModeLabels = <String, String>{
     'auto': '自动',
@@ -127,14 +128,26 @@ class PlaybackSettingsService {
       '${speed.toStringAsFixed(2).replaceFirst(_speedLabelTrim, '')}x';
 
   static SharedPreferences get _prefs => Instances.sp;
+  static SharedPreferences? get _tryPrefs {
+    try {
+      return Instances.sp;
+    } catch (_) {
+      return null;
+    }
+  }
 
   static bool getClearCacheOnExit() =>
-      _prefs.getBool(_clearCacheOnExitKey) ?? false;
+      _tryPrefs?.getBool(_clearCacheOnExitKey) ?? false;
 
   static Future<void> setClearCacheOnExit(bool value) =>
       _prefs.setBool(_clearCacheOnExitKey, value);
 
-  static bool getLowMemoryMode() => _prefs.getBool(_lowMemoryModeKey) ?? false;
+  static bool getLowMemoryMode() => _tryPrefs?.getBool(_lowMemoryModeKey) ?? false;
+
+  static bool getFilterHlsAds() => _tryPrefs?.getBool(_filterHlsAdsKey) ?? false;
+
+  static Future<void> setFilterHlsAds(bool value) =>
+      _prefs.setBool(_filterHlsAdsKey, value);
 
   static const lowMemoryImageCount = 80;
   static const lowMemoryImageBytes = 32 * 1024 * 1024;
@@ -207,6 +220,7 @@ class PlaybackSettingsService {
       subtitleConfig: SubtitleConfig.load(),
       hwdecMode: normalizeHwdecMode(sp.getString(_hwdecModeKey)),
       videoRenderer: normalizeVideoRenderer(sp.getString(_videoRendererKey)),
+      filterHlsAds: sp.getBool(_filterHlsAdsKey) ?? false,
     );
   }
 
@@ -252,6 +266,7 @@ class PlaybackSettingsService {
     write(_showSubtitleKey, previous.showSubtitle, next.showSubtitle);
     write(_hwdecModeKey, previous.hwdecMode, next.hwdecMode);
     write(_videoRendererKey, previous.videoRenderer, next.videoRenderer);
+    write(_filterHlsAdsKey, previous.filterHlsAds, next.filterHlsAds);
 
     if (previous.subtitleConfig != next.subtitleConfig) {
       writes.add(next.subtitleConfig.save());

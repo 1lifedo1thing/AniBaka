@@ -76,7 +76,8 @@
   "play": [
     {
       "op": "template",
-      "value": "{episodeId:raw}"
+      "value": "{episodeId:raw}",
+      "filterHlsAds": true
     }
   ],
   "useWebview": true

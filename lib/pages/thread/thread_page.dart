@@ -1,3 +1,4 @@
+import 'package:baka/api/post.dart';
 import 'package:baka/models/playback_request.dart';
 import 'package:baka/core/app_storage.dart';
 import 'package:baka/app/watch_party_links.dart';
@@ -82,20 +83,18 @@ class _ThreadPageState extends State<ThreadPage>
   Future<void> _ensureLoaded(int i) async {
     await AppStorage.open(AppStorage.threadCommentsBoxName);
     if (!mounted) return;
-    final hasCache = _svc.loadCached(i, ignoreExpiry: true);
-    if (hasCache) {
-      if (mounted) setState(() {});
-      _refresh(i, silent: true);
-      return;
-    }
-    await _refresh(i);
+    if (_svc.tabs[i].page > 0 || _svc.tabs[i].isRefreshing) return;
+    final hasCache = _svc.loadCached(i);
+    if (hasCache) setState(() {});
+    await _refresh(i, silent: hasCache);
   }
 
   Future<void> _refresh(int i, {bool silent = false}) async {
     if (!mounted || _svc.tabs[i].isRefreshing) return;
-    if (!silent && mounted) setState(() {});
+    final task = _svc.refresh(i);
+    setState(() {});
     try {
-      await _svc.refresh(i);
+      await task;
     } catch (e) {
       debugPrint('刷新评论出错: $e');
       if (mounted && _pageIndex(i) == _index && !silent) {
@@ -107,10 +106,11 @@ class _ThreadPageState extends State<ThreadPage>
   }
 
   Future<void> _loadMore(int i) async {
-    if (!mounted) return;
-    await _svc.loadMore(i);
-    if (!mounted) return;
+    if (!mounted || !_svc.canLoadMore(i)) return;
+    final task = _svc.loadMore(i);
     setState(() {});
+    await task;
+    if (mounted) setState(() {});
   }
 
   void _onScroll(int i) {
@@ -145,12 +145,7 @@ class _ThreadPageState extends State<ThreadPage>
       _refreshWatchRooms(silent: true);
     } else {
       final threadIndex = _threadIndex(i);
-      if (_svc.tabs[threadIndex].comments.isEmpty &&
-          _svc.tabs[threadIndex].page == 0) {
-        _ensureLoaded(threadIndex);
-      } else {
-        _refresh(threadIndex, silent: true);
-      }
+      if (_svc.tabs[threadIndex].page == 0) _ensureLoaded(threadIndex);
     }
   }
 
@@ -165,9 +160,6 @@ class _ThreadPageState extends State<ThreadPage>
     final state = _uis[threadIndex].commentKey.currentState;
     if (state == null) return;
     await state.sendComment(result, 0, '');
-    if (!mounted) return;
-    showSnackBar('评论发送成功');
-    if (mounted) _refresh(threadIndex);
   }
 
   Future<void> _refreshWatchRooms({bool silent = false}) async {
@@ -192,15 +184,13 @@ class _ThreadPageState extends State<ThreadPage>
       return;
     }
     try {
-      final data = await _svc.resolveGvLink(match.group(1)!);
-      if (data != null && mounted) {
+      final data = await getPostDetail(int.parse(match.group(1)!));
+      if (mounted) {
         Navigator.of(context).push(
           MaterialPageRoute(
             builder: (_) => PlayerPage(request: PlaybackRequest.fromMap(data)),
           ),
         );
-      } else {
-        showSnackBar('无法获取视频信息');
       }
     } catch (e) {
       showSnackBar('跳转失败: $e');
@@ -245,40 +235,29 @@ class _ThreadPageState extends State<ThreadPage>
       backgroundColor: theme.colorScheme.surface,
       displacement: 24,
       strokeWidth: 2.5,
-      child: NotificationListener<ScrollNotification>(
-        onNotification: (scrollInfo) {
-          if (scrollInfo.metrics.pixels >=
-              scrollInfo.metrics.maxScrollExtent - 400) {
-            if (_svc.canLoadMore(i)) {
-              _loadMore(i);
-            }
-          }
-          return false;
-        },
-        child: CustomScrollView(
-          controller: ui.scroll,
-          physics: const AlwaysScrollableScrollPhysics(
-            parent: BouncingScrollPhysics(),
-          ),
-          slivers: [
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(14, 4, 14, 0),
-              sliver: CommentList(
-                pid: tab.pid,
-                comments: showSkeleton ? null : tab.comments,
-                key: ui.commentKey,
-                autoLoad: false,
-                asSliver: true,
-                onTapLink: _onLink,
-              ),
-            ),
-            if (tab.isLoadingMore)
-              SliverToBoxAdapter(child: _loadingMore(theme)),
-            if (!tab.hasMore && tab.comments.isNotEmpty)
-              const SliverToBoxAdapter(child: _EndIndicator()),
-            const SliverToBoxAdapter(child: SizedBox(height: 80)),
-          ],
+      child: CustomScrollView(
+        controller: ui.scroll,
+        physics: const AlwaysScrollableScrollPhysics(
+          parent: BouncingScrollPhysics(),
         ),
+        slivers: [
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(14, 4, 14, 0),
+            sliver: CommentList(
+              pid: tab.pid,
+              comments: showSkeleton ? null : tab.comments,
+              key: ui.commentKey,
+              autoLoad: false,
+              onRefresh: () => _refresh(i),
+              asSliver: true,
+              onTapLink: _onLink,
+            ),
+          ),
+          if (tab.isLoadingMore) SliverToBoxAdapter(child: _loadingMore(theme)),
+          if (!tab.hasMore && tab.comments.isNotEmpty)
+            const SliverToBoxAdapter(child: _EndIndicator()),
+          const SliverToBoxAdapter(child: SizedBox(height: 80)),
+        ],
       ),
     );
   }

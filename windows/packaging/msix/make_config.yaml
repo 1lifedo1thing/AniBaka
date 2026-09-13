@@ -19,7 +19,7 @@ identity_name: ani.baka
 # 发布者 (需要与证书匹配)
 publisher: "CN=SignPath Foundation, O=SignPath Foundation, C=US, S=DE, L=Lewes"
 
-# CI 生成未签名 MSIX，再交给 SignPath release-signing 策略签名。
+# CI 按所选 SignPath 策略签名；test-signing 时会同步改写 publisher 为测试证书主题。
 install_certificate: "false"
 sign_msix: "false"
 

@@ -118,10 +118,18 @@ void navigateToDetail(
   Map data, {
   int? posIndex,
   Object? heroTag,
+  BuildContext? cardContext,
+  Widget? cardPreview,
 }) {
   final detailData = Map<String, dynamic>.from(data);
   detailData['_heroTag'] = heroTag ?? coverHeroTag(data);
-  NavigationService.toDetail(context, detailData, posIndex: posIndex);
+  NavigationService.toDetail(
+    context,
+    detailData,
+    posIndex: posIndex,
+    cardContext: cardContext,
+    cardPreview: cardContext == null ? null : (cardPreview ?? PostCard(data)),
+  );
 }
 
 Widget buildCachedImage(
@@ -141,26 +149,42 @@ Widget buildNetworkImage(
   double height, {
   BoxFit fit = BoxFit.cover,
 }) {
-  return CachedNetworkImage(
-    memCacheWidth: 300,
-    imageUrl: imageUrl,
+  // 原生 Image 保留快速滚动时延迟解码的行为；缓存仍交给同一个 provider。
+  // 不走零时长的淡入淡出组件，避免每张新封面创建两套动画状态和叠层。
+  return Image(
+    image: ResizeImage.resizeIfNeeded(
+      300,
+      null,
+      CachedNetworkImageProvider(imageUrl),
+    ),
     width: width,
     height: height,
     fit: fit,
-    useOldImageOnUrlChange: true,
-    fadeInDuration: Duration.zero,
-    fadeOutDuration: Duration.zero,
-    placeholder: (context, url) =>
-        Container(color: Theme.of(context).colorScheme.surfaceContainerHighest),
-    errorWidget: (context, url, error) {
+    gaplessPlayback: true,
+    filterQuality: FilterQuality.low,
+    frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+      if (wasSynchronouslyLoaded || frame != null) return child;
+      return SizedBox(
+        width: width,
+        height: height,
+        child: ColoredBox(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        ),
+      );
+    },
+    errorBuilder: (context, error, stackTrace) {
       final theme = Theme.of(context);
-      return ColoredBox(
-        color: theme.cardColor.withValues(alpha: 0.5),
-        child: Center(
-          child: Icon(
-            Icons.broken_image_outlined,
-            color: theme.disabledColor,
-            size: 24,
+      return SizedBox(
+        width: width,
+        height: height,
+        child: ColoredBox(
+          color: theme.cardColor.withValues(alpha: 0.5),
+          child: Center(
+            child: Icon(
+              Icons.broken_image_outlined,
+              color: theme.disabledColor,
+              size: 24,
+            ),
           ),
         ),
       );
@@ -179,7 +203,13 @@ class PostCard extends StatelessWidget {
     final meta = resolvePostCardMeta(data);
 
     return GestureDetector(
-      onTap: onTap ?? () => navigateToDetail(context, data),
+      onTap:
+          onTap ??
+          () => navigateToDetail(
+            context,
+            data,
+            cardContext: Instances.isTV ? null : context,
+          ),
       child: Instances.isDesktopPlatform
           ? WindowsCard(
               data: data,

@@ -19,6 +19,7 @@ import 'package:baka/widgets/common/scale_button.dart';
 import 'package:baka/widgets/anime_detail/collection_sheet.dart';
 import 'package:baka/widgets/anime_detail/character_detail_sheet.dart';
 import 'package:baka/widgets/anime_detail/anime_detail_header.dart';
+import 'package:baka/widgets/anime_detail/anime_detail_background.dart';
 import 'package:baka/widgets/anime_detail/anime_detail_comments.dart';
 import 'package:baka/widgets/anime_detail/anime_detail_related.dart';
 
@@ -35,7 +36,23 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
   late final int? _postId;
 
   Animation<double>? _routeAnimation;
+  ModalRoute<dynamic>? _route;
   bool _initialRouteTransitionFinished = false;
+  final List<VoidCallback> _pendingInitialUpdates = [];
+
+  bool get _canPublishInitialUpdates =>
+      _route == null ||
+      (_route!.isCurrent &&
+          !_route!.offstage &&
+          (_routeAnimation == null || _routeAnimation!.isCompleted));
+
+  void _publishInitialUpdates() {
+    _initialRouteTransitionFinished = true;
+    for (final update in _pendingInitialUpdates) {
+      update();
+    }
+    _pendingInitialUpdates.clear();
+  }
 
   late List<Map<String, dynamic>> _initialComments;
   late int _initialCommentTotal;
@@ -47,8 +64,6 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
   late BgmInfo _bgmInfo;
   Map<String, dynamic>? _detailData;
   Map<String, dynamic>? _anibakaData;
-  List<Map<String, dynamic>> _characters = const [];
-  bool _charactersLoading = false;
   late AnimeDetailViewData _detail;
 
   int? get _subjectId => _bgmInfo.subjectId;
@@ -60,13 +75,12 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
 
   void _rebuildDetail() {
     _bgmInfo = BgmUtils.readFromData(widget.data);
-    _detailData = BgmUtils.asMap(widget.data['bgmDetailData']);
+    _detailData = BgmUtils.asMap(widget.data['bgmDetailData']) ?? _detailData;
     _detail = AnimeDetailViewData.from(
       source: widget.data,
       bgmInfo: _bgmInfo,
       anibaka: _anibakaData,
       bgm: _detailData,
-      characters: _characters,
     );
   }
 
@@ -78,6 +92,15 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
     _initialCommentTotal =
         BgmUtils.toInt(widget.data['bgmCommentTotal']) ??
         _initialComments.length;
+    // Hydrate from the API-owned cache before constructing the first frame.
+    // A warm request still returns a Future; queuing its .then callback behind
+    // the transition would incorrectly animate default content for 320 ms.
+    final subjectId = BgmUtils.readFromData(widget.data).subjectId;
+    if (subjectId != null) {
+      _anibakaData = AniBakaApi.peekAnimeDetail(subjectId);
+      _detailData = BgmUtils.asMap(widget.data['bgmDetailData']) ??
+          peekBgmSubject(subjectId);
+    }
     _rebuildDetail();
 
     _loadInitialData();
@@ -86,40 +109,43 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final animation = ModalRoute.of(context)?.animation;
+    final route = _route = ModalRoute.of(context);
+    final animation = route?.animation;
     if (!identical(animation, _routeAnimation)) {
       _routeAnimation?.removeStatusListener(_handleRouteAnimationStatus);
       _routeAnimation = animation;
       animation?.addStatusListener(_handleRouteAnimationStatus);
     }
-    if (animation == null || animation.status == AnimationStatus.completed) {
-      _initialRouteTransitionFinished = true;
-    }
+    // Navigator temporarily reports a completed animation while laying the
+    // destination out offstage. That is not the end of the visible transition.
+    if (_canPublishInitialUpdates) _publishInitialUpdates();
   }
 
   void _handleRouteAnimationStatus(AnimationStatus status) {
     if (status != AnimationStatus.completed ||
-        _initialRouteTransitionFinished ||
+        !_canPublishInitialUpdates ||
+        (_initialRouteTransitionFinished && _pendingInitialUpdates.isEmpty) ||
         !mounted) {
       return;
     }
-    setState(() => _initialRouteTransitionFinished = true);
+    setState(_publishInitialUpdates);
   }
 
   void _updateInitialState(VoidCallback update) {
     if (!mounted) return;
-    if (_initialRouteTransitionFinished) {
+    if (_initialRouteTransitionFinished && _canPublishInitialUpdates) {
       setState(update);
     } else {
-      // Keep the Hero destination stable while the route is moving. The
-      // completed animation listener publishes accumulated results together.
-      update();
+      // Do not mutate the visible model during either direction of a route
+      // transition. A canceled back gesture publishes the queued results.
+      _pendingInitialUpdates.add(update);
     }
   }
 
   @override
   void dispose() {
     _routeAnimation?.removeStatusListener(_handleRouteAnimationStatus);
+    _pendingInitialUpdates.clear();
     super.dispose();
   }
 
@@ -144,14 +170,18 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
       }
     }
 
-    final bgmId = _subjectId;
+    // Subject resolution is available to requests even while its UI update is
+    // queued until the transition settles.
+    if (!mounted) return;
+    final bgmId = BgmUtils.readFromData(widget.data).subjectId;
     if (bgmId == null) {
       _updateInitialState(() => _isCollectionLoading = false);
       return;
     }
 
     // Phase 2: 并发启动所有请求，各自独立更新 UI
-    // AniBaka 自有 API（含 overview）
+    // AniBaka 自有 API（含 overview）。空响应或失败时保持无数据，页面回落到
+    // BGM 简介与封面。
     if (_anibakaData == null) {
       AniBakaApi.getAnimeDetail(bgmId)
           .then((data) {
@@ -160,7 +190,9 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
               _rebuildDetail();
             });
           })
-          .catchError((_) {});
+          .catchError((Object e) {
+            debugPrint('获取 AniBaka 详情失败: $e');
+          });
     }
 
     // BGM 主条目；角色数据只在用户打开角色页时请求。
@@ -173,7 +205,9 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
               _rebuildDetail();
             });
           })
-          .catchError((_) {});
+          .catchError((Object e) {
+            debugPrint('获取 BGM 条目失败: $e');
+          });
     }
 
     // Phase 3: 收藏状态独立加载
@@ -185,7 +219,8 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
             _isCollectionLoading = false;
           });
         })
-        .catchError((_) {
+        .catchError((Object e) {
+          debugPrint('获取收藏状态失败: $e');
           _updateInitialState(() => _isCollectionLoading = false);
         });
   }
@@ -200,26 +235,6 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
       bgmImage: _bgmInfo.imageUrl,
       bgmTitle: _detail.bgmTitle,
     );
-  }
-
-  Future<void> _loadCharacters() async {
-    final subjectId = _subjectId;
-    if (subjectId == null || _characters.isNotEmpty || _charactersLoading) {
-      return;
-    }
-    setState(() => _charactersLoading = true);
-    try {
-      final characters = await getBgmCharacters(subjectId);
-      if (!mounted) return;
-      setState(() {
-        _characters = characters;
-        _charactersLoading = false;
-        _rebuildDetail();
-      });
-    } catch (error) {
-      debugPrint('获取Bangumi角色失败: $error');
-      if (mounted) setState(() => _charactersLoading = false);
-    }
   }
 
   Future<void> _updateCollectionStatus(CollectionStatus status) async {
@@ -329,9 +344,13 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
 
   Widget _buildContent() {
     final isWide = MediaQuery.of(context).size.width > 800;
+    final platform = Theme.of(context).platform;
+    final useBackdrop = isWide &&
+        (platform == TargetPlatform.windows ||
+            platform == TargetPlatform.macOS ||
+            platform == TargetPlatform.linux);
     final tabs = _buildTabs(isWide);
     final surfaceColor = Theme.of(context).scaffoldBackgroundColor;
-    final backgroundUrl = isWide ? _detail.backgroundUrl : _detail.coverUrl;
 
     return Stack(
       children: [
@@ -343,17 +362,12 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
           child: Stack(
             fit: StackFit.expand,
             children: [
-              if (_initialRouteTransitionFinished && backgroundUrl.isNotEmpty)
-                CachedNetworkImage(
-                  imageUrl: backgroundUrl,
-                  fit: BoxFit.cover,
-                  alignment: Alignment.topCenter,
-                  memCacheWidth: isWide ? 1280 : 720,
-                  useOldImageOnUrlChange: true,
-                  fadeInDuration: Duration.zero,
-                  fadeOutDuration: Duration.zero,
-                  errorWidget: (context, url, error) => const SizedBox(),
-                ),
+              AnimeDetailBackground(
+                coverUrl: _detail.coverUrl,
+                backgroundUrl: useBackdrop ? _detail.backgroundUrl : _detail.coverUrl,
+                loadBackground: useBackdrop && _initialRouteTransitionFinished,
+                cacheWidth: isWide ? 1280 : 720,
+              ),
               Positioned.fill(
                 child: Container(
                   decoration: BoxDecoration(
@@ -411,11 +425,6 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
                       dividerColor: Colors.transparent,
                       splashFactory: NoSplash.splashFactory,
                       overlayColor: WidgetStateProperty.all(Colors.transparent),
-                      onTap: (index) {
-                        if (tabs[index].$1 == '角色') {
-                          unawaited(_loadCharacters());
-                        }
-                      },
                       tabs: [for (final tab in tabs) Tab(text: tab.$1)],
                     );
 
@@ -426,7 +435,7 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
                         pinned: false,
                         foregroundColor: Colors.white,
                         title: Text(
-                          widget.data['title'] ?? '番剧详情',
+                          _detail.title,
                           style: const TextStyle(
                             fontWeight: FontWeight.w700,
                             fontSize: 18,
@@ -467,7 +476,8 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
                     child: TabBarView(
                       physics: const BouncingScrollPhysics(),
                       children: [
-                        for (final tab in tabs) Builder(builder: tab.$2),
+                        for (final tab in tabs)
+                          Builder(key: ValueKey(tab.$1), builder: tab.$2),
                       ],
                     ),
                   ),
@@ -559,12 +569,6 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
               subjectId: _subjectId!,
               initialComments: _initialComments,
               initialTotal: _initialCommentTotal,
-              onCommentsChanged: (result) {
-                _initialComments = result.$1;
-                _initialCommentTotal = result.$2;
-                widget.data['bgmComments'] = result.$1;
-                widget.data['bgmCommentTotal'] = result.$2;
-              },
             )
           : _buildEmptySection('暂无评论数据'),
     ));
@@ -586,17 +590,13 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
 
     tabs.add((
       '角色',
-      (_) => _wrapTabContent(
-        _charactersLoading
-            ? const Center(child: CircularProgressIndicator())
-            : _detail.characters.isEmpty
-            ? _buildEmptySection('暂无角色信息')
-            : CharactersSection(
-                characters: _detail.characters,
-                onCharacterTap: (character) =>
-                    showCharacterDetailSheet(context, character),
-              ),
-      ),
+      (_) => _subjectId == null
+          ? _buildEmptySection('暂无角色信息')
+          : CharactersSection(
+              subjectId: _subjectId!,
+              onCharacterTap: (character) =>
+                  showCharacterDetailSheet(context, character),
+            ),
     ));
 
     final subjectId = _subjectId;

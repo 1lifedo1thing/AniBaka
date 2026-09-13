@@ -1,0 +1,22 @@
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <!-- actions/upload-artifact wraps these three packages in an outer ZIP. -->
+  <zip-file>
+    <pe-file path="baka-${version}-windows-x64.exe">
+      <authenticode-sign />
+    </pe-file>
+    <msix-file path="baka-${version}-windows-x64.msix">
+      <pe-file path="baka.exe">
+        <authenticode-sign />
+      </pe-file>
+      <authenticode-sign />
+    </msix-file>
+    <zip-file path="baka-${version}-windows-x64.zip">
+      <pe-file path="baka.exe">
+        <authenticode-sign />
+      </pe-file>
+    </zip-file>
+  </zip-file>
+</artifact-configuration>

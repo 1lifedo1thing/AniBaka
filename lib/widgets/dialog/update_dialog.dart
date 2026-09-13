@@ -215,14 +215,15 @@ void showAnnouncementDialog({
   required UpdateInfo updateInfo,
 }) {
   final context = Instances.currentContext;
+  if (context == null) return;
   final hasUpdate = updateInfo.hasUpdate;
   final forceUpdate = updateInfo.forceUpdate;
-  final colorScheme = Theme.of(context).colorScheme;
 
   showDialog(
     barrierDismissible: !forceUpdate,
     context: context,
     builder: (BuildContext dialogContext) {
+      final colorScheme = Theme.of(dialogContext).colorScheme;
       return PopScope(
         canPop: !forceUpdate,
         child: AppDialog(

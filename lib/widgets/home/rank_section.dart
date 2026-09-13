@@ -114,48 +114,65 @@ class RankSection extends StatelessWidget {
   Widget _buildRankItem(BuildContext context, Map item, int index) {
     final rank = index + 1;
     final rankColor = _getRankColor(rank);
+    // The rank row carries its own tag: the feed below it may hold a card for
+    // the same cover, and two heroes sharing one tag in a route is an error.
+    final heroTag = 'rank_${coverHeroTag(item)}';
 
-    return Padding(
-      padding: const EdgeInsets.only(right: 12, top: 4),
-      child: GestureDetector(
-        onTap: () => navigateToDetail(context, item),
-        child: SizedBox(
-          width: _cardWidth,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(
-                height: _cardHeight,
-                child: Stack(
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: AspectRatio(
-                        aspectRatio: _cardAspectRatio,
-                        child: buildCachedImage(
-                          item,
-                          double.infinity,
-                          double.infinity,
+    return Builder(
+      builder: (cardContext) => Padding(
+        padding: const EdgeInsets.only(right: 12, top: 4),
+        child: GestureDetector(
+          onTap: () => navigateToDetail(
+            context,
+            item,
+            heroTag: heroTag,
+            cardContext: cardContext,
+            cardPreview: _buildRankItem(context, item, index),
+          ),
+          child: SizedBox(
+            width: _cardWidth,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  height: _cardHeight,
+                  child: Stack(
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: AspectRatio(
+                          aspectRatio: _cardAspectRatio,
+                          // Desktop flies this cover onto the cover the detail
+                          // page opens with. Touch platforms animate the card
+                          // route instead and suppress the flight.
+                          child: Hero(
+                            tag: heroTag,
+                            child: buildCachedImage(
+                              item,
+                              double.infinity,
+                              double.infinity,
+                            ),
+                          ),
                         ),
                       ),
-                    ),
-                    _buildRankBadge(rank, rankColor),
-                  ],
+                      _buildRankBadge(rank, rankColor),
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                item['title'] as String,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  height: 1.2,
-                  color: Theme.of(context).textTheme.bodyMedium?.color,
+                const SizedBox(height: 8),
+                Text(
+                  item['title'] as String,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    height: 1.2,
+                    color: Theme.of(context).textTheme.bodyMedium?.color,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

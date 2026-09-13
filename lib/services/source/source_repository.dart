@@ -336,12 +336,29 @@ class SourceCatalog extends ChangeNotifier {
   }
 
   bool _bundledRuleReplacesKnownLegacyOverride(CustomSourceConfig source) {
-    if (source.id != 'xifanacg') return false;
-    final legacyHost = Uri.tryParse(source.baseUrl)?.host.toLowerCase();
-    if (legacyHost != 'anime.xifanacg.com') return false;
-    final installedVersion = preferences.getInt(installedVersionKey(source.id));
-    return installedVersion == null ||
-        BundledRuleStore.versionFor(source.id) > installedVersion;
+    if (source.id == 'xifanacg') {
+      final legacyHost = Uri.tryParse(source.baseUrl)?.host.toLowerCase();
+      if (legacyHost != 'anime.xifanacg.com') return false;
+      final installedVersion = preferences.getInt(installedVersionKey(source.id));
+      return installedVersion == null ||
+          BundledRuleStore.versionFor(source.id) > installedVersion;
+    }
+    if (source.id == 'tvtfun') {
+      final installedVersion = preferences.getInt(installedVersionKey(source.id));
+      if (installedVersion == null ||
+          BundledRuleStore.versionFor(source.id) > installedVersion) {
+        return true;
+      }
+      final play = source.toSourceRule().play;
+      final hasDelay = play.any(
+        (s) =>
+            s.op == 'delay' ||
+            s.params['delayMs'] != null ||
+            s.params['delay'] != null,
+      );
+      if (!hasDelay) return true;
+    }
+    return false;
   }
 
   Future<void> _commit() async {

@@ -7,7 +7,7 @@
   "description": "TvTFun 动漫视频源。",
   "headers": {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-    "Referer": "https://tvtfun.net/"
+    "Referer": "https://www.tvtfun.net/"
   },
   "search": [
     {
@@ -63,7 +63,7 @@
     },
     {
       "op": "regex",
-      "pattern": "^([^|]+)\\|(.+)$",
+      "pattern": "^([^|]+)",
       "group": 1
     },
     {
@@ -77,8 +77,8 @@
     },
     {
       "op": "regex",
-      "pattern": "^([^|]+)\\|(.+)$",
-      "group": 2
+      "pattern": "^(?:[^|]+\\|)?(.+)$",
+      "group": 1
     },
     {
       "op": "setVar",
@@ -96,6 +96,7 @@
     {
       "op": "fetch",
       "url": "/api/videos/resolve-play-url?episodeId={tvtEpisodeId}",
+      "delayMs": 600,
       "headers": {
         "Accept": "application/json",
         "Referer": "https://www.tvtfun.net/video/{tvtVideoSlug}/play?source=0&episode=0",

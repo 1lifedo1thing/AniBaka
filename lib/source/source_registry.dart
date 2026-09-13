@@ -90,14 +90,6 @@ class AdapterRegistry {
       factory: () => _createBundledRuleAdapter('lm6'),
     ),
     AdapterDescriptor(
-      key: 'jcydmz',
-      displayName: '囧次元',
-      idPattern: r'/vod/detail/id/(\d+)',
-      icon: Icons.smart_display_rounded,
-      color: const Color(0xFFEF5350),
-      factory: () => _createBundledRuleAdapter('jcydmz'),
-    ),
-    AdapterDescriptor(
       key: 'mgnacg',
       displayName: 'Mgnacg',
       idPattern: r'/media/(\d+)/?',

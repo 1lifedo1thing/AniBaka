@@ -21,10 +21,20 @@ class AnimeDetailRelatedSection extends StatefulWidget {
       _AnimeDetailRelatedSectionState();
 }
 
-class _AnimeDetailRelatedSectionState extends State<AnimeDetailRelatedSection> {
-  late final Future<List<Map<String, dynamic>>> _items = _load(
-    widget.subjectId,
-  );
+class _AnimeDetailRelatedSectionState extends State<AnimeDetailRelatedSection>
+    with AutomaticKeepAliveClientMixin {
+  late Future<List<Map<String, dynamic>>> _items = _load(widget.subjectId);
+
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  void didUpdateWidget(covariant AnimeDetailRelatedSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.subjectId != widget.subjectId) {
+      _items = _load(widget.subjectId);
+    }
+  }
 
   static Future<List<Map<String, dynamic>>> _load(int subjectId) async {
     final response = await getBgmRelatedSubjects(subjectId);
@@ -60,46 +70,40 @@ class _AnimeDetailRelatedSectionState extends State<AnimeDetailRelatedSection> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     return FutureBuilder<List<Map<String, dynamic>>>(
       future: _items,
       builder: (context, snapshot) {
-        if (snapshot.hasError) {
+        if (snapshot.connectionState == ConnectionState.done &&
+            snapshot.hasError) {
           return const Center(child: Text('相关动画加载失败'));
         }
-        if (!snapshot.hasData) {
-          return SizedBox(
-            height: 260,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: 5,
-              separatorBuilder: (_, _) => const SizedBox(width: 14),
-              itemBuilder: (_, _) => AppSkeletonizer(
-                enabled: true,
-                child: SizedBox(
-                  width: 140,
-                  child: PostCard(const {
-                    'title': '相关动画标题占位',
-                    'image': '',
-                  }, onTap: () {}),
-                ),
-              ),
-            ),
-          );
+        final loading = snapshot.connectionState != ConnectionState.done;
+        final items = snapshot.data;
+        if (!loading && items!.isEmpty) {
+          return const Center(child: Text('暂无相关动画'));
         }
-
-        final items = snapshot.data!;
-        if (items.isEmpty) return const Center(child: Text('暂无相关动画'));
         return SizedBox(
           height: 260,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
-            itemCount: items.length,
+            itemCount: loading ? 5 : items!.length,
             separatorBuilder: (_, _) => const SizedBox(width: 14),
             itemBuilder: (context, index) {
-              final item = items[index];
+              final item = loading
+                  ? const <String, dynamic>{'title': '相关动画标题占位', 'image': ''}
+                  : items![index];
               return SizedBox(
                 width: 140,
-                child: PostCard(item, onTap: () => widget.onAnimeTap(item)),
+                child: AppSkeletonizer(
+                  enabled: loading,
+                  child: PostCard(
+                    item,
+                    onTap: () {
+                      if (!loading) widget.onAnimeTap(item);
+                    },
+                  ),
+                ),
               );
             },
           ),

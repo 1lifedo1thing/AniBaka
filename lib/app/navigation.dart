@@ -1,3 +1,4 @@
+import 'package:baka/instance.dart';
 import 'package:baka/models/playback_request.dart';
 import 'package:flutter/material.dart';
 import 'package:baka/pages/anime_detail/anime_detail_page.dart';
@@ -5,61 +6,80 @@ import 'package:baka/pages/player/player_page.dart';
 import 'package:baka/pages/search/search_page.dart';
 import 'package:baka/pages/source/source_management_page.dart';
 import 'package:baka/utils/platform_page_route.dart';
+import 'package:baka/utils/card_page_route.dart';
 
 /// 集中管理页面导航，解耦 Widget 对具体 Page 的直接依赖。
 class NavigationService {
   NavigationService._();
 
-  static PageRoute<void> _slideRoute(Widget page, {Duration? duration}) {
-    return platformPageRoute<void>(
-      builder: (_) => page,
-      transitionDuration: duration ?? const Duration(milliseconds: 380),
-      reverseTransitionDuration: duration ?? const Duration(milliseconds: 360),
-      transitionsBuilder: (_, animation, _, child) {
-        final curved = CurvedAnimation(
-          parent: animation,
-          curve: const Cubic(0.22, 1.0, 0.36, 1.0),
-          reverseCurve: const Cubic(0.32, 0.0, 0.67, 0.0),
-        );
-        final fade = CurvedAnimation(
-          parent: animation,
-          curve: Curves.easeOutCubic,
-          reverseCurve: Curves.easeInCubic,
-        );
-        return SlideTransition(
-          position: Tween(
-            begin: const Offset(0.12, 0.0),
-            end: Offset.zero,
-          ).animate(curved),
-          child: FadeTransition(opacity: fade, child: child),
-        );
-      },
-    );
-  }
+  static PageRoute<void> _pageRoute(Widget page) =>
+      platformPageRoute<void>(builder: (_) => page);
 
   /// 导航到番剧详情页，并保留当前页面以便正常返回。
+  ///
+  /// [cardContext] and [cardPreview] describe the card that was tapped. They
+  /// drive the card route on touch platforms and are ignored on desktop, where
+  /// the cover is animated by its own Hero flight instead.
   static void toDetail(
     BuildContext context,
     Map data, {
     int? posIndex,
     bool autoMatch = false,
+    BuildContext? cardContext,
+    Widget? cardPreview,
   }) {
     // Detail and later playback enrich their route data independently. Keep
     // those mutations away from the source card while retaining its episode.
     final routeData = data.cast<String, dynamic>();
     if (posIndex != null) routeData['currPlayIndex'] = posIndex;
-    Navigator.push(
-      context,
-      _slideRoute(
-        autoMatch
-            ? PlayerPage(
-                request: PlaybackRequest.fromMap(routeData),
-                posIndex: posIndex,
-                autoMatch: true,
-              )
-            : AnimeDetailPage(data: routeData),
-      ),
-    );
+    final page = autoMatch
+        ? PlayerPage(
+            request: PlaybackRequest.fromMap(routeData),
+            posIndex: posIndex,
+            autoMatch: true,
+          )
+        : AnimeDetailPage(data: routeData);
+    final navigator = Navigator.of(context);
+    Rect? sourceRect() {
+      if (cardContext == null || !cardContext.mounted) return null;
+      final box = cardContext.findRenderObject();
+      final overlay = navigator.overlay?.context.findRenderObject();
+      if (box is! RenderBox ||
+          !box.attached ||
+          !box.hasSize ||
+          overlay is! RenderBox ||
+          !overlay.hasSize) {
+        return null;
+      }
+      final rect = box.localToGlobal(Offset.zero, ancestor: overlay) & box.size;
+      if (!rect.isFinite ||
+          rect.isEmpty ||
+          !(Offset.zero & overlay.size).overlaps(rect)) {
+        return null;
+      }
+      return rect;
+    }
+
+    final origin = sourceRect();
+    final preview = cardPreview;
+    final PageRoute<void> route;
+    // Desktop keeps the Hero flight between the card and the detail header, so
+    // the surface is only built where the cover has no flight of its own.
+    if (origin != null &&
+        preview != null &&
+        !autoMatch &&
+        !Instances.isDesktopPlatform) {
+      route = CardPageRoute<void>(
+        builder: (_) => page,
+        sourceRect: origin,
+        resolveSourceRect: sourceRect,
+        preview: preview,
+        reduceMotion: MediaQuery.disableAnimationsOf(context),
+      );
+    } else {
+      route = _pageRoute(page);
+    }
+    navigator.push(route);
   }
 
   static void toPlayer(
@@ -86,7 +106,7 @@ class NavigationService {
                 FadeTransition(opacity: anim, child: child),
             transitionDuration: const Duration(milliseconds: 300),
           )
-        : _slideRoute(
+        : _pageRoute(
             PlayerPage(
               request: PlaybackRequest.fromMap(routeData),
               posIndex: posIndex,

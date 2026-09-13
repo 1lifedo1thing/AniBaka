@@ -45,14 +45,7 @@ class TvFocusable extends StatefulWidget {
 class _TvFocusableState extends State<TvFocusable> {
   static const Duration _focusAnimDuration = Duration(milliseconds: 150);
 
-  late final FocusNode _focusNode = widget.focusNode ?? FocusNode();
   bool _isFocused = false;
-
-  @override
-  void dispose() {
-    if (widget.focusNode == null) _focusNode.dispose();
-    super.dispose();
-  }
 
   void _onFocusChanged(bool hasFocus) {
     if (_isFocused == hasFocus) return;
@@ -82,7 +75,7 @@ class _TvFocusableState extends State<TvFocusable> {
     final scale = widget.enableScale && _isFocused ? widget.focusScale : 1.0;
 
     return Focus(
-      focusNode: _focusNode,
+      focusNode: widget.focusNode,
       autofocus: widget.autofocus,
       onFocusChange: _onFocusChanged,
       onKeyEvent: _onKeyEvent,

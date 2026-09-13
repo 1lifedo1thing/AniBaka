@@ -13,9 +13,6 @@ class RuleValidation {
 }
 
 /// 规则静态校验器。
-///
-/// 在**安装/导入时**干跑规则的结构：检查必填元数据、op 名合法性、
-/// 每个 op 的必填参数、正则可编译性。错误在导入时暴露，而不是等到播放时。
 class RuleValidator {
   RuleValidator._();
 

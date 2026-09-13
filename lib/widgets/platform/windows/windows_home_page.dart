@@ -24,23 +24,25 @@ class WindowsHomePage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      body: RefreshWrapper(
-        onLoadMore: svc.loadMore,
-        onRefresh: onRefresh,
-        loadMoreResetListenable: svc.tag,
-        showInitialIndicator: false,
-        child: CustomScrollView(
-          scrollCacheExtent: const ScrollCacheExtent.pixels(600),
-          slivers: [
-            const SliverToBoxAdapter(child: SizedBox(height: 20)),
-            _buildBanner(),
-            _buildSchedule(),
-            _buildRanks(),
-            const SliverToBoxAdapter(child: SizedBox(height: 12)),
-            _buildTagBar(),
-            _buildFeedGrid(),
-            const SliverToBoxAdapter(child: SizedBox(height: 36)),
-          ],
+      body: LayoutBuilder(
+        builder: (context, constraints) => RefreshWrapper(
+          onLoadMore: svc.loadMore,
+          onRefresh: onRefresh,
+          loadMoreResetListenable: svc.tag,
+          showInitialIndicator: false,
+          child: CustomScrollView(
+            scrollCacheExtent: const ScrollCacheExtent.pixels(600),
+            slivers: [
+              const SliverToBoxAdapter(child: SizedBox(height: 20)),
+              _buildBanner(),
+              _buildSchedule(),
+              _buildRanks(),
+              const SliverToBoxAdapter(child: SizedBox(height: 12)),
+              _buildTagBar(),
+              _buildFeedGrid(constraints.maxWidth),
+              const SliverToBoxAdapter(child: SizedBox(height: 36)),
+            ],
+          ),
         ),
       ),
     );
@@ -130,37 +132,32 @@ class WindowsHomePage extends StatelessWidget {
     );
   }
 
-  Widget _buildFeedGrid() {
+  Widget _buildFeedGrid(double width) {
+    // SliverConstraints 随滚动逐帧变化，列数只需要依赖窗口的可用宽度。
+    final columns = _columnsFor(width);
     return ValueListenableBuilder<HomeItems>(
       valueListenable: svc.feed,
-      builder: (context, items, _) => SliverLayoutBuilder(
-        builder: (context, constraints) {
-          final columns = _columnsFor(constraints.crossAxisExtent);
-          return SliverPadding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            sliver: SliverGrid(
-              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: columns,
-                childAspectRatio: 0.68,
-                crossAxisSpacing: 16,
-                mainAxisSpacing: 18,
-              ),
-              delegate: SliverChildBuilderDelegate(
-                (context, index) {
-                  final item = items[index];
-                  return PostCard(
-                    item,
-                    key: ValueKey(
-                      'feed_${item['bgmId'] ?? item['id'] ?? index}',
-                    ),
-                  );
-                },
-                childCount: items.length,
-                addAutomaticKeepAlives: false,
-              ),
-            ),
-          );
-        },
+      builder: (context, items, _) => SliverPadding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        sliver: SliverGrid(
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: columns,
+            childAspectRatio: 0.68,
+            crossAxisSpacing: 16,
+            mainAxisSpacing: 18,
+          ),
+          delegate: SliverChildBuilderDelegate(
+            (context, index) {
+              final item = items[index];
+              return PostCard(
+                item,
+                key: ValueKey('feed_${item['bgmId'] ?? item['id'] ?? index}'),
+              );
+            },
+            childCount: items.length,
+            addAutomaticKeepAlives: false,
+          ),
+        ),
       ),
     );
   }
@@ -238,7 +235,11 @@ class WindowsHomePage extends StatelessWidget {
             children: [
               Hero(
                 tag: heroTag,
-                child: buildCachedImage(data, double.infinity, double.infinity),
+                child: buildCachedImage(
+                  data,
+                  double.infinity,
+                  double.infinity,
+                ),
               ),
               Positioned(
                 left: 0,

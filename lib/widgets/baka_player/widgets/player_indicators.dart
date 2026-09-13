@@ -1,4 +1,5 @@
 import 'package:baka/models/playback_state.dart';
+import 'package:baka/widgets/common/value_selector.dart';
 import '../controller.dart';
 import 'package:baka/utils/duration_utils.dart';
 import 'package:flutter/material.dart';
@@ -133,21 +134,25 @@ class PlayerVolumeBrightnessIndicators extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<PlayerOverlayState>(
+    return ValueSelector<PlayerOverlayState, (double?, double?)>(
       valueListenable: controller.overlay,
-      builder: (context, overlay, _) => Stack(
+      select: (state) => (
+        volumeVisible ? state.volume : null,
+        brightnessVisible ? state.brightness : null,
+      ),
+      builder: (context, _) => Stack(
         children: [
           _VerticalIndicator(
             alignment: Alignment.centerRight,
             margin: const EdgeInsets.only(right: 24),
-            value: overlay.volume,
+            value: controller.overlay.value.volume,
             visible: volumeVisible,
             icon: Icons.volume_up_rounded,
           ),
           _VerticalIndicator(
             alignment: Alignment.centerLeft,
             margin: const EdgeInsets.only(left: 24),
-            value: overlay.brightness,
+            value: controller.overlay.value.brightness,
             visible: brightnessVisible,
             icon: Icons.brightness_6_rounded,
           ),
@@ -187,9 +192,7 @@ class PlayerErrorIndicator extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Text(
-                onAiRepair == null
-                    ? '播放失败，请换源或到 BAKA 报错'
-                    : '播放失败，请换源或使用 AI 修复',
+                onAiRepair == null ? '播放失败，请换源或到 BAKA 报错' : '播放失败，请换源或使用 AI 修复',
                 style: const TextStyle(color: Colors.white),
               ),
               const SizedBox(height: 10),
@@ -476,4 +479,3 @@ final _indicatorDecoration = BoxDecoration(
     ),
   ],
 );
-

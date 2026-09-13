@@ -658,7 +658,12 @@ class _SearchPageState extends State<SearchPage> {
                   'bgmImageUrl': data['bgmImageUrl'],
                 if (data['score'] != null) 'score': data['score'],
               };
-              NavigationService.toDetail(context, detailData);
+              NavigationService.toDetail(
+                context,
+                detailData,
+                cardContext: context,
+                cardPreview: PostCard(data),
+              );
             };
           } else if (source != null && source.isNotEmpty) {
             onTap = () => _openSeries(data);

@@ -229,6 +229,7 @@ class PlaybackPreferences {
     this.videoFitDescription = '画面',
     this.hwdecMode = 'auto',
     this.videoRenderer = 'gpu',
+    this.filterHlsAds = false,
   });
 
   final bool rememberLastPosition;
@@ -252,6 +253,7 @@ class PlaybackPreferences {
   final String videoFitDescription;
   final String hwdecMode;
   final String videoRenderer;
+  final bool filterHlsAds;
 
   PlaybackPreferences copyWith({
     bool? rememberLastPosition,
@@ -275,6 +277,7 @@ class PlaybackPreferences {
     String? videoFitDescription,
     String? hwdecMode,
     String? videoRenderer,
+    bool? filterHlsAds,
   }) => PlaybackPreferences(
     rememberLastPosition: rememberLastPosition ?? this.rememberLastPosition,
     autoFullscreen: autoFullscreen ?? this.autoFullscreen,
@@ -300,6 +303,7 @@ class PlaybackPreferences {
     videoFitDescription: videoFitDescription ?? this.videoFitDescription,
     hwdecMode: hwdecMode ?? this.hwdecMode,
     videoRenderer: videoRenderer ?? this.videoRenderer,
+    filterHlsAds: filterHlsAds ?? this.filterHlsAds,
   );
 
   @override
@@ -326,7 +330,8 @@ class PlaybackPreferences {
           videoFit == other.videoFit &&
           videoFitDescription == other.videoFitDescription &&
           hwdecMode == other.hwdecMode &&
-          videoRenderer == other.videoRenderer;
+          videoRenderer == other.videoRenderer &&
+          filterHlsAds == other.filterHlsAds;
 
   @override
   int get hashCode => Object.hash(
@@ -349,7 +354,7 @@ class PlaybackPreferences {
     subtitleConfig,
     videoFit,
     videoFitDescription,
-    Object.hash(hwdecMode, videoRenderer),
+    Object.hash(hwdecMode, videoRenderer, filterHlsAds),
   );
 }
 

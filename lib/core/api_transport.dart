@@ -29,13 +29,17 @@ class ApiTransport {
     final revision = session.generation;
     final uri = Uri.parse(url);
     final auth = uri.path == '/user/login' || uri.path == '/user/refresh';
+    final upstreamAuth = uri.path.startsWith('/api/v1/bangumi/oauth/');
+    final carriesCredentials = !auth && session.token.isNotEmpty;
     try {
-      if (!auth && session.expiresSoon && !await session.refresh()) {
+      if (carriesCredentials &&
+          session.expiresSoon &&
+          !await session.refresh()) {
         if (revision == session.generation) await session.logout();
         return '';
       }
       for (var attempt = 0; attempt < 2; attempt++) {
-        if (revision != session.generation) return '';
+        if (carriesCredentials && revision != session.generation) return '';
         final token = session.token;
         final abort = Completer<void>();
         final request =
@@ -56,8 +60,11 @@ class ApiTransport {
                   throw TimeoutException('$method $uri', timeout);
                 },
               );
-        if (revision != session.generation) return '';
+        if (carriesCredentials && revision != session.generation) return '';
         if (result.statusCode != 401 || auth) return result.body;
+
+        if (upstreamAuth) return '';
+        if (token.isEmpty) return '';
         if (attempt == 0 && (token != session.token || await session.refresh())) {
           continue;
         }

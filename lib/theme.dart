@@ -61,17 +61,7 @@ class AppFonts {
   static const double defaultFontScale = 1.0;
   static const int defaultFontWeightIndex = 3;
 
-  static const List<FontWeight> availableWeights = [
-    FontWeight.w100,
-    FontWeight.w200,
-    FontWeight.w300,
-    FontWeight.w400,
-    FontWeight.w500,
-    FontWeight.w600,
-    FontWeight.w700,
-    FontWeight.w800,
-    FontWeight.w900,
-  ];
+  static const List<FontWeight> availableWeights = FontWeight.values;
 
   static const List<String> weightLabels = [
     '极细 W100',
@@ -104,9 +94,19 @@ class AppFonts {
       fontOptions[fontName] ?? fontName;
 }
 
+// Keep Flutter's gesture tracking/cancellation, but finish ordinary back
+// navigation promptly. The SDK default inherits the 450 ms forward duration.
+class _AppPredictiveBackPageTransitionsBuilder
+    extends PredictiveBackPageTransitionsBuilder {
+  const _AppPredictiveBackPageTransitionsBuilder();
+
+  @override
+  Duration get reverseTransitionDuration => const Duration(milliseconds: 220);
+}
+
 const _pageTransitionsTheme = PageTransitionsTheme(
   builders: {
-    TargetPlatform.android: PredictiveBackPageTransitionsBuilder(),
+    TargetPlatform.android: _AppPredictiveBackPageTransitionsBuilder(),
     TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
     TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
     TargetPlatform.windows: ZoomPageTransitionsBuilder(),
@@ -114,8 +114,9 @@ const _pageTransitionsTheme = PageTransitionsTheme(
 );
 
 class AppTheme {
-  static final ThemeData _lightBase = _baseTheme(Brightness.light);
-  static final ThemeData _darkBase = _baseTheme(Brightness.dark);
+  // Keep only the current color bases; font changes reuse their typography.
+  static ThemeData _lightBase = _baseTheme(Brightness.light);
+  static ThemeData _darkBase = _baseTheme(Brightness.dark);
 
   static String? _cachedFontFamily;
   static FontWeight? _cachedFontWeight;
@@ -138,16 +139,18 @@ class AppTheme {
       return cached;
     }
 
-    final lightBase = lightColorScheme == null
+    final lightBase = _cachedLightColorScheme == lightColorScheme
         ? _lightBase
         : _baseTheme(Brightness.light, dynamicColorScheme: lightColorScheme);
-    final darkBase = darkColorScheme == null
+    final darkBase = _cachedDarkColorScheme == darkColorScheme
         ? _darkBase
         : _baseTheme(Brightness.dark, dynamicColorScheme: darkColorScheme);
     final themes = (
       light: _withFont(lightBase, fontFamily, fontWeight),
       dark: _withFont(darkBase, fontFamily, fontWeight),
     );
+    _lightBase = lightBase;
+    _darkBase = darkBase;
     _cachedFontFamily = fontFamily;
     _cachedFontWeight = fontWeight;
     _cachedLightColorScheme = lightColorScheme;
@@ -160,35 +163,33 @@ class AppTheme {
     String fontFamily,
     FontWeight fontWeight,
   ) {
-    final textTheme = AppFonts.isSystemFont(fontFamily)
+    var textTheme = AppFonts.isSystemFont(fontFamily)
         ? base.textTheme
         : GoogleFonts.getTextTheme(fontFamily, base.textTheme);
-    return base.copyWith(
-      textTheme: fontWeight == FontWeight.w400
-          ? textTheme
-          : _withWeight(textTheme, fontWeight),
-    );
-  }
-
-  static TextTheme _withWeight(TextTheme theme, FontWeight weight) {
-    TextStyle? apply(TextStyle? style) => style?.copyWith(fontWeight: weight);
-    return theme.copyWith(
-      displayLarge: apply(theme.displayLarge),
-      displayMedium: apply(theme.displayMedium),
-      displaySmall: apply(theme.displaySmall),
-      headlineLarge: apply(theme.headlineLarge),
-      headlineMedium: apply(theme.headlineMedium),
-      headlineSmall: apply(theme.headlineSmall),
-      titleLarge: apply(theme.titleLarge),
-      titleMedium: apply(theme.titleMedium),
-      titleSmall: apply(theme.titleSmall),
-      bodyLarge: apply(theme.bodyLarge),
-      bodyMedium: apply(theme.bodyMedium),
-      bodySmall: apply(theme.bodySmall),
-      labelLarge: apply(theme.labelLarge),
-      labelMedium: apply(theme.labelMedium),
-      labelSmall: apply(theme.labelSmall),
-    );
+    if (fontWeight != FontWeight.w400) {
+      TextStyle? apply(TextStyle? style) =>
+          style?.copyWith(fontWeight: fontWeight);
+      textTheme = TextTheme(
+        displayLarge: apply(textTheme.displayLarge),
+        displayMedium: apply(textTheme.displayMedium),
+        displaySmall: apply(textTheme.displaySmall),
+        headlineLarge: apply(textTheme.headlineLarge),
+        headlineMedium: apply(textTheme.headlineMedium),
+        headlineSmall: apply(textTheme.headlineSmall),
+        titleLarge: apply(textTheme.titleLarge),
+        titleMedium: apply(textTheme.titleMedium),
+        titleSmall: apply(textTheme.titleSmall),
+        bodyLarge: apply(textTheme.bodyLarge),
+        bodyMedium: apply(textTheme.bodyMedium),
+        bodySmall: apply(textTheme.bodySmall),
+        labelLarge: apply(textTheme.labelLarge),
+        labelMedium: apply(textTheme.labelMedium),
+        labelSmall: apply(textTheme.labelSmall),
+      );
+    }
+    return identical(textTheme, base.textTheme)
+        ? base
+        : base.copyWith(textTheme: textTheme);
   }
 
   static ThemeData _baseTheme(
@@ -214,7 +215,9 @@ class AppTheme {
         );
     final usesDynamicColor = dynamicColorScheme != null;
 
-    return ThemeData(useMaterial3: true, colorScheme: colorScheme).copyWith(
+    return ThemeData(
+      useMaterial3: true,
+      colorScheme: colorScheme,
       scaffoldBackgroundColor: usesDynamicColor
           ? colorScheme.surface
           : isDark
@@ -233,11 +236,7 @@ class AppTheme {
       ),
       iconTheme: IconThemeData(color: colorScheme.onSurface),
       inputDecorationTheme: InputDecorationTheme(
-        fillColor: usesDynamicColor
-            ? colorScheme.surfaceContainerHighest
-            : isDark
-            ? const Color(0x1AFFFFFF)
-            : const Color(0x0D000000),
+        fillColor: colorScheme.surfaceContainerHighest,
         hintStyle: TextStyle(
           color: usesDynamicColor
               ? colorScheme.onSurfaceVariant.withValues(alpha: 0.6)

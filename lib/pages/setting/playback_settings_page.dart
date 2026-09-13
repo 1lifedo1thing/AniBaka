@@ -156,6 +156,15 @@ class _PlaybackSettingsPageState extends State<PlaybackSettingsPage> {
                         _preferences.copyWith(showSubtitle: !value),
                       ),
                     ),
+                    SettingsSwitchTile(
+                      title: 'HLS 视频去广告',
+                      subtitle: '自动探测并剔除 m3u8 流中内嵌的异编码广告切片',
+                      value: _preferences.filterHlsAds,
+                      icon: Icons.filter_alt_outlined,
+                      onChanged: (value) => _updatePreferences(
+                        _preferences.copyWith(filterHlsAds: value),
+                      ),
+                    ),
                     SettingsTile(
                       title: '硬件解码',
                       value:

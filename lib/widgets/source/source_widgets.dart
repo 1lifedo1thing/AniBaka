@@ -31,7 +31,10 @@ class SourceIcon extends StatelessWidget {
         borderRadius: BorderRadius.circular(radius),
         child: CachedNetworkImage(
           imageUrl: url,
-          memCacheWidth: (size * 2).round(),
+          memCacheWidth: (size * MediaQuery.devicePixelRatioOf(context)).ceil(),
+          memCacheHeight: (size * MediaQuery.devicePixelRatioOf(context))
+              .ceil(),
+          fadeInDuration: Duration.zero,
           width: size,
           height: size,
           fit: BoxFit.cover,
@@ -45,7 +48,7 @@ class SourceIcon extends StatelessWidget {
 
   Widget _buildFallback(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final initial = name.isNotEmpty ? name[0].toUpperCase() : '?';
+    final initial = name.isNotEmpty ? name.characters.first.toUpperCase() : '?';
 
     return Container(
       width: size,
@@ -195,19 +198,19 @@ class SourceGridCard extends StatelessWidget {
     final hint = context.theme.hintColor;
     final buttonAction = busy ? null : (onButtonPressed ?? onTap);
 
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: active ? primary.withValues(alpha: 0.05) : context.cardColor,
+    return Material(
+      color: active ? primary.withValues(alpha: 0.05) : context.cardColor,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(
+        side: BorderSide(
           color: emphasized
               ? primary.withValues(alpha: 0.3)
               : context.theme.dividerColor.withValues(alpha: 0.1),
           width: emphasized ? 1.5 : 1,
         ),
       ),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
+      child: InkWell(
         onTap: busy ? null : onTap,
         child: Padding(
           padding: const EdgeInsets.all(12),
@@ -219,23 +222,27 @@ class SourceGridCard extends StatelessWidget {
                 children: [
                   icon,
                   const Spacer(),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 6,
-                      vertical: 2,
-                    ),
-                    decoration: BoxDecoration(
-                      color: emphasized
-                          ? primary.withValues(alpha: 0.1)
-                          : context.theme.dividerColor.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(
-                      badge,
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                        color: emphasized ? primary : hint,
+                  Flexible(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: emphasized
+                            ? primary.withValues(alpha: 0.1)
+                            : context.theme.dividerColor.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        badge,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                          color: emphasized ? primary : hint,
+                        ),
                       ),
                     ),
                   ),
@@ -326,7 +333,9 @@ class SourceGridCard extends StatelessWidget {
                     backgroundColor: emphasized
                         ? primary
                         : context.theme.dividerColor.withValues(alpha: 0.1),
-                    foregroundColor: emphasized ? Colors.white : hint,
+                    foregroundColor: emphasized
+                        ? context.colorScheme.onPrimary
+                        : hint,
                     disabledBackgroundColor: context.theme.dividerColor
                         .withValues(alpha: 0.08),
                     disabledForegroundColor: hint,
@@ -399,7 +408,6 @@ class SourceReorderSection<T> extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Material(
               color: context.cardColor,
-              borderRadius: BorderRadius.circular(12),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
                 side: BorderSide(

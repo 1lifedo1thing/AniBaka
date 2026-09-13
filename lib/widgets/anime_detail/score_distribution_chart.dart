@@ -27,12 +27,9 @@ class ScoreDistributionChart extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final scheme = Theme.of(context).colorScheme;
 
-    final safe = counts.length >= 10
-        ? counts.sublist(0, 10)
-        : [...counts, ...List.filled(10 - counts.length, 0)];
     var maxCount = 0;
-    for (final c in safe) {
-      if (c > maxCount) maxCount = c;
+    for (var i = 0; i < counts.length && i < 10; i++) {
+      if (counts[i] > maxCount) maxCount = counts[i];
     }
     if (maxCount <= 0) {
       return const SizedBox.shrink();
@@ -70,7 +67,7 @@ class ScoreDistributionChart extends StatelessWidget {
                 for (var i = 0; i < 10; i++) ...[
                   if (i > 0) SizedBox(width: barGap),
                   _Bar(
-                    count: safe[i],
+                    count: i < counts.length ? counts[i] : 0,
                     maxCount: maxCount,
                     maxHeight: maxBarHeight,
                     width: barWidth,

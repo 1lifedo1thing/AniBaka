@@ -10,13 +10,11 @@ class AnimeCommentsTab extends StatefulWidget {
   final int subjectId;
   final List<Map<String, dynamic>> initialComments;
   final int initialTotal;
-  final ValueChanged<(List<Map<String, dynamic>>, int)>? onCommentsChanged;
 
   const AnimeCommentsTab({
     required this.subjectId,
     this.initialComments = const [],
     this.initialTotal = 0,
-    this.onCommentsChanged,
     super.key,
   });
 
@@ -27,12 +25,10 @@ class AnimeCommentsTab extends StatefulWidget {
 class _AnimeCommentsTabState extends State<AnimeCommentsTab>
     with AutomaticKeepAliveClientMixin {
   List<Map<String, dynamic>> _comments = [];
-  int _commentTotal = 0;
   bool _isCommentsLoading = false;
-  bool _isLoadingMoreComments = false;
+  bool _hasMoreComments = true;
+  bool _failed = false;
   static const int _commentPageSize = 20;
-
-  bool get _hasMoreComments => _comments.length < _commentTotal;
 
   @override
   bool get wantKeepAlive => true;
@@ -40,51 +36,50 @@ class _AnimeCommentsTabState extends State<AnimeCommentsTab>
   @override
   void initState() {
     super.initState();
-    _comments = List.of(widget.initialComments);
-    _commentTotal = widget.initialTotal;
-    if (_comments.isEmpty) {
-      _fetchComments();
-    }
+    _reset();
   }
 
-  Future<void> _fetchComments({bool loadMore = false}) async {
-    if (!loadMore && _isCommentsLoading) return;
-    if (!loadMore && _comments.isNotEmpty && _commentTotal > 0) return;
-    if (loadMore && (_isLoadingMoreComments || !_hasMoreComments)) return;
+  @override
+  void didUpdateWidget(covariant AnimeCommentsTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.subjectId != widget.subjectId) _reset();
+  }
 
-    if (loadMore) {
-      setState(() => _isLoadingMoreComments = true);
-    } else {
-      setState(() {
-        _isCommentsLoading = true;
-        _comments = [];
-      });
-    }
+  void _reset() {
+    _comments = List.of(widget.initialComments);
+    _hasMoreComments =
+        _comments.isEmpty || _comments.length < widget.initialTotal;
+    _isCommentsLoading = false;
+    _failed = false;
+    if (_comments.isEmpty) _fetchComments();
+  }
+
+  Future<void> _fetchComments() async {
+    if (_isCommentsLoading || !_hasMoreComments) return;
+    final subjectId = widget.subjectId;
+    // Each subject owns its growable list; cached pages remain read-only.
+    final comments = _comments;
+    setState(() {
+      _isCommentsLoading = true;
+      _failed = false;
+    });
 
     try {
       final page = await getBgmSubjectComments(
-        widget.subjectId,
+        subjectId,
         limit: _commentPageSize,
-        offset: _comments.length,
+        offset: comments.length,
       );
-      if (!mounted) return;
-      setState(() {
-        if (loadMore) {
-          _comments.addAll(page.comments);
-        } else {
-          _comments = page.comments;
-        }
-        _commentTotal = page.total;
-      });
-      widget.onCommentsChanged?.call((_comments, _commentTotal));
+      if (!mounted || !identical(comments, _comments)) return;
+      comments.addAll(page.comments);
+      _hasMoreComments =
+          page.comments.isNotEmpty && comments.length < page.total;
     } catch (e) {
       debugPrint('获取番剧评论失败: $e');
+      if (identical(comments, _comments)) _failed = true;
     } finally {
-      if (mounted) {
-        setState(() {
-          _isCommentsLoading = false;
-          _isLoadingMoreComments = false;
-        });
+      if (mounted && identical(comments, _comments)) {
+        setState(() => _isCommentsLoading = false);
       }
     }
   }
@@ -94,11 +89,11 @@ class _AnimeCommentsTabState extends State<AnimeCommentsTab>
     super.build(context);
     return NotificationListener<ScrollNotification>(
       onNotification: (notification) {
-        if (notification is ScrollEndNotification &&
+        if (notification.depth == 0 &&
+            notification is ScrollUpdateNotification &&
             notification.metrics.extentAfter < 200 &&
-            !_isLoadingMoreComments &&
-            _hasMoreComments) {
-          _fetchComments(loadMore: true);
+            !_failed) {
+          _fetchComments();
         }
         return false;
       },
@@ -115,28 +110,14 @@ class _AnimeCommentsTabState extends State<AnimeCommentsTab>
           padding: const EdgeInsets.fromLTRB(4, 16, 4, 0),
           sliver: SliverList(
             delegate: SliverChildBuilderDelegate(
-              (context, index) => AppSkeletonizer(
-                enabled: true,
-                child: _CommentItem(
-                  comment: const {
-                    'user': {
-                      'nickname': '用户名称占位符',
-                      'avatar': {'large': ''},
-                    },
-                    'rate': 8,
-                    'comment': '这是一条用于自动骨架遮罩的评论内容占位文本...',
-                    'updated_at': '2026-08-06 12:00:00',
-                  },
-                  isDark: isDark,
-                ),
-              ),
+              (context, index) => _loadingComment(isDark),
               childCount: 5,
             ),
           ),
         ),
       ];
     }
-    if (_comments.isEmpty) {
+    if (_comments.isEmpty && !_failed) {
       return [
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(4, 24, 4, 0),
@@ -160,21 +141,14 @@ class _AnimeCommentsTabState extends State<AnimeCommentsTab>
         sliver: SliverList(
           delegate: SliverChildBuilderDelegate((context, index) {
             if (index >= _comments.length) {
-              return AppSkeletonizer(
-                enabled: true,
-                child: _CommentItem(
-                  comment: const {
-                    'user': {
-                      'nickname': '用户名称占位符',
-                      'avatar': {'large': ''},
-                    },
-                    'rate': 8,
-                    'comment': '这是一条用于自动骨架遮罩的评论内容占位文本...',
-                    'updated_at': '2026-08-06 12:00:00',
-                  },
-                  isDark: isDark,
-                ),
-              );
+              return _isCommentsLoading
+                  ? _loadingComment(isDark)
+                  : Center(
+                      child: TextButton(
+                        onPressed: _fetchComments,
+                        child: Text(_failed ? '加载失败，点击重试' : '加载更多'),
+                      ),
+                    );
             }
             return _CommentItem(comment: _comments[index], isDark: isDark);
           }, childCount: _comments.length + (_hasMoreComments ? 1 : 0)),
@@ -183,9 +157,21 @@ class _AnimeCommentsTabState extends State<AnimeCommentsTab>
       const SliverToBoxAdapter(child: SizedBox(height: 16)),
     ];
   }
+
+  Widget _loadingComment(bool isDark) => AppSkeletonizer(
+    enabled: true,
+    child: _CommentItem(
+      comment: const {
+        'user': {'nickname': '用户名称占位符'},
+        'rate': 8,
+        'comment': '这是一条用于自动骨架遮罩的评论内容占位文本...',
+      },
+      isDark: isDark,
+    ),
+  );
 }
 
-/// 独立 StatelessWidget — 仅在自身数据变化时重建，避免整列表级联 rebuild
+/// SliverList 只创建可见区域及缓存范围内的评论。
 class _CommentItem extends StatelessWidget {
   final Map<String, dynamic> comment;
   final bool isDark;
@@ -224,15 +210,17 @@ class _CommentItem extends StatelessWidget {
           Row(
             children: [
               ClipOval(
-                child: CachedNetworkImage(
-                  imageUrl: avatarUrl,
-                  memCacheWidth: 80,
-                  width: 32,
-                  height: 32,
-                  fit: BoxFit.cover,
-                  placeholder: (_, _) => _avatarPlaceholder,
-                  errorWidget: (_, _, _) => _avatarPlaceholder,
-                ),
+                child: avatarUrl.isEmpty
+                    ? _avatarPlaceholder
+                    : CachedNetworkImage(
+                        imageUrl: avatarUrl,
+                        memCacheWidth: 80,
+                        width: 32,
+                        height: 32,
+                        fit: BoxFit.cover,
+                        placeholder: (_, _) => _avatarPlaceholder,
+                        errorWidget: (_, _, _) => _avatarPlaceholder,
+                      ),
               ),
               const SizedBox(width: 10),
               Expanded(

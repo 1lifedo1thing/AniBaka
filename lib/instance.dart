@@ -14,8 +14,9 @@ class Instances {
   static final Map<String, Future<Directory>> _desktopDirectories = {};
   static Future<Directory>? _documentsDirectory;
 
-  static BuildContext get currentContext =>
-      navigatorKey.currentState!.overlay!.context;
+  static BuildContext? get currentContext =>
+      navigatorKey.currentContext ??
+      navigatorKey.currentState?.overlay?.context;
 
   static late SharedPreferences sp;
 

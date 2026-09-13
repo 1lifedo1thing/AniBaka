@@ -33,7 +33,6 @@ class PlaybackController {
   static const _maxLongPressRate = 5.0;
 
   Player? _player;
-  VideoController? _internalVideoController;
 
   final core = ValueNotifier<PlaybackCoreState>(const PlaybackCoreState());
   final timeline = ValueNotifier<PlaybackTimelineState>(
@@ -80,7 +79,8 @@ class PlaybackController {
   String? _lastOpenUri;
   Map<String, String>? _lastOpenHeaders;
 
-  String? get currentMediaUri => _player?.state.playlist.medias.firstOrNull?.uri;
+  String? get currentMediaUri =>
+      _player?.state.playlist.medias.firstOrNull?.uri;
   List<SubtitleTrack> get subtitleTracks =>
       _player?.state.tracks.subtitle ?? const <SubtitleTrack>[];
   SubtitleTrack get currentSubtitleTrack =>
@@ -111,6 +111,10 @@ class PlaybackController {
       showDanmaku: !preferences.value.defaultDanmakuOff,
     );
 
+    _createPlayer(preferences.value.videoRenderer);
+  }
+
+  void _createPlayer(String renderer) {
     MediaKit.ensureInitialized();
     final player = Player(
       configuration: const PlayerConfiguration(
@@ -120,32 +124,14 @@ class PlaybackController {
     );
     _player = player;
 
-    final isAndroid = Platform.isAndroid;
-    String? vo;
-    if (isAndroid) {
-      vo = loaded.videoRenderer == mediacodecEmbedRenderer
-          ? mediacodecEmbedRenderer
-          : null;
-    }
-    final vController = VideoController(
+    final embedded = Platform.isAndroid && renderer == mediacodecEmbedRenderer;
+    videoController.value = VideoController(
       player,
       configuration: VideoControllerConfiguration(
-        vo: vo,
-        hwdec: isAndroid && loaded.videoRenderer == mediacodecEmbedRenderer
-            ? 'mediacodec'
-            : null,
+        vo: embedded ? mediacodecEmbedRenderer : null,
+        hwdec: embedded ? 'mediacodec' : null,
       ),
     );
-    _internalVideoController = vController;
-    if (_disposed) {
-      await player.dispose();
-      return;
-    }
-    videoController.value = vController;
-    _bindPlayerListeners(player);
-  }
-
-  void _bindPlayerListeners(Player player) {
     _subscriptions.addAll([
       player.stream.playing.listen(_onPlayingChanged),
       player.stream.position.listen(_onPositionChanged),
@@ -166,13 +152,14 @@ class PlaybackController {
     bool autoplay = true,
     Map<String, String>? httpHeaders,
   }) async {
+    if (_disposed) return;
     _lastOpenUri = uri;
     _lastOpenHeaders = httpHeaders;
     try {
       _resetPlaybackState();
       await initialize();
       final player = _player;
-      if (player == null) return;
+      if (_disposed || player == null) return;
       if (currentMediaUri != null) await player.stop();
       await _configurePlayer(preferences.value.defaultPlaybackSpeed);
       await player.open(
@@ -289,12 +276,12 @@ class PlaybackController {
     _lastTimelineBucket = bucket;
 
     _danmakuController?.syncTime(position);
-    _updateSkipState(position);
     final current = timeline.value;
     timeline.value = current.copyWith(
       position: position,
       previewPosition: current.seeking ? current.previewPosition : position,
     );
+    _updateSkipState(position);
   }
 
   void _onDurationChanged(Duration duration) {
@@ -414,6 +401,10 @@ class PlaybackController {
   Future<void> setRate(double rate, {bool roomCorrection = false}) async {
     if (_disposed || (_roomRateLocked && !roomCorrection)) return;
     final normalized = rate > 0 ? rate : 1.0;
+    if (core.value.playbackRate == normalized &&
+        (_player == null || _player!.state.rate == normalized)) {
+      return;
+    }
     core.value = core.value.copyWith(playbackRate: normalized);
     _danmakuController?.playbackRate = normalized;
     await _player?.setRate(normalized);
@@ -507,9 +498,9 @@ class PlaybackController {
     _reverseSeekInFlight = true;
     try {
       final rewind = Duration(
-        milliseconds: (_reverseTickInterval.inMilliseconds *
-                _reversePlaybackRate)
-            .round(),
+        milliseconds:
+            (_reverseTickInterval.inMilliseconds * _reversePlaybackRate)
+                .round(),
       );
       await _performSeek(timeline.value.position - rewind);
     } finally {
@@ -792,13 +783,15 @@ class PlaybackController {
   Future<bool> toggleVideoEnhancement() async {
     final current = preferences.value;
     final enabling = current.videoEnhancementMode == VideoEnhancementMode.off;
-    final mode =
-        enabling ? current.lastVideoEnhancementMode : VideoEnhancementMode.off;
+    final mode = enabling
+        ? current.lastVideoEnhancementMode
+        : VideoEnhancementMode.off;
     await updatePreferences(
       current.copyWith(
         videoEnhancementMode: mode,
-        lastVideoEnhancementMode:
-            enabling ? mode : current.videoEnhancementMode,
+        lastVideoEnhancementMode: enabling
+            ? mode
+            : current.videoEnhancementMode,
       ),
     );
     return enabling;
@@ -839,14 +832,15 @@ class PlaybackController {
     } catch (_) {}
     final player = _player;
     final state = player?.state;
-    final properties = (player != null && state != null && state.duration > Duration.zero)
+    final properties =
+        (player != null && state != null && state.duration > Duration.zero)
         ? await _readNativeProperties(player)
         : const <String, String>{};
     final video = state != null ? _activeVideoTrack(state) : null;
     final audio = state != null ? _activeAudioTrack(state) : null;
     final params = state?.videoParams;
     final audioParams = state?.audioParams;
-    final outputRect = _internalVideoController?.rect.value;
+    final outputRect = videoController.value?.rect.value;
     final settings = preferences.value;
     final actual = enhancement.value;
 
@@ -954,34 +948,9 @@ class PlaybackController {
     videoController.value = null;
     await player.dispose();
     _player = null;
-    _internalVideoController = null;
     if (_disposed) return;
-
-    final newPlayer = Player(
-      configuration: const PlayerConfiguration(
-        bufferSize: 8 * 1024 * 1024,
-        title: 'BAKA Player',
-      ),
-    );
-    _player = newPlayer;
-
-    final isAndroid = Platform.isAndroid;
-    String? vo;
-    if (isAndroid) {
-      vo = renderer == mediacodecEmbedRenderer ? mediacodecEmbedRenderer : null;
-    }
-    final vController = VideoController(
-      newPlayer,
-      configuration: VideoControllerConfiguration(
-        vo: vo,
-        hwdec: isAndroid && renderer == mediacodecEmbedRenderer
-            ? 'mediacodec'
-            : null,
-      ),
-    );
-    _internalVideoController = vController;
-    videoController.value = vController;
-    _bindPlayerListeners(newPlayer);
+    _createPlayer(renderer);
+    final newPlayer = _player!;
     _resetPlaybackState();
     await _configurePlayer(rate);
 
@@ -1022,17 +991,13 @@ class PlaybackController {
     );
     if (pipeline == VideoEnhancementPipeline.off) {
       await _setNativeProperty('glsl-shaders', '');
-      for (final entry in framebuffer.entries) {
-        await _setNativeProperty(entry.key, entry.value);
-      }
-    } else {
-      for (final entry in framebuffer.entries) {
-        await _setNativeProperty(entry.key, entry.value);
-      }
     }
-    final shaderPath = await Anime4K.shaderPath(pipeline);
+    await _syncProperties(framebuffer);
     if (pipeline != VideoEnhancementPipeline.off) {
-      await _setNativeProperty('glsl-shaders', shaderPath);
+      await _setNativeProperty(
+        'glsl-shaders',
+        await Anime4K.shaderPath(pipeline),
+      );
     }
     if (_disposed) return;
     enhancement.value = enhancement.value.copyWith(
@@ -1042,8 +1007,9 @@ class PlaybackController {
     );
   }
 
-  Future<void> _syncSubtitleConfig() =>
-      _syncProperties(buildSubtitleProperties(preferences.value.subtitleConfig));
+  Future<void> _syncSubtitleConfig() => _syncProperties(
+    buildSubtitleProperties(preferences.value.subtitleConfig),
+  );
 
   void _resetPlaybackState() {
     _stopReversePlayback();
@@ -1089,7 +1055,7 @@ class PlaybackController {
     await _settingsWrites;
     final player = _player;
     _player = null;
-    _internalVideoController = null;
+    videoController.value = null;
     if (player != null) {
       try {
         await player.pause();

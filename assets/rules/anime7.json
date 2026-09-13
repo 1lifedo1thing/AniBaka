@@ -55,6 +55,7 @@
     },
     {
       "op": "first",
+      "filterHlsAds": true,
       "branches": [
         [
           {

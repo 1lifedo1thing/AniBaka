@@ -26,15 +26,10 @@ class TvHomePage extends StatefulWidget {
 
 class _TvHomePageState extends State<TvHomePage> {
   _TvSection _selectedSection = _TvSection.home;
-  Map? _focusedItem;
+  final _focusedItem = ValueNotifier<Map?>(null);
   final ScrollController _scrollController = ScrollController();
   bool _loadingMore = false;
   String? _exhaustedTag;
-
-  int? _detailSubjectId;
-  int? _loadingDetailSubjectId;
-  int _detailRequest = 0;
-  AnimeDetailViewData? _focusedDetail;
 
   @override
   void initState() {
@@ -45,6 +40,7 @@ class _TvHomePageState extends State<TvHomePage> {
   @override
   void dispose() {
     _scrollController.dispose();
+    _focusedItem.dispose();
     super.dispose();
   }
 
@@ -59,7 +55,7 @@ class _TvHomePageState extends State<TvHomePage> {
   }
 
   Future<void> _loadMore() async {
-    if (_loadingMore) return;
+    if (_loadingMore || _exhaustedTag == widget.svc.tag.value) return;
     _loadingMore = true;
     final tag = widget.svc.tag.value;
     try {
@@ -74,49 +70,6 @@ class _TvHomePageState extends State<TvHomePage> {
         });
       }
     }
-  }
-
-  /// 异步自动预载与详情页完全一致的 AniBaka API 详细数据
-  void _loadAnimeDetail(Map item) {
-    final subjectId = BgmUtils.toInt(item['bgmId']);
-    if (subjectId == null || subjectId <= 0) return;
-    if (_detailSubjectId == subjectId || _loadingDetailSubjectId == subjectId) {
-      return;
-    }
-
-    _loadingDetailSubjectId = subjectId;
-    final request = ++_detailRequest;
-
-    final bgmInfo = BgmInfo(
-      score: BgmUtils.toDouble(item['score']),
-      subjectId: subjectId,
-    );
-
-    () async {
-      try {
-        final bgmFuture = getBgmSubject(subjectId);
-        final anibakaFuture = AniBakaApi.getAnimeDetail(subjectId);
-        final detailData = await bgmFuture;
-        final anibakaData = await anibakaFuture;
-        if (!mounted || request != _detailRequest) return;
-        final detail = AnimeDetailViewData.from(
-          source: item,
-          bgmInfo: bgmInfo,
-          anibaka: anibakaData,
-          bgm: detailData,
-        );
-        setState(() {
-          _detailSubjectId = subjectId;
-          _focusedDetail = detail;
-        });
-      } catch (error) {
-        debugPrint('TV 首页详情加载失败: $error');
-      } finally {
-        if (request == _detailRequest) {
-          _loadingDetailSubjectId = null;
-        }
-      }
-    }();
   }
 
   @override
@@ -144,7 +97,6 @@ class _TvHomePageState extends State<TvHomePage> {
     );
   }
 
-  /// 侧边栏（与 tv_anime_detail 源码 100% 保持一致）
   Widget _buildLeftSidebar() {
     return Column(
       mainAxisAlignment: MainAxisAlignment.start,
@@ -216,20 +168,18 @@ class _TvHomePageState extends State<TvHomePage> {
     return ValueListenableBuilder<HomeItems>(
       valueListenable: widget.svc.feed,
       builder: (context, items, _) {
-        final currentFocused =
-            _focusedItem ?? (items.isNotEmpty ? items.first : null);
-
-        if (currentFocused != null) {
-          _loadAnimeDetail(currentFocused);
-        }
-
-        final subjectId = BgmUtils.toInt(currentFocused?['bgmId']);
-        final detail = subjectId == _detailSubjectId ? _focusedDetail : null;
-
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildFixedHeroHeader(currentFocused, detail),
+            ValueListenableBuilder<Map?>(
+              valueListenable: _focusedItem,
+              builder: (context, focused, _) {
+                final item = focused ?? (items.isEmpty ? null : items.first);
+                return item == null
+                    ? const SizedBox.shrink()
+                    : _TvHomeHero(key: ObjectKey(item), item: item);
+              },
+            ),
 
             const SizedBox(height: 8),
 
@@ -285,21 +235,15 @@ class _TvHomePageState extends State<TvHomePage> {
                             index,
                           ) {
                             final item = items[index];
-                            final isFocused = (currentFocused == item);
 
                             return _TvPosterCard(
                               key: ValueKey(
                                 'waterfall_${item['bgmId'] ?? item['id'] ?? index}',
                               ),
                               data: item,
-                              isSelected: isFocused,
                               autofocus: index == 0,
                               onFocused: () {
-                                if (_focusedItem != item) {
-                                  setState(() {
-                                    _focusedItem = item;
-                                  });
-                                }
+                                _focusedItem.value = item;
                                 if (index >= items.length - 7) {
                                   _loadMore();
                                 }
@@ -336,23 +280,59 @@ class _TvHomePageState extends State<TvHomePage> {
       },
     );
   }
+}
 
-  /// 固定顶部的 Hero 展台：展示区调大至 370px，背景图主导扩大至 760px，信息更靠左
-  Widget _buildFixedHeroHeader(Map? item, AnimeDetailViewData? detail) {
-    if (item == null && detail == null) return const SizedBox.shrink();
+class _TvHomeHero extends StatefulWidget {
+  const _TvHomeHero({required this.item, super.key});
+  final Map item;
 
-    final title = detail?.title ?? item?['title']?.toString() ?? '';
-    final scoreNum = detail?.score ?? BgmUtils.toDouble(item?['score']) ?? 0;
+  @override
+  State<_TvHomeHero> createState() => _TvHomeHeroState();
+}
+
+class _TvHomeHeroState extends State<_TvHomeHero> {
+  late final _detail = _loadDetail();
+
+  Future<AnimeDetailViewData?> _loadDetail() async {
+    final item = widget.item;
+    final subjectId = BgmUtils.toInt(item['bgmId']);
+    if (subjectId == null || subjectId <= 0) return null;
+    final data = await Future.wait([
+      getBgmSubject(subjectId),
+      AniBakaApi.getAnimeDetail(subjectId),
+    ]);
+    return AnimeDetailViewData.from(
+      source: item,
+      bgmInfo: BgmInfo(
+        score: BgmUtils.toDouble(item['score']),
+        subjectId: subjectId,
+      ),
+      bgm: data[0],
+      anibaka: data[1],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<AnimeDetailViewData?>(
+    future: _detail,
+    builder: (context, snapshot) => _buildHeader(snapshot.data),
+  );
+
+  Widget _buildHeader(AnimeDetailViewData? detail) {
+    final item = widget.item;
+
+    final title = detail?.title ?? item['title']?.toString() ?? '';
+    final scoreNum = detail?.score ?? BgmUtils.toDouble(item['score']) ?? 0;
     final scoreText = scoreNum.toStringAsFixed(1);
-    final summary = detail?.summary ?? item?['summary']?.toString() ?? '';
+    final summary = detail?.summary ?? item['summary']?.toString() ?? '';
     final backdropUrl =
         detail?.backgroundUrl ??
-        item?['backdropUrl']?.toString() ??
-        item?['bgmImageUrl']?.toString() ??
-        item?['content']?.toString() ??
+        item['backdropUrl']?.toString() ??
+        item['bgmImageUrl']?.toString() ??
+        item['content']?.toString() ??
         '';
-    final logoUrl = detail?.logoUrl ?? item?['logoUrl']?.toString() ?? '';
-    final rankNum = BgmUtils.toInt(item?['rank']) ?? 0;
+    final logoUrl = detail?.logoUrl ?? item['logoUrl']?.toString() ?? '';
+    final rankNum = BgmUtils.toInt(item['rank']) ?? 0;
 
     return SizedBox(
       height: 370,
@@ -488,33 +468,7 @@ class _TvHomePageState extends State<TvHomePage> {
   }
 
   Widget _buildTitleOrLogo(String title, String logoUrl) {
-    if (logoUrl.isNotEmpty) {
-      return Container(
-        height: 85,
-        alignment: Alignment.centerLeft,
-        child: CachedNetworkImage(
-          key: ValueKey(logoUrl),
-          imageUrl: logoUrl,
-          memCacheHeight: 170,
-          fit: BoxFit.contain,
-          alignment: Alignment.centerLeft,
-          errorWidget: (context, url, error) => Text(
-            title,
-            style: TextStyle(
-              color: context.tvTextColor,
-              fontSize: 44,
-              fontWeight: FontWeight.w900,
-              letterSpacing: -0.5,
-              height: 1.1,
-            ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-      );
-    }
-
-    return Text(
+    final text = Text(
       title,
       style: TextStyle(
         color: context.tvTextColor,
@@ -525,6 +479,18 @@ class _TvHomePageState extends State<TvHomePage> {
       ),
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
+    );
+    if (logoUrl.isEmpty) return text;
+    return SizedBox(
+      height: 85,
+      child: CachedNetworkImage(
+        key: ValueKey(logoUrl),
+        imageUrl: logoUrl,
+        memCacheHeight: 170,
+        fit: BoxFit.contain,
+        alignment: Alignment.centerLeft,
+        errorWidget: (context, url, error) => text,
+      ),
     );
   }
 
@@ -565,21 +531,17 @@ enum _TvSection { mine, search, home, favorites, settings }
 class _TvPosterCard extends StatelessWidget {
   const _TvPosterCard({
     required this.data,
-    required this.isSelected,
     required this.onFocused,
     this.autofocus = false,
     super.key,
   });
 
   final Map data;
-  final bool isSelected;
   final VoidCallback onFocused;
   final bool autofocus;
 
   @override
   Widget build(BuildContext context) {
-    final primaryColor = Theme.of(context).colorScheme.primary;
-
     return TvFocusable(
       autofocus: autofocus,
       borderRadius: BorderRadius.circular(12),
@@ -588,30 +550,9 @@ class _TvPosterCard extends StatelessWidget {
         if (focused) onFocused();
       },
       onPressed: () => navigateToDetail(context, data, posIndex: data['index']),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
-          border: isSelected
-              ? Border.all(color: primaryColor, width: 2.5)
-              : Border.all(
-                  color: Colors.white.withValues(alpha: 0.1),
-                  width: 1,
-                ),
-          boxShadow: isSelected
-              ? [
-                  BoxShadow(
-                    color: primaryColor.withValues(alpha: 0.4),
-                    blurRadius: 16,
-                    spreadRadius: 2,
-                  ),
-                ]
-              : null,
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(10),
-          child: buildCachedImage(data, double.infinity, double.infinity),
-        ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: buildCachedImage(data, double.infinity, double.infinity),
       ),
     );
   }

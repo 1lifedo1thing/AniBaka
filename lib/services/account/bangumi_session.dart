@@ -247,6 +247,9 @@ class BangumiSession {
     if (refreshToken.isEmpty) {
       throw const BangumiSyncException('Bangumi 登录已过期，请重新登录');
     }
+    if (accountSession.token.isEmpty) {
+      throw const BangumiSyncException('AniBaka账号未登录，无法续期 Bangumi 登录');
+    }
     final refreshed = await oauth.refresh(refreshToken);
     ensureCurrent(revision);
     final effectiveToken = refreshed.refreshToken.isEmpty
