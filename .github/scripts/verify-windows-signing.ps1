@@ -24,8 +24,29 @@ foreach ($extension in 'exe', 'msix', 'zip') {
 
 $signedFiles = @($packagePaths.exe, $packagePaths.msix)
 $temporaryDirectory = Join-Path ([IO.Path]::GetTempPath()) "anibaka-signature-$([guid]::NewGuid())"
+$testRootStore = $null
+$testRootInstalled = $false
 New-Item -ItemType Directory -Path $temporaryDirectory | Out-Null
 try {
+    if ($Policy -eq 'test-signing') {
+        # The test certificate is self-signed, so Windows only reports a valid signature once the
+        # certificate is trusted as a root. Without that, Get-AuthenticodeSignature returns
+        # UnknownError with the "terminated in a root certificate which is not trusted by the trust
+        # provider" message, which is also what corrupt signatures report. Trust exactly this pinned
+        # certificate for the duration of the verification so the signature itself is validated.
+        $testRootStore = [Security.Cryptography.X509Certificates.X509Store]::new(
+            [Security.Cryptography.X509Certificates.StoreName]::Root,
+            [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+        )
+        $testRootStore.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+        $alreadyTrusted = [bool]($testRootStore.Certificates |
+            Where-Object Thumbprint -eq $testCertificate.Thumbprint)
+        if (-not $alreadyTrusted) {
+            $testRootStore.Add($testCertificate)
+            $testRootInstalled = $true
+        }
+    }
+
     foreach ($extension in 'zip', 'msix') {
         $destination = Join-Path $temporaryDirectory $extension
         [IO.Compression.ZipFile]::ExtractToDirectory($packagePaths[$extension], $destination)
@@ -43,9 +64,7 @@ try {
             if ($signature.SignerCertificate.Thumbprint -ne $testCertificate.Thumbprint) {
                 throw "Unexpected test signing certificate for $file"
             }
-            # The self-signed test certificate is not installed as a trusted root.
-            # Reject broken/absent signatures; only tolerate the trust-chain error.
-            if ($signature.Status -notin 'Valid', 'NotTrusted') {
+            if ($signature.Status -ne 'Valid') {
                 throw "Invalid test signature for ${file}: $($signature.Status) / $($signature.StatusMessage)"
             }
         } else {
@@ -75,6 +94,10 @@ try {
         "### Windows code signing`n$($metadata -join "`n")" >> $env:GITHUB_STEP_SUMMARY
     }
 } finally {
+    if ($null -ne $testRootStore) {
+        if ($testRootInstalled) { $testRootStore.Remove($testCertificate) }
+        $testRootStore.Close()
+    }
     # This absolute directory was created above with a unique name for this invocation.
     Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force
 }
