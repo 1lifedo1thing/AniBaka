@@ -21,9 +21,10 @@ if [ ! -f "$entitlements_path" ]; then
   exit 1
 fi
 
-timestamp_args=()
+# Bash 3.2 treats an empty array as unset under nounset.
+timestamp_option=
 if [ "$use_timestamp" = "true" ]; then
-  timestamp_args+=(--timestamp)
+  timestamp_option=--timestamp
 fi
 
 sign_code() {
@@ -31,7 +32,7 @@ sign_code() {
     --force \
     --verbose \
     --options runtime \
-    "${timestamp_args[@]}" \
+    ${timestamp_option:+"$timestamp_option"} \
     --keychain "$signing_keychain" \
     --sign "$signing_identity" \
     "$1"
@@ -63,7 +64,7 @@ codesign \
   --force \
   --verbose \
   --options runtime \
-  "${timestamp_args[@]}" \
+  ${timestamp_option:+"$timestamp_option"} \
   --keychain "$signing_keychain" \
   --sign "$signing_identity" \
   --entitlements "$entitlements_path" \
