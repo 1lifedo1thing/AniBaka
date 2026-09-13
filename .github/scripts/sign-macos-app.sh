@@ -21,6 +21,15 @@ if [ ! -f "$entitlements_path" ]; then
   exit 1
 fi
 
+# Signing the bundle's main executable also seals the enclosing app. Leave it
+# for the final bundle signature, after all frameworks have been signed.
+executable_name=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_path/Contents/Info.plist")
+executable_path="$app_path/Contents/MacOS/$executable_name"
+if [ -z "$executable_name" ] || [ ! -f "$executable_path" ]; then
+  echo "::error::macOS main executable was not found at $executable_path."
+  exit 1
+fi
+
 # Bash 3.2 treats an empty array as unset under nounset.
 timestamp_option=
 if [ "$use_timestamp" = "true" ]; then
@@ -28,6 +37,7 @@ if [ "$use_timestamp" = "true" ]; then
 fi
 
 sign_code() {
+  echo "Signing nested code: $1"
   codesign \
     --force \
     --verbose \
@@ -39,9 +49,12 @@ sign_code() {
 }
 
 # Apple requires manual signing to proceed from the innermost code outwards.
-# Signing every Mach-O first also replaces vendor signatures on media_kit's
+# Signing nested Mach-O files first also replaces vendor signatures on media_kit's
 # versioned frameworks, including Ass.framework/Versions/A/Ass.
 while IFS= read -r -d '' item; do
+  if [ "$item" -ef "$executable_path" ]; then
+    continue
+  fi
   if file -b "$item" | grep -q 'Mach-O'; then
     sign_code "$item"
   fi
@@ -60,6 +73,7 @@ done < <(find "$app_path/Contents" -depth -type d -print0)
 # self-signed release identity has no Apple Team ID, while bundled media
 # frameworks may carry a vendor Team ID; this entitlement prevents dyld from
 # rejecting those libraries before main() runs.
+echo "Signing app bundle: $app_path"
 codesign \
   --force \
   --verbose \

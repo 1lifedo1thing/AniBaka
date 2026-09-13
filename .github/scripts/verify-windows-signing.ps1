@@ -6,6 +6,13 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+Write-Host "Validating Windows signing outputs (policy: $Policy)."
+if ($Policy -eq 'test-signing') {
+    $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        throw 'Test signature verification requires an elevated PowerShell session for temporary LocalMachine root trust.'
+    }
+}
 $testCertificatePath = Join-Path $PSScriptRoot '../signpath/test-certificate-2026.cer'
 $testCertificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new(
     (Resolve-Path -LiteralPath $testCertificatePath).Path
@@ -34,20 +41,26 @@ try {
         # UnknownError with the "terminated in a root certificate which is not trusted by the trust
         # provider" message, which is also what corrupt signatures report. Trust exactly this pinned
         # certificate for the duration of the verification so the signature itself is validated.
+        # CurrentUser Root can show a trust confirmation dialog and hang unattended CI.
+        # GitHub-hosted Windows runners are elevated; LocalMachine avoids that dialog.
+        Write-Host 'Opening LocalMachine Root for temporary test certificate trust.'
         $testRootStore = [Security.Cryptography.X509Certificates.X509Store]::new(
             [Security.Cryptography.X509Certificates.StoreName]::Root,
-            [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+            [Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine
         )
         $testRootStore.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
         $alreadyTrusted = [bool]($testRootStore.Certificates |
             Where-Object Thumbprint -eq $testCertificate.Thumbprint)
         if (-not $alreadyTrusted) {
+            Write-Host "Temporarily trusting test certificate $($testCertificate.Thumbprint)."
             $testRootStore.Add($testCertificate)
             $testRootInstalled = $true
         }
+        Write-Host 'Test certificate trust is ready.'
     }
 
     foreach ($extension in 'zip', 'msix') {
+        Write-Host "Extracting signed $extension package for verification."
         $destination = Join-Path $temporaryDirectory $extension
         [IO.Compression.ZipFile]::ExtractToDirectory($packagePaths[$extension], $destination)
         $executable = Join-Path $destination 'baka.exe'
@@ -58,6 +71,7 @@ try {
     }
 
     foreach ($file in $signedFiles) {
+        Write-Host "Checking Authenticode signature: $file"
         $signature = Get-AuthenticodeSignature -LiteralPath $file
         if ($null -eq $signature.SignerCertificate) { throw "SignPath did not sign $file" }
         if ($Policy -eq 'test-signing') {
@@ -95,7 +109,10 @@ try {
     }
 } finally {
     if ($null -ne $testRootStore) {
-        if ($testRootInstalled) { $testRootStore.Remove($testCertificate) }
+        if ($testRootInstalled) {
+            Write-Host 'Removing temporary test certificate trust.'
+            $testRootStore.Remove($testCertificate)
+        }
         $testRootStore.Close()
     }
     # This absolute directory was created above with a unique name for this invocation.

@@ -437,12 +437,13 @@ jobs:
 
       - name: Validate and stage signed Windows artifacts
         if: ${{ inputs.windows_signing_policy != 'unsigned' }}
+        timeout-minutes: 15
         shell: pwsh
         env:
           SIGNPATH_REQUEST_URL: ${{ steps.signpath_windows.outputs.signing-request-web-url }}
         run: |
-          ./.github/scripts/verify-windows-signing.ps1 -Version $env:RELEASE_VERSION -Policy $env:WINDOWS_SIGNING_POLICY
           "SignPath request: $env:SIGNPATH_REQUEST_URL" >> $env:GITHUB_STEP_SUMMARY
+          ./.github/scripts/verify-windows-signing.ps1 -Version $env:RELEASE_VERSION -Policy $env:WINDOWS_SIGNING_POLICY
 
       - name: Stage explicitly unsigned Windows artifacts
         if: ${{ inputs.windows_signing_policy == 'unsigned' }}
