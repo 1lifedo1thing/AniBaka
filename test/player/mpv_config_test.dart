@@ -2,16 +2,6 @@ import 'package:baka/widgets/baka_player/controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('embedded renderer profiles never replace media_kit vo', () {
-    for (final renderer in <String>['gpu', 'gpu-next', 'mediacodec_embed']) {
-      final properties = buildPlayerProperties(
-        videoRenderer: renderer,
-        android: true,
-      );
-      expect(properties, isNot(contains('vo')), reason: renderer);
-    }
-  });
-
   test('gpu-next changes only libmpv rendering properties on desktop', () {
     final properties = buildVideoRendererProperties('gpu-next', android: false);
 

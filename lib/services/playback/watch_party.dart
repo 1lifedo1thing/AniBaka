@@ -34,12 +34,10 @@ class WatchPartyViewState {
     WatchPartySnapshot? snapshot,
     String? error,
     int? latencyMs,
-    bool clearInvite = false,
-    bool clearSnapshot = false,
   }) => WatchPartyViewState(
     status: status ?? this.status,
-    invite: clearInvite ? null : (invite ?? this.invite),
-    snapshot: clearSnapshot ? null : (snapshot ?? this.snapshot),
+    invite: invite ?? this.invite,
+    snapshot: snapshot ?? this.snapshot,
     error: error ?? this.error,
     latencyMs: latencyMs ?? this.latencyMs,
   );
@@ -71,7 +69,8 @@ class WatchPartyService {
   PlaybackController? _controller;
   PlaybackContent? _content;
   Future<void> Function(int episodeIndex)? _onEpisodeRequested;
-  Future<void> _remoteApplyChain = Future<void>.value();
+  (int, WatchPartySnapshot, bool)? _pendingRemote;
+  int _playerGeneration = 0;
   String _inviteCode = '';
   String _nickname = '';
   bool _intentionalDisconnect = false;
@@ -144,20 +143,9 @@ class WatchPartyService {
     final generation = ++_connectionGeneration;
     _intentionalDisconnect = false;
     _reconnectTimer?.cancel();
-    _heartbeat?.cancel();
-    final previousSubscription = _channelSubscription;
-    final previousChannel = _channel;
-    _channelSubscription = null;
-    _channel = null;
-    _pendingPingId = null;
-    _pingClock.stop();
-    unawaited(previousSubscription?.cancel());
-    unawaited(previousChannel?.sink.close(ws_status.goingAway));
-    state.value = state.value.copyWith(
+    unawaited(_disconnect());
+    state.value = const WatchPartyViewState(
       status: WatchPartyConnectionStatus.connecting,
-      error: '',
-      clearInvite: true,
-      clearSnapshot: true,
     );
     return generation;
   }
@@ -169,12 +157,7 @@ class WatchPartyService {
   Future<void> _connect(String webSocketUrl, int generation) async {
     if (!_isCurrentConnection(generation)) return;
     _intentionalDisconnect = false;
-    final previousSubscription = _channelSubscription;
-    final previousChannel = _channel;
-    _channelSubscription = null;
-    _channel = null;
-    await previousSubscription?.cancel();
-    await previousChannel?.sink.close();
+    await _disconnect();
     if (!_isCurrentConnection(generation)) return;
     final channel = IOWebSocketChannel.connect(
       Uri.parse(webSocketUrl),
@@ -239,10 +222,6 @@ class WatchPartyService {
       throw StateError('连接成功，但未收到房间状态');
     }
     if (!_isCurrentConnection(generation, channel)) return;
-    await _controller?.configureWatchParty(
-      connected: true,
-      canControl: state.value.snapshot?.canControl ?? false,
-    );
     _send('ready.set', const {'ready': true});
   }
 
@@ -274,6 +253,8 @@ class WatchPartyService {
 
   void detachPlayer([PlaybackController? owner]) {
     if (owner != null && !identical(_controller, owner)) return;
+    _playerGeneration++;
+    _pendingRemote = null;
     final controller = _controller;
     if (controller != null) {
       controller.core.removeListener(_onCoreChanged);
@@ -315,18 +296,24 @@ class WatchPartyService {
     final generation = ++_connectionGeneration;
     _intentionalDisconnect = true;
     _reconnectTimer?.cancel();
+    final disconnect = _disconnect(ws_status.normalClosure);
+    state.value = const WatchPartyViewState();
+    await disconnect;
+    if (!_isCurrentConnection(generation)) return;
+    await _controller?.configureWatchParty(connected: false, canControl: true);
+  }
+
+  Future<void> _disconnect([int closeCode = ws_status.goingAway]) async {
     _heartbeat?.cancel();
+    _pendingRemote = null;
     final subscription = _channelSubscription;
     final channel = _channel;
     _channelSubscription = null;
     _channel = null;
     _pendingPingId = null;
     _pingClock.stop();
-    state.value = const WatchPartyViewState();
     await subscription?.cancel();
-    await channel?.sink.close(ws_status.normalClosure);
-    if (!_isCurrentConnection(generation)) return;
-    await _controller?.configureWatchParty(connected: false, canControl: true);
+    await channel?.sink.close(closeCode);
   }
 
   Future<void> closeRoom() async {
@@ -366,14 +353,15 @@ class WatchPartyService {
           );
           const maxChatMessages = 100;
           final currentChat = current.chat;
-          final history = currentChat.length < maxChatMessages
-              ? [...currentChat, message]
-              : [
-                  ...currentChat.sublist(
-                    currentChat.length - maxChatMessages + 1,
-                  ),
-                  message,
-                ];
+          final history = [
+            ...currentChat.skip(
+              (currentChat.length - maxChatMessages + 1).clamp(
+                0,
+                currentChat.length,
+              ),
+            ),
+            message,
+          ];
           state.value = state.value.copyWith(
             snapshot: current.copyWith(
               revision: (envelope['revision'] as num?)?.toInt(),
@@ -399,18 +387,22 @@ class WatchPartyService {
       final snapshot = WatchPartySnapshot.fromJson(
         envelope['payload'] as Map<String, dynamic>,
       );
-      final previous = state.value.snapshot;
+      final previous = _initialSnapshot?.isCompleted == false
+          ? null
+          : state.value.snapshot;
       state.value = state.value.copyWith(snapshot: snapshot, error: '');
       final initialSnapshot = _initialSnapshot;
       if (initialSnapshot != null && !initialSnapshot.isCompleted) {
         initialSnapshot.complete();
       }
-      unawaited(
-        _controller?.configureWatchParty(
-          connected: true,
-          canControl: snapshot.canControl,
-        ),
-      );
+      if (previous == null || previous.canControl != snapshot.canControl) {
+        unawaited(
+          _controller?.configureWatchParty(
+            connected: true,
+            canControl: snapshot.canControl,
+          ),
+        );
+      }
       _queueRemoteApply(generation, snapshot, previous);
     } catch (error, stackTrace) {
       AppLogger.instance.warning(
@@ -440,35 +432,47 @@ class WatchPartyService {
     int generation,
     WatchPartySnapshot snapshot,
     WatchPartySnapshot? previous,
-  ) {
-    _remoteApplyChain = _remoteApplyChain
-        .then((_) async {
-          if (!_isCurrentConnection(generation) || !state.value.connected) {
-            return;
-          }
-          await _applySnapshot(generation, snapshot, previous);
-        })
-        .catchError((Object error, StackTrace stackTrace) {
-          // A transient seek/episode-switch failure must not poison every
-          // later room update in the serialized apply chain.
+  ) async {
+    // 房间快照是完整状态；播放器忙时只保留最新一份，避免重放过时的跳转。
+    _pendingRemote = (generation, snapshot, previous == null);
+    if (_applyingRemote) return;
+    _applyingRemote = true;
+    try {
+      while (_pendingRemote != null) {
+        final pending = _pendingRemote!;
+        _pendingRemote = null;
+        try {
+          await _applySnapshot(pending.$1, pending.$2, pending.$3);
+        } catch (error, stackTrace) {
           AppLogger.instance.warning(
             'Unable to apply watch-party snapshot',
             tag: 'WatchParty',
             error: error,
             stackTrace: stackTrace,
           );
-        });
+        }
+      }
+    } finally {
+      _applyingRemote = false;
+      _lastPlaying = _controller?.core.value.playing;
+    }
   }
 
   Future<void> _applySnapshot(
     int generation,
     WatchPartySnapshot snapshot,
-    WatchPartySnapshot? previous,
+    bool initial,
   ) async {
     if (!_isCurrentConnection(generation) || !state.value.connected) return;
     final controller = _controller;
     final content = _content;
     if (controller == null || content == null) return;
+    final playerGeneration = _playerGeneration;
+    final channel = _channel;
+    bool isCurrent() =>
+        _isCurrentConnection(generation, channel) &&
+        state.value.connected &&
+        playerGeneration == _playerGeneration;
     final remoteMedia = snapshot.media;
     final localSubject = content.bgmInfo.subjectId;
     if (remoteMedia.bgmSubjectId != null &&
@@ -477,12 +481,10 @@ class WatchPartyService {
         remoteMedia.episodeIndex >= 0 &&
         remoteMedia.episodeIndex < content.videoList.length) {
       await _onEpisodeRequested?.call(remoteMedia.episodeIndex);
-      if (!_isCurrentConnection(generation) || !state.value.connected) return;
+      if (!isCurrent()) return;
     }
     final selfName = snapshot.self?.name;
-    if (selfName != null &&
-        snapshot.playback.setBy == selfName &&
-        previous != null) {
+    if (selfName != null && snapshot.playback.setBy == selfName && !initial) {
       return;
     }
     final playback = snapshot.playback;
@@ -498,37 +500,30 @@ class WatchPartyService {
     final currentSeconds =
         controller.timeline.value.position.inMilliseconds / 1000;
     final delta = targetSeconds - currentSeconds;
-    _applyingRemote = true;
-    try {
-      if (playback.doSeek || delta.abs() >= 4) {
-        await controller.seek(
-          Duration(milliseconds: (targetSeconds * 1000).round()),
-          remote: true,
-        );
-      }
-      if (playback.paused) {
-        if (delta.abs() > 0.25 && !playback.doSeek) {
-          await controller.seek(
-            Duration(milliseconds: (targetSeconds * 1000).round()),
-            remote: true,
-          );
-        }
-        if (controller.core.value.playing) await controller.pause(remote: true);
-        await controller.setRate(1.0, roomCorrection: true);
-      } else {
-        if (!controller.core.value.playing) await controller.play(remote: true);
-        if (delta < -1.5) {
-          await controller.setRate(0.95, roomCorrection: true);
-        } else if (delta > 1.5) {
-          await controller.setRate(1.05, roomCorrection: true);
-        } else if (delta.abs() < 0.1 ||
-            controller.core.value.playbackRate != 1.0) {
-          await controller.setRate(1.0, roomCorrection: true);
-        }
-      }
-    } finally {
-      _applyingRemote = false;
-      _lastPlaying = controller.core.value.playing;
+    final shouldSeek =
+        playback.doSeek ||
+        (playback.paused ? delta.abs() > 0.25 : delta.abs() >= 4);
+    if (shouldSeek) {
+      await controller.seek(
+        Duration(milliseconds: (targetSeconds * 1000).round()),
+        remote: true,
+      );
+      if (!isCurrent()) return;
+    }
+    if (playback.paused == controller.core.value.playing) {
+      await (playback.paused
+          ? controller.pause(remote: true)
+          : controller.play(remote: true));
+      if (!isCurrent()) return;
+    }
+    // 已精确跳转后无需再按跳转前的误差调速。
+    final rate = playback.paused || shouldSeek || delta.abs() <= 1.5
+        ? 1.0
+        : delta < 0
+        ? 0.95
+        : 1.05;
+    if (controller.core.value.playbackRate != rate) {
+      await controller.setRate(rate, roomCorrection: true);
     }
   }
 

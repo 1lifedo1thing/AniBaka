@@ -105,6 +105,7 @@ class CommentList extends StatefulWidget {
     this.onTapLink,
     this.autoLoad = true,
     this.asSliver = false,
+    this.loadingPlaceholder,
     this.onRefresh,
     super.key,
   });
@@ -118,6 +119,7 @@ class CommentList extends StatefulWidget {
 
   /// 嵌入 [CustomScrollView] 时直接生成惰性 Sliver，避免 shrinkWrap 全量构建。
   final bool asSliver;
+  final Widget? loadingPlaceholder;
 
   @override
   State<CommentList> createState() => CommentListState();
@@ -244,22 +246,24 @@ class CommentListState extends State<CommentList> {
     final comments = _effectiveComments;
 
     if (comments == null) {
-      final loading = AppSkeletonizer(
-        enabled: true,
-        child: Column(
-          children: List.generate(
-            3,
-            (_) => Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: _CommentCard(
-                comment: _dummyComment,
-                markdownStyle: _markdownStyle,
-                onReply: sendComment,
+      final loading =
+          widget.loadingPlaceholder ??
+          AppSkeletonizer(
+            enabled: true,
+            child: Column(
+              children: List.generate(
+                3,
+                (_) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: _CommentCard(
+                    comment: _dummyComment,
+                    markdownStyle: _markdownStyle,
+                    onReply: sendComment,
+                  ),
+                ),
               ),
             ),
-          ),
-        ),
-      );
+          );
       return widget.asSliver ? SliverToBoxAdapter(child: loading) : loading;
     }
 

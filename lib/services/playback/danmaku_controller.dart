@@ -113,10 +113,7 @@ class DanmakuController extends ChangeNotifier {
         if (raw.isNotEmpty) {
           final items = decodeDanmaku(raw);
           if (items.isNotEmpty) {
-            _cache[cacheKey] = items;
-            while (_cache.length > _maxCachedEpisodes) {
-              _cache.remove(_cache.keys.first);
-            }
+            cacheItems(cacheKey, items);
             return items;
           }
         }
@@ -153,7 +150,7 @@ class DanmakuController extends ChangeNotifier {
         final parts = params.split(',');
         if (parts.length < 2) continue;
         final seconds = double.tryParse(parts[0]);
-        if (seconds == null) continue;
+        if (seconds == null || !seconds.isFinite) continue;
         final timeMs = (seconds * 1000).round();
         final type = int.tryParse(parts[1]) ?? 1;
         if (type != 1 && type != 4 && type != 5) continue;
@@ -212,17 +209,19 @@ class DanmakuController extends ChangeNotifier {
   static const int maxCachedEpisodes = _maxCachedEpisodes;
   static const int maxCachedItems = 50000;
 
-  static Future<List<DanmakuItem>> decode(String raw) async => decodeDanmaku(raw);
+  static Future<List<DanmakuItem>> decode(String raw) async =>
+      decodeDanmaku(raw);
   static String encode(List<DanmakuItem> items) => encodeDanmaku(items);
 
   static void clearCache() => _cache.clear();
-  static void clearDanmakuCache() => _cache.clear();
+  static void clearDanmakuCache() => clearCache();
 
   static void cacheItems(String key, List<DanmakuItem> items) {
     if (items.length > maxCachedItems) return;
     _cache.remove(key);
     _cache[key] = items;
-    while (_cache.length > _maxCachedEpisodes) {
+    while (_cache.length > _maxCachedEpisodes ||
+        cacheSize.items > maxCachedItems) {
       _cache.remove(_cache.keys.first);
     }
   }
@@ -236,7 +235,9 @@ class DanmakuController extends ChangeNotifier {
 
   DanmakuController();
 
-  final Set<DanmakuListener> _listeners = <DanmakuListener>{};
+  // Copy only when views attach/detach. Dispatch keeps its snapshot even if a
+  // listener changes membership during a callback.
+  List<DanmakuListener> _listeners = const [];
 
   bool _running = true;
   double _playbackRate = 1.0;
@@ -262,20 +263,21 @@ class DanmakuController extends ChangeNotifier {
     if (_lastPosition != null) {
       syncTime(_lastPosition!);
     }
+    notifyListeners();
   }
 
   set playbackRate(double value) {
     final rate = value > 0 ? value : 1.0;
     if (_playbackRate == rate) return;
     _playbackRate = rate;
-    for (final listener in _listeners.toList(growable: false)) {
+    for (final listener in _listeners) {
       listener.onDanmakuPlaybackRateChanged(rate);
     }
   }
 
   void setItems(List<DanmakuItem> items) {
     _items = items;
-    for (final listener in _listeners.toList(growable: false)) {
+    for (final listener in _listeners) {
       listener.onDanmakuItemsChanged();
     }
     notifyListeners();
@@ -284,7 +286,7 @@ class DanmakuController extends ChangeNotifier {
   void syncTime(Duration position) {
     _lastPosition = position;
     final adjustedPosition = _adjustedPosition(position);
-    for (final listener in _listeners.toList(growable: false)) {
+    for (final listener in _listeners) {
       listener.onDanmakuTimeSync(adjustedPosition);
     }
   }
@@ -298,7 +300,7 @@ class DanmakuController extends ChangeNotifier {
 
   void addItem(DanmakuItem item) {
     if (!_running) return;
-    for (final listener in _listeners.toList(growable: false)) {
+    for (final listener in _listeners) {
       listener.onDanmakuInject(item);
     }
   }
@@ -306,7 +308,7 @@ class DanmakuController extends ChangeNotifier {
   void pause() {
     if (!_running) return;
     _running = false;
-    for (final listener in _listeners.toList(growable: false)) {
+    for (final listener in _listeners) {
       listener.onDanmakuPause();
     }
   }
@@ -314,7 +316,7 @@ class DanmakuController extends ChangeNotifier {
   void resume() {
     if (_running) return;
     _running = true;
-    for (final listener in _listeners.toList(growable: false)) {
+    for (final listener in _listeners) {
       listener.onDanmakuResume();
     }
   }
@@ -322,8 +324,10 @@ class DanmakuController extends ChangeNotifier {
   void reset() {
     _items = const [];
     final position = _lastPosition;
-    final adjustedPosition = position == null ? null : _adjustedPosition(position);
-    for (final listener in _listeners.toList(growable: false)) {
+    final adjustedPosition = position == null
+        ? null
+        : _adjustedPosition(position);
+    for (final listener in _listeners) {
       listener.onDanmakuReset();
       if (adjustedPosition != null) {
         listener.onDanmakuTimeSync(adjustedPosition);
@@ -335,7 +339,7 @@ class DanmakuController extends ChangeNotifier {
   void updateOption(DanmakuOption option) {
     final old = _option;
     _option = option;
-    for (final listener in _listeners.toList(growable: false)) {
+    for (final listener in _listeners) {
       listener.onDanmakuOptionChanged(option, old);
     }
   }
@@ -351,7 +355,8 @@ class DanmakuController extends ChangeNotifier {
       blockColor && color.toARGB32() != Colors.white.toARGB32();
 
   void attach(DanmakuListener listener) {
-    if (!_listeners.add(listener)) return;
+    if (_listeners.contains(listener)) return;
+    _listeners = [..._listeners, listener];
     final position = _lastPosition;
     if (position != null) {
       listener.onDanmakuTimeSync(_adjustedPosition(position));
@@ -364,7 +369,7 @@ class DanmakuController extends ChangeNotifier {
   }
 
   void detach(DanmakuListener listener) {
-    _listeners.remove(listener);
+    _listeners = [..._listeners]..remove(listener);
   }
 }
 

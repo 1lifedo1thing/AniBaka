@@ -7,32 +7,10 @@ import 'package:baka/widgets/settings/settings_widgets.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-TextStyle _fontStyle(
-  String fontName, {
-  double? fontSize,
-  FontWeight? fontWeight,
-  Color? color,
-  double? height,
-  double? letterSpacing,
-}) {
-  if (AppFonts.isSystemFont(fontName)) {
-    return TextStyle(
-      fontSize: fontSize,
-      fontWeight: fontWeight,
-      color: color,
-      height: height,
-      letterSpacing: letterSpacing,
-    );
-  }
-  return GoogleFonts.getFont(
-    fontName,
-    fontSize: fontSize,
-    fontWeight: fontWeight,
-    color: color,
-    height: height,
-    letterSpacing: letterSpacing,
-  );
-}
+TextStyle _fontStyle(String fontName, {FontWeight? fontWeight}) =>
+    AppFonts.isSystemFont(fontName)
+    ? TextStyle(fontWeight: fontWeight)
+    : GoogleFonts.getFont(fontName, fontWeight: fontWeight);
 
 class FontSettingsPage extends StatefulWidget {
   const FontSettingsPage({super.key});
@@ -58,25 +36,6 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
     _fontScale.dispose();
     _danmakuFontFamily.dispose();
     super.dispose();
-  }
-
-  void _selectFont(String fontName) {
-    if (_theme.fontFamily == fontName) return;
-    HapticFeedback.selectionClick();
-    _theme.setFontFamily(fontName);
-  }
-
-  void _setFontWeightIndex(int index) {
-    if (_theme.fontWeightIndex == index) return;
-    HapticFeedback.selectionClick();
-    _theme.setFontWeightIndex(index);
-  }
-
-  Future<void> _selectDanmakuFont(String fontFamily) async {
-    if (_danmakuFontFamily.value == fontFamily) return;
-    HapticFeedback.selectionClick();
-    _danmakuFontFamily.value = fontFamily;
-    await DanmakuController.setFontFamily(fontFamily);
   }
 
   @override
@@ -143,8 +102,7 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
                       value: option.key,
                       child: Text(
                         option.value,
-                        style: _fontStyle(
-                          option.key,
+                        style: _fontStyle(option.key).copyWith(
                           fontSize: 14,
                           color: isDark ? Colors.white : Colors.black87,
                         ),
@@ -152,7 +110,10 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
                     ),
                 ],
                 onChanged: (next) {
-                  if (next != null) _selectDanmakuFont(next);
+                  if (next == null || next == _danmakuFontFamily.value) return;
+                  HapticFeedback.selectionClick();
+                  _danmakuFontFamily.value = next;
+                  DanmakuController.setFontFamily(next);
                 },
               ),
             ),
@@ -163,89 +124,85 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
   }
 
   Widget _buildPreviewCard(bool isDark) {
-    return Obx(() {
-      final fontWeightIndex = _theme.fontWeightIndex;
-      final selectedFont = _theme.fontFamily;
-      final previewWeight = AppFonts.availableWeights[fontWeightIndex];
-      return ValueListenableBuilder<double>(
-        valueListenable: _fontScale,
-        builder: (context, fontScale, _) => Container(
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
-            borderRadius: BorderRadius.circular(20),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.04),
-                blurRadius: 20,
-                offset: const Offset(0, 4),
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 20,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Obx(() {
+        final selectedFont = _theme.fontFamily;
+        final style = _fontStyle(selectedFont, fontWeight: _theme.fontWeight);
+        return ValueListenableBuilder<double>(
+          valueListenable: _fontScale,
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: ThemeColors.primary.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.preview_rounded,
+                  size: 18,
+                  color: ThemeColors.primary,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                '预览效果',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: isDark ? Colors.white54 : Colors.black54,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: ThemeColors.primary.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  AppFonts.getLabelForFont(selectedFont),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: ThemeColors.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
             ],
           ),
-          child: Column(
+          builder: (context, fontScale, heading) => Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: ThemeColors.primary.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Icon(
-                      Icons.preview_rounded,
-                      size: 18,
-                      color: ThemeColors.primary,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Text(
-                    '预览效果',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: isDark ? Colors.white54 : Colors.black54,
-                    ),
-                  ),
-                  const Spacer(),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: ThemeColors.primary.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      AppFonts.getLabelForFont(selectedFont),
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: ThemeColors.primary,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+              heading!,
               const SizedBox(height: 20),
               Text(
                 '命运石之门',
-                style: _fontStyle(
-                  selectedFont,
-                  fontSize: 22.0 * fontScale,
-                  fontWeight: previewWeight,
+                style: style.copyWith(
+                  fontSize: 22 * fontScale,
                   color: isDark ? Colors.white : Colors.black,
                 ),
               ),
               const SizedBox(height: 8),
               Text(
                 '这一切都是命运石之门的选择',
-                style: _fontStyle(
-                  selectedFont,
-                  fontSize: 14.0 * fontScale,
-                  fontWeight: previewWeight,
+                style: style.copyWith(
+                  fontSize: 14 * fontScale,
                   height: 1.8,
                   color: isDark ? Colors.white70 : Colors.black87,
                 ),
@@ -253,39 +210,24 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
               const SizedBox(height: 12),
               Text(
                 'EL PSY KONGROO Steins;Gate 1.048596%',
-                style: _fontStyle(
-                  selectedFont,
-                  fontSize: 12.0 * fontScale,
-                  fontWeight: previewWeight,
-                  color: isDark ? Colors.white38 : Colors.black38,
+                style: style.copyWith(
+                  fontSize: 12 * fontScale,
                   letterSpacing: 1,
+                  color: isDark ? Colors.white38 : Colors.black38,
                 ),
               ),
             ],
           ),
-        ),
-      );
-    });
+        );
+      }),
+    );
   }
 
   Widget _buildFontScaleSlider(bool isDark) {
-    return ValueListenableBuilder<double>(
-      valueListenable: _fontScale,
-      builder: (context, fontScale, _) {
-        final scalePercent = (fontScale * 100).round();
-        return Container(
+    return SettingsGroup(
+      children: [
+        Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.02),
-                blurRadius: 10,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
           child: Column(
             children: [
               Row(
@@ -294,98 +236,101 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
                     'A',
                     style: TextStyle(
                       fontSize: 12,
-                      color: isDark ? Colors.white38 : Colors.black38,
                       fontWeight: FontWeight.w600,
+                      color: isDark ? Colors.white38 : Colors.black38,
                     ),
                   ),
                   Expanded(
-                    child: Slider(
-                      value: fontScale,
-                      min: 0.8,
-                      max: 1.30,
-                      divisions: 11,
-                      activeColor: ThemeColors.primary,
-                      inactiveColor: isDark
-                          ? Colors.white12
-                          : Colors.black.withValues(alpha: 0.06),
-                      onChanged: (value) => _fontScale.value = value,
-                      onChangeEnd: (value) {
-                        if (value != _theme.fontScale) {
-                          _theme.setFontScale(value);
-                        }
-                      },
+                    child: ValueListenableBuilder<double>(
+                      valueListenable: _fontScale,
+                      builder: (context, scale, _) => Slider(
+                        value: scale,
+                        min: 0.8,
+                        max: 1.30,
+                        divisions: 11,
+                        activeColor: ThemeColors.primary,
+                        inactiveColor: isDark
+                            ? Colors.white12
+                            : Colors.black.withValues(alpha: 0.06),
+                        onChanged: (value) => _fontScale.value = value,
+                        onChangeEnd: (value) {
+                          if (value != _theme.fontScale) {
+                            _theme.setFontScale(value);
+                          }
+                        },
+                      ),
                     ),
                   ),
                   Text(
                     'A',
                     style: TextStyle(
                       fontSize: 20,
-                      color: isDark ? Colors.white38 : Colors.black38,
                       fontWeight: FontWeight.w600,
+                      color: isDark ? Colors.white38 : Colors.black38,
                     ),
                   ),
                 ],
               ),
               const SizedBox(height: 4),
-              Text(
-                '$scalePercent%',
-                style: const TextStyle(
-                  fontSize: 13,
-                  color: ThemeColors.primary,
-                  fontWeight: FontWeight.w600,
+              ValueListenableBuilder<double>(
+                valueListenable: _fontScale,
+                builder: (context, scale, _) => Text(
+                  '${(scale * 100).round()}%',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: ThemeColors.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ],
           ),
-        );
-      },
+        ),
+      ],
     );
   }
 
   Widget _buildFontWeightSelector(bool isDark) {
-    return Obx(
-      () => Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.02),
-              blurRadius: 10,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (var i = 0; i < AppFonts.availableWeights.length; i++)
-              ChoiceChip(
-                label: Text(
-                  AppFonts.weightLabels[i],
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: AppFonts.availableWeights[i],
+    return SettingsGroup(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Obx(
+            () => Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (var i = 0; i < AppFonts.availableWeights.length; i++)
+                  ChoiceChip(
+                    label: Text(
+                      AppFonts.weightLabels[i],
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: AppFonts.availableWeights[i],
+                      ),
+                    ),
+                    selected: _theme.fontWeightIndex == i,
+                    onSelected: (_) {
+                      if (_theme.fontWeightIndex == i) return;
+                      HapticFeedback.selectionClick();
+                      _theme.setFontWeightIndex(i);
+                    },
+                    showCheckmark: false,
+                    selectedColor: ThemeColors.primary,
+                    side: BorderSide(
+                      color: isDark ? Colors.white10 : Colors.black12,
+                      width: 0.5,
+                    ),
                   ),
-                ),
-                selected: _theme.fontWeightIndex == i,
-                onSelected: (_) => _setFontWeightIndex(i),
-                showCheckmark: false,
-                selectedColor: ThemeColors.primary,
-                side: BorderSide(
-                  color: isDark ? Colors.white10 : Colors.black12,
-                  width: 0.5,
-                ),
-              ),
-          ],
+              ],
+            ),
+          ),
         ),
-      ),
+      ],
     );
   }
 
-  List<Widget> _buildFontCategories(bool isDark) {
+  Iterable<Widget> _buildFontCategories(bool isDark) sync* {
     const categories = {
       'system': AppFonts.systemFonts,
       'sans': AppFonts.sansFonts,
@@ -393,48 +338,51 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
       'display': AppFonts.displayFonts,
     };
 
-    final widgets = <Widget>[];
     for (final entry in categories.entries) {
       final catLabel = AppFonts.categoryLabels[entry.key] ?? entry.key;
       final fonts = entry.value;
-      widgets.add(SettingsSectionHeader(catLabel, bottomPadding: 4));
-      widgets.add(const SizedBox(height: 8));
-      widgets.add(
-        Obx(
-          () => SettingsGroup(
-            children: ListTile.divideTiles(
-              context: context,
-              tiles: [
-                for (final font in fonts)
-                  ListTile(
-                    selected: _theme.fontFamily == font['name'],
-                    selectedColor: ThemeColors.primary,
-                    leading: Icon(
-                      _theme.fontFamily == font['name']
-                          ? Icons.radio_button_checked_rounded
-                          : Icons.radio_button_unchecked_rounded,
-                    ),
-                    title: Text(font['label']!),
-                    subtitle: Text(font['name']!),
-                    trailing: Text(
-                      font['preview']!,
-                      style: _fontStyle(
-                        font['name']!,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                        color: isDark ? Colors.white : Colors.black,
-                      ),
-                    ),
-                    onTap: () => _selectFont(font['name']!),
+      yield SettingsSectionHeader(catLabel, bottomPadding: 4);
+      yield const SizedBox(height: 8);
+      yield Obx(
+        () => SettingsGroup(
+          children: ListTile.divideTiles(
+            context: context,
+            tiles: [
+              for (final font in fonts)
+                ListTile(
+                  selected: _theme.fontFamily == font['name'],
+                  selectedColor: ThemeColors.primary,
+                  leading: Icon(
+                    _theme.fontFamily == font['name']
+                        ? Icons.radio_button_checked_rounded
+                        : Icons.radio_button_unchecked_rounded,
                   ),
-              ],
-            ).toList(growable: false),
-          ),
+                  title: Text(font['label']!),
+                  subtitle: Text(font['name']!),
+                  trailing: Text(
+                    font['preview']!,
+                    style:
+                        _fontStyle(
+                          font['name']!,
+                          fontWeight: FontWeight.w500,
+                        ).copyWith(
+                          fontSize: 16,
+                          color: isDark ? Colors.white : Colors.black,
+                        ),
+                  ),
+                  onTap: () {
+                    final name = font['name']!;
+                    if (_theme.fontFamily == name) return;
+                    HapticFeedback.selectionClick();
+                    _theme.setFontFamily(name);
+                  },
+                ),
+            ],
+          ).toList(growable: false),
         ),
       );
-      widgets.add(const SizedBox(height: 20));
+      yield const SizedBox(height: 20);
     }
-    return widgets;
   }
 
   Widget _buildHintCard(bool isDark) {

@@ -109,19 +109,18 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final primaryColor = theme.colorScheme.primary;
-    final cardColor = Colors.white.withValues(alpha: 0.05);
 
     return PanelContainer(
+      title: '字幕设置',
       child: CustomScrollView(
         physics: const BouncingScrollPhysics(),
         slivers: [
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 24, 16, 24),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
             sliver: SliverList(
               delegate: SliverChildListDelegate([
                 const PanelSectionTitle('字幕轨道'),
                 PanelSettingsGroup(
-                  backgroundColor: cardColor,
                   children: [
                     if (_subtitleTracks.isEmpty)
                       const Padding(
@@ -139,7 +138,6 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
                         label: '关闭字幕',
                         isSelected: _currentTrack?.id == 'no',
                         onTap: () => _selectTrack(SubtitleTrack.no()),
-                        primaryColor: primaryColor,
                       ),
                       ..._subtitleTracks.map((track) {
                         final label = _buildTrackLabel(track);
@@ -150,7 +148,6 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
                               label: label,
                               isSelected: _currentTrack?.id == track.id,
                               onTap: () => _selectTrack(track),
-                              primaryColor: primaryColor,
                             ),
                           ],
                         );
@@ -163,7 +160,6 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
 
                 const PanelSectionTitle('字幕外观'),
                 PanelSettingsGroup(
-                  backgroundColor: cardColor,
                   children: [
                     _buildFontPicker(),
                     const PanelDivider(),
@@ -304,29 +300,34 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
     required String label,
     required bool isSelected,
     required VoidCallback onTap,
-    required Color primaryColor,
   }) {
-    return InkWell(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                label,
-                style: TextStyle(
-                  color: isSelected ? primaryColor : Colors.white,
-                  fontSize: 14,
-                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+    final colors = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Semantics(
+        selected: isSelected,
+        child: FilledButton.tonal(
+          onPressed: onTap,
+          style: FilledButton.styleFrom(
+            backgroundColor: isSelected
+                ? colors.primary
+                : colors.secondaryContainer.withValues(alpha: 0.66),
+            foregroundColor: isSelected
+                ? colors.onPrimary
+                : colors.onSecondaryContainer,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
               ),
-            ),
-            if (isSelected)
-              Icon(Icons.check_rounded, color: primaryColor, size: 18),
-          ],
+              if (isSelected) const Icon(Icons.check_rounded, size: 20),
+            ],
+          ),
         ),
       ),
     );
@@ -337,37 +338,23 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
         _subtitleFontLabels[_config.fontFamily] ??
         _subtitleFontOptions.first.label;
 
-    return InkWell(
-      onTap: _selectFont,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        child: Row(
-          children: [
-            const Expanded(
-              child: Text(
-                '字体',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-            Text(
+    return FilledButton.tonal(
+      onPressed: _selectFont,
+      child: Row(
+        children: [
+          const Text('字体'),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Text(
               currentLabel,
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.6),
-                fontSize: 13,
-              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.end,
             ),
-            const SizedBox(width: 4),
-            Icon(
-              Icons.chevron_right_rounded,
-              size: 18,
-              color: Colors.white.withValues(alpha: 0.4),
-            ),
-          ],
-        ),
+          ),
+          const SizedBox(width: 8),
+          const Icon(Icons.chevron_right_rounded, size: 20),
+        ],
       ),
     );
   }
@@ -380,7 +367,7 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
     bool includeTransparent = false,
   }) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.symmetric(vertical: 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

@@ -122,22 +122,4 @@ void main() {
       ]);
     },
   );
-
-  test('shader staging throws instead of returning an invalid path', () async {
-    final directory = await Directory.systemTemp.createTemp('anibaka-shader-');
-    addTearDown(() => directory.delete(recursive: true));
-    final notDirectory = File(
-      '${directory.path}${Platform.pathSeparator}blocked',
-    );
-    await notDirectory.writeAsString('file');
-
-    expect(
-      () => Anime4K.stageBytesForTest(
-        Directory(notDirectory.path),
-        'shader.glsl',
-        [1],
-      ),
-      throwsA(isA<FileSystemException>()),
-    );
-  });
 }

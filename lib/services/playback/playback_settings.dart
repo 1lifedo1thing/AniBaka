@@ -146,6 +146,9 @@ class PlaybackSettingsService {
 
   static bool getFilterHlsAds() => _tryPrefs?.getBool(_filterHlsAdsKey) ?? false;
 
+  /// 未设置时遵循视频源默认值；用户明确关闭时覆盖规则的自动开启。
+  static bool? getFilterHlsAdsOverride() => _tryPrefs?.getBool(_filterHlsAdsKey);
+
   static Future<void> setFilterHlsAds(bool value) =>
       _prefs.setBool(_filterHlsAdsKey, value);
 

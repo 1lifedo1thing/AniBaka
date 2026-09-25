@@ -151,6 +151,7 @@ class PlaybackController {
     String uri, {
     bool autoplay = true,
     Map<String, String>? httpHeaders,
+    Duration? start,
   }) async {
     if (_disposed) return;
     _lastOpenUri = uri;
@@ -163,7 +164,11 @@ class PlaybackController {
       if (currentMediaUri != null) await player.stop();
       await _configurePlayer(preferences.value.defaultPlaybackSpeed);
       await player.open(
-        Media(uri, httpHeaders: httpHeaders ?? const <String, String>{}),
+        Media(
+          uri,
+          httpHeaders: httpHeaders ?? const <String, String>{},
+          start: start,
+        ),
         play: autoplay,
       );
       await _reapplyHwdec();
@@ -773,7 +778,13 @@ class PlaybackController {
       });
       await _settingsWrites;
     }
+    if (previous.filterHlsAds != next.filterHlsAds) {
+      await onHlsAdFilterChanged?.call(next.filterHlsAds);
+    }
   }
+
+  /// 清单处理属于播放页面；切换去广告时由页面重新准备当前媒体。
+  Future<void> Function(bool enabled)? onHlsAdFilterChanged;
 
   Future<void> setVideoFit(BoxFit fit, String description) => updatePreferences(
     preferences.value.copyWith(videoFit: fit, videoFitDescription: description),

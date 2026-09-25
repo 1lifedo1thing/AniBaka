@@ -27,7 +27,8 @@ class RuleLanguageSpec {
     'jsonEpisodes': 'Build Source and Episode items from JSON.',
     'maccmsApiEpisodes': 'Build episode lines from a MacCMS provide API.',
     'videoUrl': 'Extract a playable URL from current content.',
-    'setMediaHeaders': 'Attach HTTP headers to the resolved media.',
+    'setMediaHeaders':
+        'Attach HTTP headers to the resolved media (headers, jsonPath, remove).',
     'playerAaaa': 'Parse the common player_aaaa bootstrap object.',
     'playerDecrypt': 'Decrypt the supported player payload.',
     'sniff': 'Use WebView to follow a page and sniff playable media.',
@@ -65,6 +66,9 @@ Stage flags are optional booleans on play-stage steps (branch steps included):
 - validateWithCookies: validate the media URL with the play-stage cookies.
 - followEmbeddedPlayer: follow embedded iframe players while sniffing.
 - playbackKeepAlive: repeat this step's request while the media is playing.
+- cookieSession: run the play stage one resolution at a time. Use it when the
+  play page issues a single-use playback credential (cookie/session) that a
+  concurrent resolution of another episode would invalidate.
 
 The search stage must produce Series results, detail must produce playback
 lines and episodes, and play must produce a direct media URL. Prefer generic

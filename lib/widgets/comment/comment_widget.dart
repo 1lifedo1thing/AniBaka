@@ -591,6 +591,10 @@ class CIslandCommentWidgetState extends State<CIslandCommentWidget>
                       pid: widget.postId,
                       size: 100,
                       asSliver: true,
+                      loadingPlaceholder: const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 24),
+                        child: Text('正在获取评论…'),
+                      ),
                       onTapLink: widget.onCommentLinkTap == null
                           ? null
                           : (text, url, title) {
@@ -616,25 +620,11 @@ class CIslandCommentWidgetState extends State<CIslandCommentWidget>
                       SliverPadding(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         sliver: SliverToBoxAdapter(
-                          child: AppSkeletonizer(
-                            enabled: true,
-                            child: Column(
-                              children: List.generate(
-                                2,
-                                (_) => Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 8,
-                                  ),
-                                  child: _buildBgmComment((
-                                    name: '用户名称占位符',
-                                    avatarUrl: '',
-                                    content: '这是一条用于自动骨架遮罩的占位剧评内容文本...',
-                                    images: const <String>[],
-                                    createdAt: 1700000000,
-                                    replies: const <_BgmReply>[],
-                                  ), theme),
-                                ),
-                              ),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 24),
+                            child: Text(
+                              '正在获取剧评…',
+                              style: theme.textTheme.bodyMedium,
                             ),
                           ),
                         ),

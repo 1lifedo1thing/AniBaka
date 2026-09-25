@@ -83,98 +83,41 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final primaryColor = theme.colorScheme.primary;
-    final cardColor = Colors.white.withValues(alpha: 0.05);
     final option = widget.controller.option;
     final blockWords = widget.controller.blockWords;
 
     return PanelContainer(
+      title: '弹幕设置',
       child: CustomScrollView(
         physics: const BouncingScrollPhysics(),
         slivers: [
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 24, 16, 24),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
             sliver: SliverList(
               delegate: SliverChildListDelegate([
                 const PanelSectionTitle('弹幕匹配'),
-                PanelSettingsGroup(
-                  backgroundColor: cardColor,
-                  children: [
-                    Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        onTap: () {
-                          DanmakuListSheet.show(
-                            context,
-                            widget.controller,
-                            defaultTitle: widget.defaultTitle,
-                            defaultEpisode: widget.defaultEpisode,
-                            initialShowSearch: true,
-                          );
-                        },
-
-                        borderRadius: BorderRadius.circular(12),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 14,
-                          ),
-                          child: Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: primaryColor.withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Icon(
-                                  Icons.manage_search_rounded,
-                                  color: primaryColor,
-                                  size: 20,
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              const Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      '手动弹幕检索',
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                    SizedBox(height: 2),
-                                    Text(
-                                      '弹幕匹配不准？手动检索并绑定弹幕库',
-                                      style: TextStyle(
-                                        color: Colors.white54,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const Icon(
-                                Icons.chevron_right_rounded,
-                                color: Colors.white38,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
+                FilledButton.tonal(
+                  onPressed: () => DanmakuListSheet.show(
+                    context,
+                    widget.controller,
+                    defaultTitle: widget.defaultTitle,
+                    defaultEpisode: widget.defaultEpisode,
+                    initialShowSearch: true,
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.search_rounded),
+                      SizedBox(width: 12),
+                      Expanded(child: Text('搜索弹幕')),
+                      Icon(Icons.chevron_right_rounded),
+                    ],
+                  ),
                 ),
-
                 const SizedBox(height: 24),
 
                 const PanelSectionTitle('弹幕外观'),
 
                 PanelSettingsGroup(
-                  backgroundColor: cardColor,
                   children: [
                     PanelSliderTile(
                       title: '显示区域',
@@ -259,232 +202,118 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
                 const SizedBox(height: 24),
 
                 const PanelSectionTitle('弹幕类型'),
-                PanelSettingsGroup(
-                  backgroundColor: cardColor,
+                Row(
                   children: [
-                    Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            '显示设置',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 15,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          GridView.count(
-                            crossAxisCount: 3,
-                            crossAxisSpacing: 10,
-                            mainAxisSpacing: 10,
-                            childAspectRatio: 0.82,
-                            shrinkWrap: true,
-                            physics: const NeverScrollableScrollPhysics(),
-                            children: [
-                              _buildTypeToggleBtn(
-                                icon: Icons.arrow_forward_rounded,
-                                label: '滚动',
-                                isActive: !option.hideScroll,
-                                activeColor: primaryColor,
-                                onTap: () => _updateOption(
-                                  option.copyWith(
-                                    hideScroll: !option.hideScroll,
-                                  ),
-                                  persist: true,
-                                ),
-                              ),
-                              _buildTypeToggleBtn(
-                                icon: Icons.vertical_align_top_rounded,
-                                label: '顶部',
-                                isActive: !option.hideTop,
-                                activeColor: primaryColor,
-                                onTap: () => _updateOption(
-                                  option.copyWith(hideTop: !option.hideTop),
-                                  persist: true,
-                                ),
-                              ),
-                              _buildTypeToggleBtn(
-                                icon: Icons.vertical_align_bottom_rounded,
-                                label: '底部',
-                                isActive: !option.hideBottom,
-                                activeColor: primaryColor,
-                                onTap: () => _updateOption(
-                                  option.copyWith(
-                                    hideBottom: !option.hideBottom,
-                                  ),
-                                  persist: true,
-                                ),
-                              ),
-                              _buildTypeToggleBtn(
-                                icon: Icons.filter_list_rounded,
-                                label: '去重',
-                                isActive: widget.controller.blockRepeat,
-                                activeColor: primaryColor,
-                                onTap: () {
-                                  setState(() {
-                                    widget.controller.blockRepeat =
-                                        !widget.controller.blockRepeat;
-                                  });
-                                  _saveSettings();
-                                },
-                              ),
-                              _buildTypeToggleBtn(
-                                icon: Icons.palette_outlined,
-                                label: '屏蔽彩色',
-                                isActive: widget.controller.blockColor,
-                                activeColor: primaryColor,
-                                onTap: () {
-                                  setState(() {
-                                    widget.controller.blockColor =
-                                        !widget.controller.blockColor;
-                                  });
-                                  _saveSettings();
-                                },
-                              ),
-                            ],
-                          ),
-                        ],
+                    Expanded(
+                      child: _buildTypeToggleBtn(
+                        label: '滚动',
+                        isActive: !option.hideScroll,
+                        onTap: () => _updateOption(
+                          option.copyWith(hideScroll: !option.hideScroll),
+                          persist: true,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: _buildTypeToggleBtn(
+                        label: '顶部',
+                        isActive: !option.hideTop,
+                        onTap: () => _updateOption(
+                          option.copyWith(hideTop: !option.hideTop),
+                          persist: true,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: _buildTypeToggleBtn(
+                        label: '底部',
+                        isActive: !option.hideBottom,
+                        onTap: () => _updateOption(
+                          option.copyWith(hideBottom: !option.hideBottom),
+                          persist: true,
+                        ),
                       ),
                     ),
                   ],
                 ),
-
                 const SizedBox(height: 24),
 
                 const PanelSectionTitle('屏蔽管理'),
-                PanelSettingsGroup(
-                  backgroundColor: cardColor,
+                PanelSwitchTile(
+                  title: '屏蔽重复弹幕',
+                  value: widget.controller.blockRepeat,
+                  onChanged: (value) {
+                    setState(() => widget.controller.blockRepeat = value);
+                    _saveSettings();
+                  },
+                ),
+                PanelSwitchTile(
+                  title: '屏蔽彩色弹幕',
+                  value: widget.controller.blockColor,
+                  onChanged: (value) {
+                    setState(() => widget.controller.blockColor = value);
+                    _saveSettings();
+                  },
+                ),
+                const SizedBox(height: 8),
+                Row(
                   children: [
-                    Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Container(
-                                  height: 36,
-                                  decoration: BoxDecoration(
-                                    color:
-                                        theme.inputDecorationTheme.fillColor ??
-                                        Colors.black.withValues(alpha: 0.1),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: TextField(
-                                    controller: _wordController,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 13,
-                                    ),
-                                    decoration: InputDecoration(
-                                      hintText: '输入关键词屏蔽',
-                                      hintStyle: TextStyle(
-                                        color: Colors.white.withValues(
-                                          alpha: 0.7,
-                                        ),
-                                        fontSize: 13,
-                                      ),
-                                      border: InputBorder.none,
-                                      contentPadding:
-                                          const EdgeInsets.symmetric(
-                                            horizontal: 12,
-                                            vertical: 10,
-                                          ),
-                                      isDense: true,
-                                    ),
-                                    onSubmitted: (t) {
-                                      _addBlockWord(t);
-                                      _wordController.clear();
-                                    },
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              FilledButton(
-                                onPressed: () {
-                                  _addBlockWord(_wordController.text);
-                                  _wordController.clear();
-                                },
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: primaryColor,
-                                  foregroundColor: Theme.of(
-                                    context,
-                                  ).colorScheme.onPrimary,
-                                  visualDensity: VisualDensity.compact,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                  ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                ),
-                                child: const Text('添加'),
-                              ),
-                            ],
+                    Expanded(
+                      child: TextField(
+                        controller: _wordController,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                        ),
+                        decoration: InputDecoration(
+                          hintText: '输入关键词屏蔽',
+                          hintStyle: const TextStyle(color: Colors.white70),
+                          filled: true,
+                          fillColor: theme.colorScheme.secondaryContainer
+                              .withValues(alpha: 0.66),
+                          border: const OutlineInputBorder(
+                            borderRadius: BorderRadius.all(Radius.circular(28)),
+                            borderSide: BorderSide.none,
                           ),
-                          if (blockWords.isNotEmpty) ...[
-                            const SizedBox(height: 12),
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: Colors.black.withValues(alpha: 0.2),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
-                                children: blockWords
-                                    .map(
-                                      (w) => InkWell(
-                                        onTap: () => _removeBlockWord(w),
-                                        borderRadius: BorderRadius.circular(4),
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 8,
-                                            vertical: 4,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color: Colors.white.withValues(
-                                              alpha: 0.1,
-                                            ),
-                                            borderRadius: BorderRadius.circular(
-                                              4,
-                                            ),
-                                          ),
-                                          child: Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Text(
-                                                w,
-                                                style: const TextStyle(
-                                                  color: Colors.white70,
-                                                  fontSize: 12,
-                                                ),
-                                              ),
-                                              const SizedBox(width: 4),
-                                              const Icon(
-                                                Icons.close,
-                                                size: 12,
-                                                color: Colors.white54,
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    )
-                                    .toList(),
-                              ),
-                            ),
-                          ],
-                        ],
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 14,
+                          ),
+                        ),
+                        onSubmitted: (word) {
+                          _addBlockWord(word);
+                          _wordController.clear();
+                        },
                       ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton.filledTonal(
+                      tooltip: '添加屏蔽词',
+                      onPressed: () {
+                        _addBlockWord(_wordController.text);
+                        _wordController.clear();
+                      },
+                      icon: const Icon(Icons.add_rounded),
                     ),
                   ],
                 ),
+                if (blockWords.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      for (final word in blockWords)
+                        InputChip(
+                          label: Text(word),
+                          onDeleted: () => _removeBlockWord(word),
+                          deleteButtonTooltipMessage: '移除屏蔽词',
+                        ),
+                    ],
+                  ),
+                ],
 
                 const SizedBox(height: 32),
 
@@ -499,52 +328,48 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
   }
 
   Widget _buildTypeToggleBtn({
-    required IconData icon,
     required String label,
     required bool isActive,
-    required Color activeColor,
     required VoidCallback onTap,
   }) {
-    final theme = Theme.of(context);
-    final foreground = isActive ? activeColor : Colors.white;
-
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOut,
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-          decoration: BoxDecoration(
-            color: isActive
-                ? activeColor.withValues(alpha: 0.14)
-                : theme.colorScheme.onSurface.withValues(alpha: 0.04),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: isActive
-                  ? activeColor.withValues(alpha: 0.45)
-                  : theme.colorScheme.onSurface.withValues(alpha: 0.08),
+    final colors = Theme.of(context).colorScheme;
+    return Semantics(
+      selected: isActive,
+      child: FilledButton.tonal(
+        onPressed: onTap,
+        style: ButtonStyle(
+          padding: const WidgetStatePropertyAll(
+            EdgeInsets.symmetric(horizontal: 8),
+          ),
+          backgroundColor: WidgetStatePropertyAll(
+            isActive
+                ? colors.primary
+                : colors.secondaryContainer.withValues(alpha: 0.66),
+          ),
+          foregroundColor: WidgetStatePropertyAll(
+            isActive ? colors.onPrimary : colors.onSecondaryContainer,
+          ),
+          shape: WidgetStateProperty.resolveWith(
+            (states) => RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(
+                states.contains(WidgetState.pressed)
+                    ? 12
+                    : isActive
+                    ? 28
+                    : 18,
+              ),
             ),
           ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, color: foreground, size: 20),
-              const SizedBox(height: 3),
-              Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: foreground,
-                  fontSize: 12,
-                  fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
-                ),
-              ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (isActive) ...[
+              const Icon(Icons.check_rounded, size: 16),
+              const SizedBox(width: 4),
             ],
-          ),
+            Flexible(child: Text(label, maxLines: 1)),
+          ],
         ),
       ),
     );

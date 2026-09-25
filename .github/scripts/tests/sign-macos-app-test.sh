@@ -85,4 +85,27 @@ for timestamp in false true; do
     [ "$app_verified" = true ]
   )
 done
-echo 'macOS signing order, final entitlements, verification, and timestamp variants passed (mock tools).'
+# Reintroducing Associated Domains must fail before any bundle is modified,
+# even though the same codesign verification could otherwise succeed.
+set +e
+(
+  set -e
+  function /usr/libexec/PlistBuddy() {
+    case "$2" in
+      'Print :com.apple.developer.associated-domains') echo 'Array { applinks:www.anibaka.com }' ;;
+      *) return 1 ;;
+    esac
+  }
+  codesign() {
+    touch "$fixture/unexpected-signing"
+    return 1
+  }
+  source "$script_path" "$app_path" test-identity test-keychain false "$fixture/Release.entitlements"
+) > "$fixture/rejected.log" 2>&1
+status=$?
+set -e
+[ "$status" -eq 1 ]
+[ ! -e "$fixture/unexpected-signing" ]
+grep -q 'Associated Domains requires Apple provisioning' "$fixture/rejected.log"
+
+echo 'macOS signing order, final entitlements, verification, timestamp variants, and unprovisioned Associated Domains rejection passed (mock tools).'

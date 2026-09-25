@@ -95,11 +95,17 @@ void main() {
     expect(rule.detail.last.str('sourcesPath'), 'data.playSources');
     expect(
       rule.detail.last.str('episodeIdTemplate'),
-      '{id:raw}|{tvtVideoSlug:raw}',
+      '{id:raw}|{tvtVideoSlug:raw}|{source_index:raw}|{sort:raw}',
     );
 
     expect(rule.play.map((step) => step.op), [
       'setVar',
+      'regex',
+      'setVar',
+      'template',
+      'regex',
+      'setVar',
+      'template',
       'regex',
       'setVar',
       'template',
@@ -110,16 +116,25 @@ void main() {
       'setMediaHeaders',
       'json',
     ]);
+    // 播放页要带目标剧集自己的线路与集数：站点按 (source, episode) 下发凭证，
+    // 固定 source=0&episode=0 会让第二条线路之后的剧集一律拿不到直链。
     expect(
-      rule.play[6].str('url'),
-      '/video/{tvtVideoSlug}/play?source=0&episode=0',
+      rule.play[12].str('url'),
+      '/video/{tvtVideoSlug}/play?source={tvtSourceIndex}'
+      '&episode={tvtEpisodeIndex}',
     );
+    expect(rule.play[12].flag('cookieSession'), isTrue);
     expect(
-      rule.play[7].str('url'),
+      rule.play[13].str('url'),
       '/api/videos/resolve-play-url?episodeId={tvtEpisodeId}',
     );
-    expect((rule.play[7].params['headers'] as Map)['X-Play-Ctx'], isNotEmpty);
-    expect(rule.play[8].str('jsonPath'), 'data.headers');
+    expect((rule.play[13].params['headers'] as Map)['X-Play-Ctx'], isNotEmpty);
+    expect(
+      (rule.play[13].params['headers'] as Map)['Referer'],
+      'https://www.tvtfun.net/video/{tvtVideoSlug}/play'
+      '?source={tvtSourceIndex}&episode={tvtEpisodeIndex}',
+    );
+    expect(rule.play[14].str('jsonPath'), 'data.headers');
     expect(rule.play.last.str('path'), 'data.url');
   });
 

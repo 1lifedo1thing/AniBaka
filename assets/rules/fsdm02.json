@@ -80,5 +80,6 @@
       "filterHlsAds": true
     }
   ],
-  "useWebview": true
+  "useWebview": true,
+  "directConnection": true
 }

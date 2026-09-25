@@ -49,7 +49,6 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
   StreamSubscription<HttpRequest>? _hlsProxySubscription;
   List<Uri> _hlsProxyTargets = const [];
   Map<String, String> _hlsProxyHeaders = const {};
-  final Map<String, HlsVideoFingerprint?> _hlsProbeCache = {};
   late final _playFeatures = _inspectPlayFeatures(rule.play);
   // 同一页面 HTML 常被连续多个 select/searchList/episodes 步骤解析；
   // 按 identity 缓存最近一次的 DOM，避免重复全量解析（消费方均只读）。
@@ -65,11 +64,11 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
   /// 单个分片指纹探测的超时；探不到按「与正片一致」处理，不阻塞播放。
   static const Duration _hlsProbeTimeout = Duration(seconds: 8);
 
+  /// 播放管线重试前的冷却：站点凭证刚被拒时立刻重跑往往还是同一次会话状态。
+  static const Duration _playRetryDelay = Duration(milliseconds: 400);
+
   /// 前缀取够后主动断连的取消理由。
   static const String _hlsProbeCancelReason = 'HLS 指纹探测已取够前缀';
-
-  /// 指纹缓存条数上限；同一集反复物化时不必重复探测。
-  static const int _hlsProbeCacheLimit = 512;
 
   @override
   String get baseUrl => rule.baseUrl;
@@ -198,30 +197,44 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
         reachTimeout: reachTimeout,
       );
     }
+    final attempts = maxAttempts < 1 ? 1 : maxAttempts;
     return _withPlayCookieSnapshot(() async {
-      final media = await _interpreter.runPlayMedia(rule, this, episodeId);
-      if (media.url.isEmpty) {
-        return (url: '', httpHeaders: const <String, String>{});
-      }
-      final headers = await _resolveMediaHeaders(media);
-      if (!skipValidation) {
+      for (var attempt = 0; attempt < attempts; attempt++) {
+        final media = await _interpreter.runPlayMedia(rule, this, episodeId);
+        if (media.url.isEmpty) {
+          debugPrint('$name: 播放管线第 ${attempt + 1}/$attempts 次未得到媒体地址');
+          if (attempt + 1 < attempts) {
+            // 解析为空多半是站点凭证/会话过期，重跑整条 play 管线会重新申请一次。
+            await Future<void>.delayed(_playRetryDelay);
+          }
+          continue;
+        }
+        final headers = await _resolveMediaHeaders(media);
+        if (skipValidation) {
+          return (url: media.url, httpHeaders: headers);
+        }
         final verdict = await probeMediaReachability(
           media.url,
           timeout: reachTimeout,
           headers: headers,
         );
-        if (verdict == MediaReachabilityVerdict.rejected) {
-          debugPrint('$name: 动态媒体被服务器拒绝，丢弃: ${media.url}');
-          return (url: '', httpHeaders: const <String, String>{});
-        }
         if (verdict == MediaReachabilityVerdict.unknown) {
           debugPrint(
             '$name: 动态媒体结论不确定（超时/临时缺失/网络异常），保留待播放器验证: '
             '${media.url}',
           );
+          return (url: media.url, httpHeaders: headers);
+        }
+        if (verdict == MediaReachabilityVerdict.reachable) {
+          return (url: media.url, httpHeaders: headers);
+        }
+        debugPrint('$name: 动态媒体被服务器拒绝，丢弃: ${media.url}');
+        if (attempt + 1 < attempts) {
+          // 直链被拒也可能是签名过期：重跑一次拿到新直链再验证。
+          await Future<void>.delayed(_playRetryDelay);
         }
       }
-      return (url: media.url, httpHeaders: headers);
+      return (url: '', httpHeaders: const <String, String>{});
     }).whenComplete(_dropParseCache);
   }
 
@@ -297,6 +310,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
   Future<({String url, Map<String, String> httpHeaders})> preparePlaybackMedia(
     ({String url, Map<String, String> httpHeaders}) media, {
     bool? filterHlsAds,
+    void Function(String message)? onHlsAdFilterStatus,
   }) async {
     var prepared = media;
     if (_playFeatures.resolvesMediaRedirects) {
@@ -314,8 +328,8 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
 
     final filtersAds =
         filterHlsAds ??
-        (_playFeatures.filtersHlsAds ||
-            PlaybackSettingsService.getFilterHlsAds());
+        PlaybackSettingsService.getFilterHlsAdsOverride() ??
+        _playFeatures.filtersHlsAds;
     if ((!_playFeatures.materializesHls && !filtersAds) ||
         !prepared.url.toLowerCase().contains('.m3u8')) {
       return prepared;
@@ -330,6 +344,11 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
           '${rule.id}: unable to materialize complete HLS manifest '
           '(HTTP ${playlist.status}, ${playlist.body.length} chars)',
         );
+        if (filtersAds) {
+          onHlsAdFilterStatus?.call(
+            'HLS 去广告未生效：清单读取失败（HTTP ${playlist.status}）',
+          );
+        }
         return prepared;
       }
 
@@ -346,6 +365,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
         );
         if (variant == null) {
           debugPrint('${rule.id}: HLS 主清单无法选定单一变体，放弃去广告');
+          onHlsAdFilterStatus?.call('HLS 去广告未生效：不支持此多码率清单');
           return prepared;
         }
         playlist = await _fetchHlsPlaylist(variant.uri, prepared.httpHeaders);
@@ -353,6 +373,9 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
           debugPrint(
             '${rule.id}: unable to materialize HLS variant '
             '(HTTP ${playlist.status}, ${playlist.body.length} chars)',
+          );
+          onHlsAdFilterStatus?.call(
+            'HLS 去广告未生效：分片清单读取失败（HTTP ${playlist.status}）',
           );
           return prepared;
         }
@@ -364,19 +387,22 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
           '${rule.id}: unable to materialize complete HLS manifest '
           '(直播清单无 #EXT-X-ENDLIST, ${playlist.body.length} chars)',
         );
+        if (filtersAds) onHlsAdFilterStatus?.call('HLS 去广告未生效：仅支持完整点播清单');
         return prepared;
       }
 
       var body = playlist.body;
+      HlsAdFilterOutcome? filterOutcome;
       if (filtersAds) {
         final outcome = await HlsAdFilter.apply(
           manifest: body,
           manifestUri: playlist.uri,
           probe: (segmentUri) =>
-              _probeHlsSegmentFingerprint(segmentUri, prepared.httpHeaders),
+              _readHlsSegmentFingerprint(segmentUri, prepared.httpHeaders),
         );
         debugPrint('${rule.id}: HLS 去广告 ${outcome.detail}');
         body = outcome.manifest;
+        filterOutcome = outcome;
       }
 
       final proxyUrl = await _startHlsProxy(
@@ -384,9 +410,18 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
         playlist.uri,
         prepared.httpHeaders,
       );
+      if (filterOutcome != null) {
+        onHlsAdFilterStatus?.call(
+          filterOutcome.changed
+              ? '已过滤 ${filterOutcome.removedSegments} 个广告分片，'
+                    '共 ${filterOutcome.removedSeconds.toStringAsFixed(1)} 秒'
+              : 'HLS 去广告：${filterOutcome.detail}',
+        );
+      }
       return (url: proxyUrl, httpHeaders: const <String, String>{});
     } catch (error) {
       debugPrint('${rule.id}: HLS manifest materialization failed: $error');
+      if (filtersAds) onHlsAdFilterStatus?.call('HLS 去广告未生效：网络或分片处理失败，已保留原视频');
       return prepared;
     }
   }
@@ -423,20 +458,6 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
 
   /// 只取分片前缀（默认 16 KB）读取编码指纹，供 [HlsAdFilter] 判断某个分片
   /// 是否与正片同一次编码。任何失败都返回 null，调用方按「与正片一致」处理。
-  Future<HlsVideoFingerprint?> _probeHlsSegmentFingerprint(
-    Uri segmentUri,
-    Map<String, String> headers,
-  ) async {
-    final cacheKey = segmentUri.toString();
-    if (_hlsProbeCache.containsKey(cacheKey)) {
-      return _hlsProbeCache[cacheKey];
-    }
-    final fingerprint = await _readHlsSegmentFingerprint(segmentUri, headers);
-    if (_hlsProbeCache.length >= _hlsProbeCacheLimit) _hlsProbeCache.clear();
-    _hlsProbeCache[cacheKey] = fingerprint;
-    return fingerprint;
-  }
-
   Future<HlsVideoFingerprint?> _readHlsSegmentFingerprint(
     Uri segmentUri,
     Map<String, String> headers,
@@ -798,6 +819,9 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
           usesDynamicMetadata = true;
         }
         if (step.op == 'anime1Play') usesCookies = true;
+        // 播放页会下发一次性播放凭证（cookie/会话）的源，整条 play 管线必须
+        // 独占运行：并发解析会互相顶掉凭证（tvtfun 的 tvt-pt 即属此类）。
+        usesCookies |= step.flag('cookieSession');
         validatesWithCookies |= step.flag('validateWithCookies');
         materializesHls |= step.flag('materializeHls');
         filtersHlsAds |= step.flag('filterHlsAds');

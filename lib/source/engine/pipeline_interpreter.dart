@@ -1120,6 +1120,11 @@ class PipelineInterpreter {
   ///
   /// - `sourcesPath`：多线路数组，每项通过 `episodesKey` 指向剧集数组。
   /// - `episodesPath`：单线路的扁平剧集数组，线路名由 `sourceName` 指定。
+  ///
+  /// `episodeIdTemplate` 除剧集自身字段外，还可使用 `source_id`（线路 id）、
+  /// `source_index`（线路在数组中的下标，从 0 起）与 `index`（集数序号，从 1 起）。
+  /// 站点把线路序号放在播放页 URL 里（如 `?source=1&episode=0`）时，用
+  /// `source_index` 与剧集自身的 `sort` 拼进 episodeId 才能在播放阶段还原。
   void _opJsonEpisodes(PipelineStep step, _PipelineContext ctx) {
     ctx.beginSink();
     final data = _asJson(ctx.value);
@@ -1144,7 +1149,8 @@ class PipelineInterpreter {
     final sourceNameKey = step.str('sourceNameKey') ?? 'name';
 
     final result = <Source>[];
-    for (final rawSource in sourcesList) {
+    for (var sourceIndex = 0; sourceIndex < sourcesList.length; sourceIndex++) {
+      final rawSource = sourcesList[sourceIndex];
       if (rawSource is! Map) continue;
       final epList = rawSource[epListKey];
       if (epList is! List) continue;
@@ -1153,6 +1159,7 @@ class PipelineInterpreter {
         step,
         ctx,
         sourceId: rawSource['id'],
+        sourceIndex: sourceIndex,
       );
       if (episodes.isNotEmpty) {
         final name = rawSource[sourceNameKey]?.toString().trim();
@@ -1240,6 +1247,7 @@ class PipelineInterpreter {
     PipelineStep step,
     _PipelineContext ctx, {
     Object? sourceId,
+    int sourceIndex = 0,
   }) {
     final epNameKey =
         step.str('episodeNameKey') ?? step.str('nameKey') ?? 'name';
@@ -1265,6 +1273,7 @@ class PipelineInterpreter {
                 for (final entry in item.entries)
                   entry.key.toString(): entry.value?.toString(),
                 'source_id': sourceId?.toString() ?? '',
+                'source_index': sourceIndex.toString(),
                 'index': (i + 1).toString(),
               },
             );
@@ -1304,6 +1313,8 @@ class PipelineInterpreter {
   /// `setMediaHeaders`：从当前 JSON 值中提取播放器请求头并设置到 ctx。
   /// `jsonPath`：headers 对象在 JSON 中的点路径（如 `data.headers`）。
   /// `headers`：可选的静态头，会与动态头合并（动态头优先）。
+  /// `remove`：要从媒体请求头里去掉的字段（如第三方 CDN 不接受站点 Referer）；
+  /// 记为空白值，由适配器合并规则头后统一剔除。
   void _opSetMediaHeaders(PipelineStep step, _PipelineContext ctx) {
     final staticHeaders = _renderMap(step.params['headers'], ctx);
     Map<String, String>? updated = staticHeaders.isEmpty ? null : staticHeaders;
@@ -1316,6 +1327,14 @@ class PipelineInterpreter {
         for (final entry in headers.entries) {
           updated[entry.key.toString()] = entry.value?.toString() ?? '';
         }
+      }
+    }
+    final removed = step.strList('remove');
+    if (removed.isNotEmpty) {
+      updated ??= Map<String, String>.of(ctx.mediaHeaders);
+      for (final name in removed) {
+        final key = name.trim();
+        if (key.isNotEmpty) updated[key] = '';
       }
     }
     if (updated != null) ctx.mediaHeaders = updated;

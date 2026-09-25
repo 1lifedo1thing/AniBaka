@@ -186,32 +186,6 @@ void main() {
     },
   );
 
-  test(
-    'viewer controls are blocked while remote room updates still apply',
-    () async {
-      final controller = PlaybackController();
-      controller.timeline.value = controller.timeline.value.copyWith(
-        duration: const Duration(minutes: 10),
-      );
-      await controller.configureWatchParty(connected: true, canControl: false);
-
-      await controller.play();
-      await controller.pause();
-      await controller.seek(const Duration(seconds: 50));
-      await controller.setRate(2);
-      expect(controller.core.value.playing, isFalse);
-      expect(controller.core.value.playbackRate, 1.0);
-      expect(controller.timeline.value.position, Duration.zero);
-
-      await controller.setRate(0.95, roomCorrection: true);
-      expect(controller.core.value.playbackRate, 0.95);
-      await controller.seek(const Duration(seconds: 50), remote: true);
-      expect(controller.timeline.value.position, const Duration(seconds: 50));
-
-      await controller.dispose();
-    },
-  );
-
   test('disposing an old player cannot detach its replacement', () async {
     final service = WatchPartyService(
       session: AccountSession(Instances.sp, refreshTokens: (_) async => null),

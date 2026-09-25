@@ -313,7 +313,7 @@ class _SourceChip extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
 
     final label = isSearching
-        ? '正在解构优选源...'
+        ? '正在匹配播放源'
         : (lineName != null ? '$sourceName · $lineName' : sourceName);
 
     return ScaleButton(
@@ -327,22 +327,8 @@ class _SourceChip extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (isSearching)
-              Padding(
-                padding: const EdgeInsets.only(right: 6),
-                child: SizedBox(
-                  width: 13,
-                  height: 13,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: primary,
-                  ),
-                ),
-              )
-            else ...[
-              Icon(Icons.sensors_rounded, size: 12, color: primary),
-              const SizedBox(width: 4),
-            ],
+            Icon(Icons.sensors_rounded, size: 12, color: primary),
+            const SizedBox(width: 4),
             Text(
               label,
               style: TextStyle(

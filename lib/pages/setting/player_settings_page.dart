@@ -40,21 +40,19 @@ class PlayerSettingsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cardColor = Colors.white.withValues(alpha: 0.05);
-
     return ValueListenableBuilder<PlaybackPreferences>(
       valueListenable: controller.preferences,
       builder: (context, preferences, _) => PanelContainer(
+        title: '播放器设置',
         child: CustomScrollView(
           physics: const BouncingScrollPhysics(),
           slivers: [
             SliverPadding(
-              padding: const EdgeInsets.fromLTRB(16, 24, 16, 24),
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
               sliver: SliverList(
                 delegate: SliverChildListDelegate([
                   const PanelSectionTitle('播放体验'),
                   PanelSettingsGroup(
-                    backgroundColor: cardColor,
                     children: [
                       PanelSwitchTile(
                         title: '记住播放位置',
@@ -127,7 +125,6 @@ class PlayerSettingsPage extends StatelessWidget {
 
                   const PanelSectionTitle('智能跳过'),
                   PanelSettingsGroup(
-                    backgroundColor: cardColor,
                     children: [
                       PanelSwitchTile(
                         title: '启用智能跳过',
@@ -189,7 +186,6 @@ class PlayerSettingsPage extends StatelessWidget {
 
                   const PanelSectionTitle('手势交互'),
                   PanelSettingsGroup(
-                    backgroundColor: cardColor,
                     children: [
                       PanelSliderTile(
                         title: '长按倍速',

@@ -14,6 +14,7 @@ import 'package:baka/widgets/comment/comment_widget.dart';
 import 'package:baka/services/playback/danmaku_controller.dart';
 import 'package:baka/widgets/platform/windows/windows_episode_list.dart';
 import 'package:baka/widgets/platform/windows/windows_title_bar.dart';
+import 'package:baka/widgets/player/player_tab.dart';
 
 class WindowsPlayerLayout extends StatefulWidget {
   final TorrentService torrent;
@@ -79,14 +80,19 @@ class WindowsPlayerLayout extends StatefulWidget {
   State<WindowsPlayerLayout> createState() => _WindowsPlayerLayoutState();
 }
 
-class _WindowsPlayerLayoutState extends State<WindowsPlayerLayout> {
+class _WindowsPlayerLayoutState extends State<WindowsPlayerLayout>
+    with SingleTickerProviderStateMixin {
   bool _showSidebar = true;
-  final _sidebarTabIndex = ValueNotifier<int>(0);
+  late final _sidebarTabs = TabController(
+    length: 2,
+    vsync: this,
+    animationDuration: Duration.zero,
+  );
   bool _isFullScreen = false;
 
   @override
   void dispose() {
-    _sidebarTabIndex.dispose();
+    _sidebarTabs.dispose();
     super.dispose();
   }
 
@@ -114,10 +120,7 @@ class _WindowsPlayerLayoutState extends State<WindowsPlayerLayout> {
                     alignment: Alignment.topLeft,
                     child: TickerMode(
                       enabled: shouldShowSidebar,
-                      child: ValueListenableBuilder<int>(
-                        valueListenable: _sidebarTabIndex,
-                        builder: (context, _, _) => _buildSidebar(context),
-                      ),
+                      child: _buildSidebar(context),
                     ),
                   ),
                 ),
@@ -408,13 +411,18 @@ class _WindowsPlayerLayoutState extends State<WindowsPlayerLayout> {
       ),
       child: Column(
         children: [
-          _buildSidebarTabs(),
+          ListenableBuilder(
+            listenable: _sidebarTabs,
+            builder: (context, _) => _buildSidebarTabs(),
+          ),
           Expanded(
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 180),
-              child: _sidebarTabIndex.value == 0
-                  ? _buildPlaylistTab()
-                  : _buildCommentTab(),
+            child: TabBarView(
+              controller: _sidebarTabs,
+              physics: const NeverScrollableScrollPhysics(),
+              children: [
+                PlayerTab(child: _buildPlaylistTab()),
+                _buildCommentTab(),
+              ],
             ),
           ),
         ],
@@ -456,12 +464,12 @@ class _WindowsPlayerLayoutState extends State<WindowsPlayerLayout> {
     required IconData icon,
     required String title,
   }) {
-    final isSelected = _sidebarTabIndex.value == index;
+    final isSelected = _sidebarTabs.index == index;
     return Material(
       color: Colors.transparent,
       borderRadius: BorderRadius.circular(6),
       child: InkWell(
-        onTap: () => _sidebarTabIndex.value = index,
+        onTap: () => _sidebarTabs.animateTo(index),
         borderRadius: BorderRadius.circular(6),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),

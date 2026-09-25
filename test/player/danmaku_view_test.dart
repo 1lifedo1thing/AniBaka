@@ -1,9 +1,102 @@
 import 'package:baka/services/playback/danmaku_controller.dart';
+import 'package:baka/theme.dart';
 import 'package:baka/widgets/danmaku/view.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('listener changes during dispatch preserve the current snapshot', () {
+    final controller = DanmakuController();
+    final first = _ProbeDanmakuListener();
+    final second = _ProbeDanmakuListener();
+    final third = _ProbeDanmakuListener();
+    controller.attach(first);
+    controller.attach(second);
+    first.onSync = () {
+      controller.detach(second);
+      controller.attach(third);
+    };
+    controller.syncTime(const Duration(seconds: 1));
+    controller.syncTime(const Duration(seconds: 2));
+    expect(second.events, ['sync:1000']);
+    expect(third.events, ['sync:1000', 'sync:2000']);
+    controller.dispose();
+  });
+
+  testWidgets('fixed comments repaint on expiry and freeze while paused', (
+    tester,
+  ) async {
+    final controller = DanmakuController();
+    controller.updateOption(
+      const DanmakuOption(fontFamily: AppFonts.systemFont),
+    );
+    await tester.pumpWidget(
+      Directionality(
+        textDirection: TextDirection.ltr,
+        child: DanmakuView(controller: controller),
+      ),
+    );
+    controller.addItem(const DanmakuItem('top', type: 5));
+    await tester.pump();
+    final painter = tester
+        .widget<CustomPaint>(find.byType(CustomPaint))
+        .painter!;
+    var repaints = 0;
+    void count() => repaints++;
+    painter.addListener(count);
+    await tester.pump(const Duration(seconds: 2));
+    expect(repaints, 0);
+    controller.pause();
+    await tester.pump(const Duration(seconds: 10));
+    expect(repaints, 0);
+    controller.resume();
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 4));
+    expect(repaints, 1);
+    expect(tester.binding.hasScheduledFrame, isFalse);
+    painter.removeListener(count);
+    await tester.pumpWidget(const SizedBox.shrink());
+    controller.dispose();
+  });
+
+  testWidgets('replacing the controller replays its time after reset', (
+    tester,
+  ) async {
+    final first = DanmakuController();
+    final second = DanmakuController();
+    for (final controller in [first, second]) {
+      controller.updateOption(
+        const DanmakuOption(fontFamily: AppFonts.systemFont),
+      );
+    }
+    Widget view(DanmakuController controller) => Directionality(
+      textDirection: TextDirection.ltr,
+      child: DanmakuView(controller: controller),
+    );
+    await tester.pumpWidget(view(first));
+    second.syncTime(const Duration(seconds: 60));
+    second.setItems(const [
+      DanmakuItem('past', time: 0),
+      DanmakuItem('current', time: 60000),
+    ]);
+    final texts = <String>[];
+    void observe(ObjectEvent event) {
+      if (event is ObjectCreated && event.object is TextPainter) {
+        texts.add((event.object as TextPainter).text!.toPlainText());
+      }
+    }
+
+    FlutterMemoryAllocations.instance.addListener(observe);
+    await tester.pumpWidget(view(second));
+    FlutterMemoryAllocations.instance.removeListener(observe);
+    expect(texts, contains('current'));
+    expect(texts, isNot(contains('past')));
+    await tester.pumpWidget(const SizedBox.shrink());
+    first.dispose();
+    second.dispose();
+  });
+
   test(
     'repeat window extends from the latest duplicate and evicts in O(1)',
     () {
@@ -122,6 +215,7 @@ void main() {
 }
 
 class _ProbeDanmakuListener implements DanmakuListener {
+  VoidCallback? onSync;
   Duration? lastPosition;
   final List<String> events = [];
 
@@ -129,6 +223,7 @@ class _ProbeDanmakuListener implements DanmakuListener {
   void onDanmakuTimeSync(Duration position) {
     lastPosition = position;
     events.add('sync:${position.inMilliseconds}');
+    onSync?.call();
   }
 
   @override

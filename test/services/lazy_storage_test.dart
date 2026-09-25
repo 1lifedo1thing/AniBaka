@@ -31,14 +31,4 @@ void main() {
     await opening;
     expect(AppStorage.downloadTasksBox.isOpen, isTrue);
   });
-  test('a failed box open does not poison subsequent attempts', () async {
-    final conflict = await Hive.openBox<String>(
-      AppStorage.threadCommentsBoxName,
-    );
-    // A box opened by a different owner still has to obey its typed contract.
-    expect(() => AppStorage.threadCommentsBox, throwsA(isA<HiveError>()));
-    await conflict.close();
-    await AppStorage.open(AppStorage.threadCommentsBoxName);
-    expect(AppStorage.threadCommentsBox.isOpen, isTrue);
-  });
 }

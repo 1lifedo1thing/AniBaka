@@ -1,4 +1,5 @@
 import '../support/app_dependencies.dart';
+import 'dart:io';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/services/source/source_repository.dart';
@@ -65,6 +66,62 @@ void main() {
     Instances.sp = await SharedPreferences.getInstance();
     configureTestServices();
   });
+  test('local serialized catalog keeps every episode after loading', () async {
+    final content = PlaybackContent(
+      sources: sourceRepository,
+      collections: collections,
+      history: historyRepository,
+      request: PlaybackRequest.fromMap({
+        'source': '_local',
+        'localFilePath': 'first.mp4',
+        'videoList': ['First\$first.mp4', 'Second\$second.mp4'],
+        'currPlayIndex': 1,
+      }),
+    );
+    addTearDown(content.dispose);
+    final episodes = content.videoList;
+    await content.loadDetail();
+    expect(content.videoList, same(episodes));
+    expect(content.videoList, hasLength(2));
+    expect(content.localFilePath, 'second.mp4');
+  });
+  test(
+    'local danmaku uses explicit file then sidecar, including remote media',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'player-danmaku-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final video = '${directory.path}${Platform.pathSeparator}episode.mp4';
+      final explicit = File(
+        '${directory.path}${Platform.pathSeparator}explicit.json',
+      );
+      final sidecar = File('${video}_danmaku.json');
+      await explicit.writeAsString('[{"p":"1,1,16777215","m":"explicit"}]');
+      await sidecar.writeAsString('[{"p":"2,1,16777215","m":"sidecar"}]');
+      final data = <String, dynamic>{
+        'source': '_local',
+        'localFilePath': video,
+        'danmakuPath': explicit.path,
+      };
+      final content = PlaybackContent(
+        sources: sourceRepository,
+        collections: collections,
+        history: historyRepository,
+        request: PlaybackRequest.fromMap(data),
+      );
+      addTearDown(content.dispose);
+      expect((await content.fetchDanmakuData(0)).single.text, 'explicit');
+      data['localFilePath'] = 'https://example.test/episode.mp4';
+      expect((await content.fetchDanmakuData(0)).single.text, 'explicit');
+      await explicit.delete();
+      expect(await content.fetchDanmakuData(0), isEmpty);
+      data['localFilePath'] = video;
+      expect((await content.fetchDanmakuData(0)).single.text, 'sidecar');
+      await sidecar.delete();
+      expect(await content.fetchDanmakuData(0), isEmpty);
+    },
+  );
   test(
     'prefetched media is reused and invalidated by selection and source',
     () async {

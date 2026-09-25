@@ -54,763 +54,291 @@ class DanmakuListSheet extends StatefulWidget {
 }
 
 class _DanmakuListSheetState extends State<DanmakuListSheet> {
+  final _searchController = TextEditingController();
   late bool _showSearch;
-
-  final TextEditingController _searchController = TextEditingController();
-  final FocusNode _searchFocusNode = FocusNode();
-
   bool _isSearching = false;
-  List<BgmSubjectInfo> _searchResults = [];
   String? _searchError;
-
+  List<BgmSubjectInfo> _searchResults = const [];
   BgmSubjectInfo? _selectedSubject;
-  final Map<int, List<int>> _episodesCache = {};
-  final Set<int> _loadingEpisodesSet = {};
-  int? _loadingEpIndex;
-
-  late double _timeOffset;
+  Future<List<int>>? _episodes;
+  (int, int)? _loadingEpisode;
+  int _searchRequest = 0;
+  int _loadRequest = 0;
 
   @override
   void initState() {
     super.initState();
     _showSearch = widget.initialShowSearch;
-    _timeOffset = widget.controller.timeOffset;
-    final initial = widget.defaultTitle?.trim() ?? '';
-    if (initial.isNotEmpty) {
-      _searchController.text = initial;
-      if (_showSearch) {
-        _doSearch(initial);
-      }
-    }
+    _searchController.text = widget.defaultTitle?.trim() ?? '';
+    if (_showSearch) _doSearch(_searchController.text);
   }
 
   @override
   void dispose() {
     _searchController.dispose();
-    _searchFocusNode.dispose();
     super.dispose();
   }
 
   Future<void> _doSearch(String keyword) async {
     final clean = keyword.trim();
     if (clean.isEmpty) return;
-
+    final request = ++_searchRequest;
     setState(() {
       _isSearching = true;
       _searchError = null;
-      _searchResults = [];
+      _searchResults = const [];
       _selectedSubject = null;
+      _episodes = null;
     });
-
     try {
       final results = await searchBgmSubjects(clean);
-      if (!mounted) return;
-
+      if (!mounted || request != _searchRequest) return;
       setState(() {
         _searchResults = results;
         _isSearching = false;
-        if (results.isEmpty) {
-          _searchError = '未找到相关番剧';
-        } else {
-          _selectSubject(results.first);
-        }
+        _searchError = results.isEmpty ? '未找到相关番剧' : null;
       });
+      if (results.isNotEmpty) _selectSubject(results.first);
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _isSearching = false;
-          _searchError = '搜索失败: $e';
-        });
-      }
+      if (!mounted || request != _searchRequest) return;
+      setState(() {
+        _isSearching = false;
+        _searchError = '搜索失败: $e';
+      });
     }
   }
 
-  Future<void> _selectSubject(BgmSubjectInfo subject) async {
-    setState(() => _selectedSubject = subject);
-
-    final subjectId = subject.subjectId;
-    if (_episodesCache.containsKey(subjectId)) return;
-
-    setState(() => _loadingEpisodesSet.add(subjectId));
-
-    try {
-      final rawEpisodes = await getBgmEpisodes(subjectId);
-      final epNumbers = <int>[
-        for (final raw in rawEpisodes)
-          if ((raw['sort'] as num).toDouble() > 0) (raw['sort'] as num).round(),
-      ];
-
-      if (mounted) {
-        setState(() {
-          _episodesCache[subjectId] = epNumbers;
-          _loadingEpisodesSet.remove(subjectId);
-        });
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          _episodesCache[subjectId] = const [];
-          _loadingEpisodesSet.remove(subjectId);
-          _searchError = '剧集加载失败';
-        });
-      }
-    }
+  void _selectSubject(BgmSubjectInfo subject) {
+    if (_selectedSubject?.subjectId == subject.subjectId) return;
+    setState(() {
+      _selectedSubject = subject;
+      // The API already caches and deduplicates episode requests.
+      _episodes = getBgmEpisodes(subject.subjectId).then(
+        (episodes) => [
+          for (final episode in episodes)
+            if ((episode['sort'] as num) > 0) (episode['sort'] as num).round(),
+        ],
+      );
+    });
   }
 
-  Future<void> _loadDanmaku(BgmSubjectInfo subject, int epIndex) async {
-    setState(() => _loadingEpIndex = epIndex);
-
+  Future<void> _loadDanmaku(BgmSubjectInfo subject, int episode) async {
+    final selection = (subject.subjectId, episode);
+    if (_loadingEpisode == selection) return;
+    final request = ++_loadRequest;
+    setState(() => _loadingEpisode = selection);
     try {
       final items = await DanmakuController.fetchDanmaku(
         subjectId: subject.subjectId,
-        episodeIndex: epIndex,
+        episodeIndex: episode,
         titles: subject.searchTitles,
       );
-
-      if (!mounted) return;
-
-      widget.controller.reset();
-      if (items.isNotEmpty) {
-        widget.controller.setItems(items);
-      }
+      if (!mounted || request != _loadRequest) return;
+      widget.controller.setItems(items);
       widget.onDanmakuLoaded?.call(items);
-
       final title = subject.nameCn ?? subject.name ?? '动画';
-
       showSnackBar(
-        items.isNotEmpty
-            ? '已关联《$title》第 $epIndex 话 (${items.length} 条弹幕)'
-            : '已关联《$title》第 $epIndex 话 (无弹幕)',
+        '已关联《$title》第 $episode 话 (${items.isEmpty ? "无弹幕" : "${items.length} 条弹幕"})',
       );
-
       setState(() {
-        _loadingEpIndex = null;
+        _loadingEpisode = null;
         _showSearch = false;
       });
     } catch (e) {
-      if (mounted) {
-        setState(() => _loadingEpIndex = null);
-        showSnackBar('关联失败: $e');
-      }
+      if (!mounted || request != _loadRequest) return;
+      setState(() => _loadingEpisode = null);
+      showSnackBar('关联失败: $e');
     }
-  }
-
-  void _adjustOffset(double delta) {
-    final next = double.parse((_timeOffset + delta).toStringAsFixed(1));
-    setState(() => _timeOffset = next);
-    widget.controller.setTimeOffset(next);
-  }
-
-  void _resetOffset() {
-    setState(() => _timeOffset = 0.0);
-    widget.controller.setTimeOffset(0.0);
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final primaryColor = colorScheme.primary;
-
-    return ListenableBuilder(
-      listenable: widget.controller,
-      builder: (context, _) {
-        final count = widget.controller.items.length;
-        const providerName = 'dandanplay';
-        final animeTitle = widget.defaultTitle?.trim();
-
-        return Container(
-          clipBehavior: Clip.antiAlias,
-          decoration: BoxDecoration(
-            color: colorScheme.surface,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: colorScheme.outlineVariant.withValues(alpha: 0.3),
-              width: 1,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.25),
-                blurRadius: 20,
-                spreadRadius: -2,
-                offset: const Offset(0, 6),
-              ),
-            ],
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          child: SingleChildScrollView(
-            physics: const BouncingScrollPhysics(),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
+    return Material(
+      color: theme.colorScheme.surface,
+      borderRadius: BorderRadius.circular(16),
+      clipBehavior: Clip.antiAlias,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
               children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(5),
-                      decoration: BoxDecoration(
-                        color: primaryColor.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Icon(
-                        Icons.subtitles_rounded,
-                        color: primaryColor,
-                        size: 16,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      '弹幕管理',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 15,
-                        letterSpacing: -0.2,
-                      ),
-                    ),
-                    const Spacer(),
-                    Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(20),
-                        onTap: () => Navigator.of(context).pop(),
-                        child: Padding(
-                          padding: const EdgeInsets.all(4),
-                          child: Icon(
-                            Icons.close_rounded,
-                            size: 18,
-                            color: colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
+                const Icon(Icons.subtitles_rounded, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text('弹幕管理', style: theme.textTheme.titleMedium),
                 ),
-                const SizedBox(height: 10),
-
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: primaryColor.withValues(alpha: 0.05),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                      color: primaryColor.withValues(alpha: 0.2),
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 3,
-                        height: 32,
-                        decoration: BoxDecoration(
-                          color: primaryColor,
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Text(
-                                  '来源: $providerName',
-                                  style: TextStyle(
-                                    color: colorScheme.onSurface,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 4,
-                                    vertical: 1,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: primaryColor.withValues(alpha: 0.1),
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: Text(
-                                    '自建服务器获取',
-                                    style: TextStyle(
-                                      color: primaryColor,
-                                      fontSize: 9,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ),
-                                const Spacer(),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 6,
-                                    vertical: 2,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: primaryColor.withValues(alpha: 0.12),
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                  child: Text(
-                                    '$count 条弹幕',
-                                    style: TextStyle(
-                                      color: primaryColor,
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              '${animeTitle != null && animeTitle.isNotEmpty ? "《$animeTitle》 " : ""}${widget.defaultEpisode != null ? "第 ${widget.defaultEpisode} 话" : "未指定集数"}',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: colorScheme.onSurface.withValues(
-                                  alpha: 0.7,
-                                ),
-                                fontSize: 11,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
+                IconButton(
+                  tooltip: '关闭',
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.close_rounded),
                 ),
-                const SizedBox(height: 10),
-
-                Row(
-                  children: [
-                    InkWell(
-                      onTap: () {
-                        setState(() {
-                          _showSearch = !_showSearch;
-                          if (_showSearch &&
-                              _searchResults.isEmpty &&
-                              _searchController.text.isNotEmpty) {
-                            _doSearch(_searchController.text);
-                          }
-                        });
-                      },
-                      borderRadius: BorderRadius.circular(8),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 5,
-                        ),
-                        decoration: BoxDecoration(
-                          color: _showSearch
-                              ? primaryColor.withValues(alpha: 0.12)
-                              : colorScheme.surface,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: _showSearch
-                                ? primaryColor
-                                : primaryColor.withValues(alpha: 0.3),
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              _showSearch
-                                  ? Icons.close_rounded
-                                  : Icons.search_rounded,
-                              size: 14,
-                              color: primaryColor,
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              _showSearch ? '收起检索' : '手动检索',
-                              style: TextStyle(
-                                color: primaryColor,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const Spacer(),
-                    Row(
-                      children: [
-                        Text(
-                          '延迟: ',
-                          style: TextStyle(
-                            color: colorScheme.onSurface.withValues(alpha: 0.7),
-                            fontSize: 10,
-                          ),
-                        ),
-                        if (_timeOffset != 0.0)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 3),
-                            child: Text(
-                              '${_timeOffset > 0 ? "+$_timeOffset" : "$_timeOffset"}s',
-                              style: TextStyle(
-                                color: primaryColor,
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                        _buildOffsetPill(
-                          '-0.5s',
-                          () => _adjustOffset(-0.5),
-                          colorScheme,
-                          primaryColor,
-                        ),
-                        _buildOffsetPill(
-                          '重置',
-                          _resetOffset,
-                          colorScheme,
-                          primaryColor,
-                          isReset: true,
-                        ),
-                        _buildOffsetPill(
-                          '+0.5s',
-                          () => _adjustOffset(0.5),
-                          colorScheme,
-                          primaryColor,
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-
-                if (_showSearch) ...[
-                  const SizedBox(height: 10),
-                  _buildSearchPanel(colorScheme, primaryColor),
-                ],
               ],
             ),
-          ),
-        );
-      },
+            Text(
+              '${widget.defaultTitle ?? "未指定番剧"} · ${widget.defaultEpisode == null ? "未指定集数" : "第 ${widget.defaultEpisode} 话"}',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 8),
+            ListenableBuilder(
+              listenable: widget.controller,
+              builder: (context, _) => Text(
+                '来源: dandanplay · ${widget.controller.items.length} 条弹幕',
+                style: theme.textTheme.bodySmall,
+              ),
+            ),
+            const Divider(height: 24),
+            ListenableBuilder(
+              listenable: widget.controller,
+              builder: (context, _) => Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 4,
+                children: [
+                  Text(
+                    '延迟 ${widget.controller.timeOffset.toStringAsFixed(1)}s',
+                  ),
+                  for (final delta in [-0.5, 0.0, 0.5])
+                    TextButton(
+                      onPressed: () => widget.controller.setTimeOffset(
+                        delta == 0
+                            ? 0
+                            : (widget.controller.timeOffset * 10 + delta * 10)
+                                      .round() /
+                                  10,
+                      ),
+                      child: Text(
+                        delta == 0 ? '重置' : '${delta > 0 ? "+" : ""}${delta}s',
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            TextButton.icon(
+              onPressed: () {
+                setState(() => _showSearch = !_showSearch);
+                if (_showSearch && _searchResults.isEmpty && !_isSearching) {
+                  _doSearch(_searchController.text);
+                }
+              },
+              icon: Icon(_showSearch ? Icons.expand_less : Icons.search),
+              label: Text(_showSearch ? '收起检索' : '手动检索'),
+            ),
+            if (_showSearch) _buildSearchPanel(),
+          ],
+        ),
+      ),
     );
   }
 
-  Widget _buildSearchPanel(ColorScheme colors, Color primaryColor) {
-    final epNumbers = _selectedSubject != null
-        ? (_episodesCache[_selectedSubject!.subjectId] ?? const [])
-        : const <int>[];
-    final isLoadingEps =
-        _selectedSubject != null &&
-        _loadingEpisodesSet.contains(_selectedSubject!.subjectId);
-
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: colors.surfaceContainer,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: primaryColor.withValues(alpha: 0.2)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Container(
-                  height: 32,
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  decoration: BoxDecoration(
-                    color: colors.surface,
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(
-                      color: _searchFocusNode.hasFocus
-                          ? primaryColor
-                          : colors.outlineVariant.withValues(alpha: 0.4),
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.search_rounded,
-                        color: primaryColor.withValues(alpha: 0.7),
-                        size: 14,
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: TextField(
-                          controller: _searchController,
-                          focusNode: _searchFocusNode,
-                          style: TextStyle(
-                            color: colors.onSurface,
-                            fontSize: 11,
-                          ),
-                          decoration: InputDecoration(
-                            hintText: '输入番剧名称搜索...',
-                            hintStyle: TextStyle(
-                              color: colors.onSurface.withValues(alpha: 0.4),
-                              fontSize: 11,
-                            ),
-                            border: InputBorder.none,
-                            isDense: true,
-                            contentPadding: EdgeInsets.zero,
-                          ),
-                          onSubmitted: _doSearch,
-                        ),
-                      ),
-                      if (_searchController.text.isNotEmpty)
-                        GestureDetector(
-                          onTap: () {
-                            _searchController.clear();
-                            setState(() {});
-                          },
-                          child: Icon(
-                            Icons.cancel,
-                            size: 13,
-                            color: colors.onSurface.withValues(alpha: 0.4),
-                          ),
-                        ),
-                    ],
-                  ),
+  Widget _buildSearchPanel() {
+    final subject = _selectedSubject;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextField(
+          controller: _searchController,
+          textInputAction: TextInputAction.search,
+          onSubmitted: _doSearch,
+          decoration: InputDecoration(
+            hintText: '输入番剧名称搜索...',
+            border: const OutlineInputBorder(),
+            suffixIcon: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  tooltip: '清空',
+                  onPressed: _searchController.clear,
+                  icon: const Icon(Icons.clear),
                 ),
-              ),
-              const SizedBox(width: 6),
-              SizedBox(
-                height: 32,
-                child: FilledButton(
+                IconButton(
+                  tooltip: '检索',
                   onPressed: _isSearching
                       ? null
                       : () => _doSearch(_searchController.text),
-                  style: FilledButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
-                    backgroundColor: primaryColor,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                  ),
-                  child: _isSearching
-                      ? const SizedBox(
-                          width: 12,
-                          height: 12,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 1.5,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Text(
-                          '检索',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
+                  icon: const Icon(Icons.search),
                 ),
-              ),
-            ],
-          ),
-
-          if (_searchError != null) ...[
-            const SizedBox(height: 6),
-            Text(
-              _searchError!,
-              style: const TextStyle(color: Colors.orangeAccent, fontSize: 10),
-            ),
-          ],
-
-          if (_searchResults.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            SizedBox(
-              height: 24,
-              child: ListView.builder(
-                scrollDirection: Axis.horizontal,
-                physics: const BouncingScrollPhysics(),
-                itemCount: _searchResults.length,
-                itemBuilder: (context, index) {
-                  final item = _searchResults[index];
-                  final isSelected =
-                      _selectedSubject?.subjectId == item.subjectId;
-                  final title = item.nameCn ?? item.name ?? '未知';
-
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: InkWell(
-                      onTap: () => _selectSubject(item),
-                      borderRadius: BorderRadius.circular(4),
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 150),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: isSelected
-                              ? primaryColor.withValues(alpha: 0.15)
-                              : colors.surface,
-                          borderRadius: BorderRadius.circular(4),
-                          border: Border.all(
-                            color: isSelected
-                                ? primaryColor
-                                : colors.outlineVariant.withValues(alpha: 0.3),
-                          ),
-                        ),
-                        child: Text(
-                          title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: isSelected ? primaryColor : colors.onSurface,
-                            fontSize: 10,
-                            fontWeight: isSelected
-                                ? FontWeight.bold
-                                : FontWeight.normal,
-                          ),
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ],
-
-          if (_selectedSubject != null) ...[
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Text(
-                  '选择集数',
-                  style: TextStyle(
-                    color: colors.onSurface.withValues(alpha: 0.7),
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const Spacer(),
-                if (isLoadingEps)
-                  SizedBox(
-                    width: 10,
-                    height: 10,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 1.5,
-                      color: primaryColor,
-                    ),
-                  ),
               ],
-            ),
-            const SizedBox(height: 5),
-            SizedBox(
-              height: 26,
-              child: epNumbers.isEmpty && !isLoadingEps
-                  ? Text(
-                      '暂无集数信息',
-                      style: TextStyle(
-                        color: colors.onSurface.withValues(alpha: 0.5),
-                        fontSize: 10,
-                      ),
-                    )
-                  : ListView.builder(
-                      scrollDirection: Axis.horizontal,
-                      physics: const BouncingScrollPhysics(),
-                      itemCount: epNumbers.length,
-                      itemBuilder: (ctx, index) {
-                        final epNum = epNumbers[index];
-                        final isCurrent = widget.defaultEpisode == epNum;
-                        final isLoadingThis = _loadingEpIndex == epNum;
-
-                        return Padding(
-                          padding: const EdgeInsets.only(right: 4),
-                          child: InkWell(
-                            onTap: () => _loadDanmaku(_selectedSubject!, epNum),
-                            borderRadius: BorderRadius.circular(4),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 7,
-                              ),
-                              alignment: Alignment.center,
-                              decoration: BoxDecoration(
-                                color: isCurrent
-                                    ? primaryColor
-                                    : colors.surface,
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(
-                                  color: isCurrent
-                                      ? primaryColor
-                                      : colors.outlineVariant.withValues(
-                                          alpha: 0.3,
-                                        ),
-                                ),
-                              ),
-                              child: isLoadingThis
-                                  ? SizedBox(
-                                      width: 10,
-                                      height: 10,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 1.5,
-                                        color: isCurrent
-                                            ? colors.onPrimary
-                                            : primaryColor,
-                                      ),
-                                    )
-                                  : Text(
-                                      'E$epNum',
-                                      style: TextStyle(
-                                        color: isCurrent
-                                            ? colors.onPrimary
-                                            : colors.onSurface,
-                                        fontSize: 10,
-                                        fontWeight: isCurrent
-                                            ? FontWeight.bold
-                                            : FontWeight.w500,
-                                      ),
-                                    ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildOffsetPill(
-    String label,
-    VoidCallback onTap,
-    ColorScheme colors,
-    Color primaryColor, {
-    bool isReset = false,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 3),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(4),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2.5),
-          decoration: BoxDecoration(
-            color: isReset
-                ? colors.surface
-                : primaryColor.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(4),
-            border: Border.all(
-              color: isReset
-                  ? colors.outlineVariant.withValues(alpha: 0.3)
-                  : primaryColor.withValues(alpha: 0.2),
-            ),
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              color: isReset
-                  ? colors.onSurface.withValues(alpha: 0.7)
-                  : primaryColor,
-              fontSize: 9.5,
-              fontWeight: FontWeight.w500,
             ),
           ),
         ),
-      ),
+        if (_isSearching) const LinearProgressIndicator(),
+        if (_searchError != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              _searchError!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+        if (_searchResults.isNotEmpty)
+          SizedBox(
+            height: 56,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              itemCount: _searchResults.length,
+              itemBuilder: (context, index) {
+                final item = _searchResults[index];
+                return Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: ChoiceChip(
+                    label: Text(item.nameCn ?? item.name ?? '未知'),
+                    selected: subject?.subjectId == item.subjectId,
+                    onSelected: (_) => _selectSubject(item),
+                  ),
+                );
+              },
+            ),
+          ),
+        if (subject != null) ...[
+          const Text('选择集数'),
+          const SizedBox(height: 8),
+          FutureBuilder<List<int>>(
+            future: _episodes,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState != ConnectionState.done) {
+                return const LinearProgressIndicator();
+              }
+              if (snapshot.hasError) return const Text('剧集加载失败');
+              final episodes = snapshot.data ?? const [];
+              if (episodes.isEmpty) return const Text('暂无集数信息');
+              return SizedBox(
+                height: 48,
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: episodes.length,
+                  itemBuilder: (context, index) {
+                    final episode = episodes[index];
+                    final loading =
+                        _loadingEpisode == (subject.subjectId, episode);
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        label: loading
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : Text('E$episode'),
+                        selected: widget.defaultEpisode == episode,
+                        onSelected: loading
+                            ? null
+                            : (_) => _loadDanmaku(subject, episode),
+                      ),
+                    );
+                  },
+                ),
+              );
+            },
+          ),
+        ],
+      ],
     );
   }
 }

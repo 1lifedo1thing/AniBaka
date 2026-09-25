@@ -20,6 +20,30 @@ void main() {
 
   tearDown(() => DanmakuController.clearCache());
 
+  test('one malformed timestamp does not discard the rest of the episode', () {
+    final items = DanmakuController.decodeDanmaku(
+      '[{"m":"bad","p":"NaN,1,255"},{"m":"ok","p":"1,1,255"}]',
+    );
+    expect(items.single.text, 'ok');
+  });
+
+  test('cache applies the total item budget and refreshes LRU order', () async {
+    final episode = List.filled(20000, const DanmakuItem('x'));
+    DanmakuController.cacheItems('1-1', episode);
+    DanmakuController.cacheItems('2-1', episode);
+    expect(
+      await DanmakuController.fetchDanmaku(
+        subjectId: 1,
+        episodeIndex: 1,
+        titles: const [],
+      ),
+      same(episode),
+    );
+    DanmakuController.cacheItems('3-1', episode);
+    expect(DanmakuController.cachedKeys.toList(), ['1-1', '3-1']);
+    expect(DanmakuController.cacheSize.items, 40000);
+  });
+
   test('parses, filters and sorts only when input is out of order', () async {
     final items = await DanmakuController.decode(
       '{"data":['
@@ -64,7 +88,7 @@ void main() {
     expect(reparsed.single.color, const Color(0xFF00FF00));
   });
 
-  test('decodes large payloads through the worker path', () async {
+  test('decodes large payloads', () async {
     final raw = jsonEncode({
       'data': [
         for (var index = 0; index < 600; index++)
@@ -81,7 +105,11 @@ void main() {
 
   test('LRU cache enforces episode and item budgets', () {
     const item = DanmakuItem('x');
-    for (var index = 0; index < DanmakuController.maxCachedEpisodes + 1; index++) {
+    for (
+      var index = 0;
+      index < DanmakuController.maxCachedEpisodes + 1;
+      index++
+    ) {
       DanmakuController.cacheItems('episode-$index', const [item]);
     }
     expect(

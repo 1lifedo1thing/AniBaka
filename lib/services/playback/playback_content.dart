@@ -132,8 +132,8 @@ class PlaybackContent {
 
   PlaybackEpisode? get currentVideoItem =>
       currPlayIndex >= 0 && currPlayIndex < videoList.length
-          ? videoList[currPlayIndex]
-          : null;
+      ? videoList[currPlayIndex]
+      : null;
 
   String get currentEpisodeTitle {
     if (isLocalSource) {
@@ -258,10 +258,7 @@ class PlaybackContent {
 
   Future<void> loadDetail() async {
     if (isLocalSource) {
-      final existingVideos = data['videoList'];
-      if (existingVideos is List<PlaybackEpisode> && existingVideos.isNotEmpty) {
-        videoList = existingVideos;
-      } else if (localFilePath != null) {
+      if (videoList.isEmpty && localFilePath != null) {
         videoList = [
           PlaybackEpisode(title: currentEpisodeTitle, lines: [localFilePath!]),
         ];
@@ -293,23 +290,19 @@ class PlaybackContent {
     }
 
     final remembered = history.getResumeSelection(data);
-    final initialEpisodeIndex =
-        int.tryParse(
-          (explicitEpisodeIndex ?? remembered?.episodeIndex ?? currPlayIndex)
-              .toString(),
-        ) ??
-        0;
-    final initialLineIndex =
-        int.tryParse(
-          (explicitLineIndex ?? remembered?.lineIndex ?? currUrl).toString(),
-        ) ??
-        1;
-
     syncVideoData(
       videoList,
       sourceNames: (data['sourceNames'] as List?)?.cast<String>(),
-      preferredEpisodeIndex: initialEpisodeIndex,
-      preferredLineIndex: initialLineIndex,
+      preferredEpisodeIndex:
+          BgmUtils.toInt(
+            explicitEpisodeIndex ?? remembered?.episodeIndex ?? currPlayIndex,
+          ) ??
+          0,
+      preferredLineIndex:
+          BgmUtils.toInt(
+            explicitLineIndex ?? remembered?.lineIndex ?? currUrl,
+          ) ??
+          1,
     );
   }
 
@@ -333,7 +326,8 @@ class PlaybackContent {
 
   String get currentEpisodeId => currentVideoItem?.lineAt(currUrl) ?? '';
 
-  Future<({String url, Map<String, String> httpHeaders})> resolveAdapterPlaybackMedia(
+  Future<({String url, Map<String, String> httpHeaders})>
+  resolveAdapterPlaybackMedia(
     AdapterBase adapter,
     String episodeId, {
     Duration torrentBufferTimeout = TorrentService.defaultBufferTimeout,
@@ -461,7 +455,9 @@ class PlaybackContent {
         return resolvedUrl.isEmpty ? null : resolvedUrl;
       }
 
-      final response = await getPlayUrl(episodeId).timeout(const Duration(seconds: 15));
+      final response = await getPlayUrl(
+        episodeId,
+      ).timeout(const Duration(seconds: 15));
       if (response.isEmpty) return null;
       final jsonData = jsonDecode(response) as Map<String, dynamic>;
       return (jsonData['data'] as Map<String, dynamic>?)?['url'] as String?;
@@ -536,6 +532,23 @@ class PlaybackContent {
   }
 
   Future<List<DanmakuItem>> fetchDanmakuData(int episodeIndex) async {
+    if (isLocalSource) {
+      final path = localFilePath;
+      if (path == null) return const [];
+      final videoFile = File(path);
+      final candidates = [
+        ?danmakuPath,
+        if (!path.startsWith('http://') && !path.startsWith('https://'))
+          '${videoFile.parent.path}${Platform.pathSeparator}${videoFile.uri.pathSegments.last}_danmaku.json',
+      ];
+      for (final path in candidates) {
+        final file = File(path);
+        if (await file.exists()) {
+          return DanmakuController.decode(await file.readAsString());
+        }
+      }
+      return const [];
+    }
     final title = data['title']?.toString() ?? '';
     final info = await ensureBgmInfo();
     final bgmId = info.subjectId;
@@ -570,23 +583,6 @@ class PlaybackContent {
       episodeIndex: currPlayIndex,
       urlIndex: currUrl,
     );
-  }
-
-  Future<String?> readLocalDanmakuFile(String videoPath) async {
-    final explicitPath = danmakuPath;
-    if (explicitPath != null) {
-      final file = File(explicitPath);
-      if (await file.exists()) return file.readAsString();
-    }
-    if (videoPath.startsWith('http://') || videoPath.startsWith('https://')) {
-      return null;
-    }
-    final videoFile = File(videoPath);
-    final danmakuFile = File(
-      '${videoFile.parent.path}${Platform.pathSeparator}${videoFile.uri.pathSegments.last}_danmaku.json',
-    );
-    if (await danmakuFile.exists()) return danmakuFile.readAsString();
-    return null;
   }
 
   Future<void> saveHistory({

@@ -47,7 +47,6 @@ class _DanmakuViewState extends State<DanmakuView>
   double _viewHeight = 0;
   double _lineHeight = 0;
   double _nextExpiryMs = double.infinity;
-  bool? _lastReportedRunning;
   DateTime? _lastDriftLogAt;
   String? _cachedFontFamily;
   TextStyle? _cachedFontStyle;
@@ -69,8 +68,8 @@ class _DanmakuViewState extends State<DanmakuView>
     if (!identical(oldWidget.controller, widget.controller)) {
       _log('Danmaku controller replaced');
       oldWidget.controller.detach(this);
-      widget.controller.attach(this);
       onDanmakuReset();
+      widget.controller.attach(this);
     }
   }
 
@@ -96,7 +95,8 @@ class _DanmakuViewState extends State<DanmakuView>
     _clockMs += delta.inMicroseconds / 1000 * _controller.playbackRate;
     _emitDue();
     _expire();
-    _repaint.value++;
+    // Fixed comments stay visually unchanged until emitted or expired.
+    if (_active.any((entry) => entry.item.type == 1)) _repaint.value++;
 
     if (_active.isEmpty) _scheduleWork();
   }
@@ -117,8 +117,6 @@ class _DanmakuViewState extends State<DanmakuView>
       }
       _clockMs = positionMs;
       _clearActive();
-      _resetTracks();
-      _clearRecentTexts();
       _cursor = _lowerBound(_controller.items, positionMs);
       _repaint.value++;
       _emitDue();
@@ -140,8 +138,6 @@ class _DanmakuViewState extends State<DanmakuView>
   @override
   void onDanmakuItemsChanged() {
     _clearActive();
-    _resetTracks();
-    _clearRecentTexts();
     _cursor = _lowerBound(_controller.items, _clockMs);
     _log(
       'Danmaku items changed: count=${_controller.items.length} '
@@ -154,7 +150,9 @@ class _DanmakuViewState extends State<DanmakuView>
   @override
   void onDanmakuInject(DanmakuItem item) {
     if (!_hasViewport) return;
+    final count = _active.length;
     _tryEmit(item, checkBlock: false);
+    if (_active.length == count) return;
     _repaint.value++;
     _scheduleWork();
   }
@@ -177,15 +175,14 @@ class _DanmakuViewState extends State<DanmakuView>
       if (hidden) entry.layout.dispose();
       return hidden;
     });
-    _recalculateNextExpiry();
 
     final styleChanged =
         next.fontSize != previous.fontSize ||
         next.fontFamily != previous.fontFamily ||
         next.strokeWidth != previous.strokeWidth ||
         next.opacity != previous.opacity;
-    if ((styleChanged || next.area != previous.area) && _hasViewport) {
-      _rebuildTracks(next);
+    if (_hasViewport) {
+      if (styleChanged || next.area != previous.area) _rebuildTracks(next);
       _relayout(next, relayoutText: styleChanged);
     }
     _repaint.value++;
@@ -194,19 +191,13 @@ class _DanmakuViewState extends State<DanmakuView>
 
   @override
   void onDanmakuPause() {
-    if (_lastReportedRunning != false) {
-      _lastReportedRunning = false;
-      _log('Danmaku paused: active=${_active.length} cursor=$_cursor');
-    }
+    _log('Danmaku paused: active=${_active.length} cursor=$_cursor');
     _stopWork();
   }
 
   @override
   void onDanmakuResume() {
-    if (_lastReportedRunning != true) {
-      _lastReportedRunning = true;
-      _log('Danmaku resumed: active=${_active.length} cursor=$_cursor');
-    }
+    _log('Danmaku resumed: active=${_active.length} cursor=$_cursor');
     _scheduleWork();
   }
 
@@ -214,8 +205,6 @@ class _DanmakuViewState extends State<DanmakuView>
   void onDanmakuReset() {
     _stopWork();
     _clearActive();
-    _resetTracks();
-    _clearRecentTexts();
     _cursor = 0;
     _clockMs = 0;
     _repaint.value++;
@@ -229,11 +218,14 @@ class _DanmakuViewState extends State<DanmakuView>
     if (_active.isNotEmpty) {
       _wakeTimer?.cancel();
       _wakeTimer = null;
-      _ensureTicker();
+      if (!_ticker.isActive) {
+        _lastElapsed = Duration.zero;
+        _ticker.start();
+      }
       return;
     }
 
-    _stopTicker();
+    _ticker.stop();
     final items = _controller.items;
     if (_cursor >= items.length) {
       _wakeTimer?.cancel();
@@ -264,11 +256,14 @@ class _DanmakuViewState extends State<DanmakuView>
   }
 
   void _emitDue() {
+    if (!_hasViewport) return;
     final items = _controller.items;
+    final count = _active.length;
     while (_cursor < items.length && items[_cursor].time <= _clockMs) {
       _tryEmit(items[_cursor]);
       _cursor++;
     }
+    if (_active.length != count) _repaint.value++;
   }
 
   void _tryEmit(DanmakuItem item, {bool checkBlock = true}) {
@@ -295,13 +290,16 @@ class _DanmakuViewState extends State<DanmakuView>
   }
 
   void _emitScroll(DanmakuItem item, DanmakuOption option) {
-    if (_scrollTracks.isEmpty) return;
-    final layout = _layoutDanmaku(item.text, item.color, option);
-    if (layout == null) return;
+    _TextLayout? layout;
     final durationMs = option.duration * 1000;
-    final speed = (_viewWidth + layout.size.width) / durationMs;
 
     for (var index = 0; index < _scrollTracks.length; index++) {
+      // Tail clearance does not depend on the new text width. Do not shape
+      // text that cannot enter any lane, especially during dense bursts.
+      if (_clockMs < _scrollTracks[index]._tailFreeMs) continue;
+      layout ??= _layoutDanmaku(item.text, item.color, option);
+      if (layout == null) return;
+      final speed = (_viewWidth + layout.size.width) / durationMs;
       if (!_scrollTracks[index].canAccept(_clockMs, speed, _viewWidth)) {
         continue;
       }
@@ -325,7 +323,7 @@ class _DanmakuViewState extends State<DanmakuView>
       );
       return;
     }
-    layout.dispose();
+    layout?.dispose();
   }
 
   void _emitFixed(DanmakuItem item, DanmakuOption option, {required bool top}) {
@@ -368,6 +366,7 @@ class _DanmakuViewState extends State<DanmakuView>
       entry.layout.dispose();
       return true;
     });
+    _repaint.value++;
   }
 
   void _updateViewport(BoxConstraints constraints) {
@@ -430,11 +429,6 @@ class _DanmakuViewState extends State<DanmakuView>
         entry.layout = layout;
       }
       if (scroll) {
-        final progress = ((_clockMs - entry.startMs) / entry.durationMs).clamp(
-          0.0,
-          1.0,
-        );
-        entry.startMs = _clockMs - entry.durationMs * progress;
         entry.speed = (_viewWidth + entry.layout.size.width) / entry.durationMs;
         entry.y = entry.track * _lineHeight * _trackSpacing;
       } else {
@@ -494,6 +488,8 @@ class _DanmakuViewState extends State<DanmakuView>
   }
 
   void _clearActive() {
+    _resetTracks();
+    _repeatWindow.clear();
     for (final entry in _active) {
       entry.layout.dispose();
     }
@@ -509,26 +505,10 @@ class _DanmakuViewState extends State<DanmakuView>
     _nextExpiryMs = next;
   }
 
-  void _clearRecentTexts() {
-    _repeatWindow.clear();
-  }
-
-  void _ensureTicker() {
-    _wakeTimer?.cancel();
-    _wakeTimer = null;
-    if (!_controller.running || _ticker.isActive || !mounted) return;
-    _lastElapsed = Duration.zero;
-    _ticker.start();
-  }
-
-  void _stopTicker() {
-    if (_ticker.isActive) _ticker.stop();
-  }
-
   void _stopWork() {
     _wakeTimer?.cancel();
     _wakeTimer = null;
-    _stopTicker();
+    _ticker.stop();
   }
 
   void _log(String message) {
@@ -672,8 +652,8 @@ class _Entry {
 
   final DanmakuItem item;
   final int track;
-  double startMs;
-  double durationMs;
+  final double startMs;
+  final double durationMs;
   double speed;
   double x;
   double y;

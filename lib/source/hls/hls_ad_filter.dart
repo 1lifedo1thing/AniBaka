@@ -150,8 +150,8 @@ class HlsPlaylist {
 /// 去掉 HLS 里拼接进来的广告分片。
 ///
 /// 做法：按 `#EXT-X-DISCONTINUITY` 分组，探测每组首片的编码指纹，按组时长加权
-/// 取多数指纹作为正片指纹，丢弃指纹不同的分片。判据与实测见
-/// `docs/research/hls_instream_ads_20260912.md`。
+/// 取多数指纹作为正片指纹，丢弃指纹不同的分片。组首探测失败时补探组内分片，
+/// 但未知指纹的分片始终保留。
 ///
 /// 只识别「与正片不同编码」的广告。为了避免把多段不同编码的正片误删，过滤设有
 /// 两道闸门：单段连续删除不超过 [_maxRunSeconds]，删除总量不超过整条清单的
@@ -188,11 +188,25 @@ abstract final class HlsAdFilter {
       return unchanged('分片或分组过少，跳过去广告');
     }
 
-    final heads = await _mapConcurrent(
-      groups,
-      concurrency,
-      (group) => _safeProbe(probe, segments[group.first].uri),
+    // 缓存只属于本次过滤：复用组首取样，同时允许下次播放重试网络失败。
+    final probes = <Uri, Future<HlsVideoFingerprint?>>{};
+    Future<HlsVideoFingerprint?> fingerprintAt(int index) => probes.putIfAbsent(
+      segments[index].uri,
+      () => _safeProbe(probe, segments[index].uri),
     );
+    final heads = await _mapConcurrent(groups, concurrency, (group) async {
+      final head = await fingerprintAt(group.first);
+      if (head != null) return head;
+      // 不因一次组首超时漏掉整组；最多补探中间和末尾两片。
+      for (final index in {
+        group.indices[group.indices.length ~/ 2],
+        group.indices.last,
+      }) {
+        final fallback = await fingerprintAt(index);
+        if (fallback != null) return fallback;
+      }
+      return null;
+    });
 
     // 按组时长加权投票，取多数指纹作为正片指纹。
     final weights = <HlsVideoFingerprint, double>{};
@@ -207,6 +221,10 @@ abstract final class HlsAdFilter {
         .reduce((a, b) => b.value > a.value ? b : a)
         .key;
     if (weights.length == 1) {
+      final unknownGroups = heads.where((head) => head == null).length;
+      if (unknownGroups > 0) {
+        return unchanged('$unknownGroups 个分组指纹读取失败，已保留未确认分片，请重试');
+      }
       return unchanged('全部 $dominant，未发现异编码片段');
     }
 
@@ -223,7 +241,7 @@ abstract final class HlsAdFilter {
       final fingerprints = await _mapConcurrent(
         indices,
         concurrency,
-        (index) => _safeProbe(probe, segments[index].uri),
+        fingerprintAt,
       );
       for (var k = 0; k < indices.length; k++) {
         final fingerprint = fingerprints[k];

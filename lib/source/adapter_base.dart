@@ -461,6 +461,7 @@ abstract class AdapterBase {
   Future<({String url, Map<String, String> httpHeaders})> preparePlaybackMedia(
     ({String url, Map<String, String> httpHeaders}) media, {
     bool? filterHlsAds,
+    void Function(String message)? onHlsAdFilterStatus,
   }) => SynchronousFuture(media);
 
   /// Stops the active playback authorization refresh, if any.

@@ -21,6 +21,14 @@ if [ ! -f "$entitlements_path" ]; then
   exit 1
 fi
 
+# This distribution flow does not provision Associated Domains. A valid code
+# seal alone does not authorize this restricted entitlement: taskgated can kill
+# the app before main() even when codesign --verify passes. See macos-signing.md.
+if /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.associated-domains' "$entitlements_path" >/dev/null 2>&1; then
+  echo "::error::Associated Domains requires Apple provisioning; this signing flow does not configure it. Use anibaka:// links with the current entitlements."
+  exit 1
+fi
+
 # Signing the bundle's main executable also seals the enclosing app. Leave it
 # for the final bundle signature, after all frameworks have been signed.
 executable_name=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_path/Contents/Info.plist")
