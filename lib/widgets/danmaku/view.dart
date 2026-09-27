@@ -47,6 +47,13 @@ class _DanmakuViewState extends State<DanmakuView>
   double _viewHeight = 0;
   double _lineHeight = 0;
   double _nextExpiryMs = double.infinity;
+  double _nextScrollAdmissionMs = double.negativeInfinity;
+  double _nextTopAdmissionMs = double.negativeInfinity;
+  double _nextBottomAdmissionMs = double.negativeInfinity;
+  int _scrollingCount = 0;
+  final Stopwatch _sleepClock = WidgetsBinding.instance.samplingClock
+      .stopwatch();
+  double _sleepRate = 1;
   DateTime? _lastDriftLogAt;
   String? _cachedFontFamily;
   TextStyle? _cachedFontStyle;
@@ -96,13 +103,14 @@ class _DanmakuViewState extends State<DanmakuView>
     _emitDue();
     _expire();
     // Fixed comments stay visually unchanged until emitted or expired.
-    if (_active.any((entry) => entry.item.type == 1)) _repaint.value++;
+    if (_scrollingCount > 0) _repaint.value++;
 
-    if (_active.isEmpty) _scheduleWork();
+    if (_scrollingCount == 0) _scheduleWork();
   }
 
   @override
   void onDanmakuTimeSync(Duration position) {
+    _advanceSleepingClock();
     final positionMs = position.inMilliseconds.toDouble();
     final drift = positionMs - _clockMs;
     if (drift.abs() > _seekThresholdMs) {
@@ -132,11 +140,14 @@ class _DanmakuViewState extends State<DanmakuView>
   }
 
   @override
-  void onDanmakuPlaybackRateChanged(double rate) =>
-      _scheduleWork(rescheduleWake: true);
+  void onDanmakuPlaybackRateChanged(double rate) {
+    _advanceSleepingClock();
+    _scheduleWork(rescheduleWake: true);
+  }
 
   @override
   void onDanmakuItemsChanged() {
+    _advanceSleepingClock();
     _clearActive();
     _cursor = _lowerBound(_controller.items, _clockMs);
     _log(
@@ -150,6 +161,7 @@ class _DanmakuViewState extends State<DanmakuView>
   @override
   void onDanmakuInject(DanmakuItem item) {
     if (!_hasViewport) return;
+    _advanceSleepingClock();
     final count = _active.length;
     _tryEmit(item, checkBlock: false);
     if (_active.length == count) return;
@@ -159,6 +171,7 @@ class _DanmakuViewState extends State<DanmakuView>
 
   @override
   void onDanmakuOptionChanged(DanmakuOption next, DanmakuOption previous) {
+    _advanceSleepingClock();
     _log(
       'Danmaku option changed: fontSize=${next.fontSize} area=${next.area} '
       'fontFamily=${next.fontFamily} '
@@ -172,7 +185,7 @@ class _DanmakuViewState extends State<DanmakuView>
         3 || 4 => next.hideBottom,
         _ => true,
       };
-      if (hidden) entry.layout.dispose();
+      if (hidden) _disposeEntry(entry);
       return hidden;
     });
 
@@ -211,11 +224,12 @@ class _DanmakuViewState extends State<DanmakuView>
   }
 
   void _scheduleWork({bool rescheduleWake = false}) {
+    _advanceSleepingClock();
     if (!_controller.running || !_hasViewport || !mounted) {
       _stopWork();
       return;
     }
-    if (_active.isNotEmpty) {
+    if (_scrollingCount > 0) {
       _wakeTimer?.cancel();
       _wakeTimer = null;
       if (!_ticker.isActive) {
@@ -227,29 +241,36 @@ class _DanmakuViewState extends State<DanmakuView>
 
     _ticker.stop();
     final items = _controller.items;
-    if (_cursor >= items.length) {
+    final nextItemMs = _cursor < items.length
+        ? items[_cursor].time.toDouble()
+        : double.infinity;
+    final wakeMs = math.min(nextItemMs, _nextExpiryMs);
+    if (!wakeMs.isFinite) {
       _wakeTimer?.cancel();
       _wakeTimer = null;
       return;
     }
-    if (!rescheduleWake && _wakeTimer?.isActive == true) return;
+    // Restart the elapsed-time anchor even when retaining the existing timer.
+    _sleepRate = _controller.playbackRate;
+    _sleepClock.start();
+    if (!rescheduleWake &&
+        _wakeTimer?.isActive == true &&
+        _scheduledWakeMs == wakeMs) {
+      return;
+    }
     _wakeTimer?.cancel();
+    _scheduledWakeMs = wakeMs;
     final rate = _controller.playbackRate;
-    final delayMs = math.max(0.0, (items[_cursor].time - _clockMs) / rate);
+    final delayMs = math.max(0.0, (wakeMs - _clockMs) / rate);
     _wakeTimer = Timer(
       Duration(microseconds: math.max(1, (delayMs * 1000).round())),
       () {
         _wakeTimer = null;
         if (!_controller.running || !mounted) return;
-        if (_cursor < _controller.items.length) {
-          _clockMs = math.max(
-            _clockMs,
-            _controller.items[_cursor].time.toDouble(),
-          );
-        }
+        _advanceSleepingClock();
+        _clockMs = math.max(_clockMs, wakeMs);
         _emitDue();
         _expire();
-        _repaint.value++;
         _scheduleWork();
       },
     );
@@ -290,13 +311,17 @@ class _DanmakuViewState extends State<DanmakuView>
   }
 
   void _emitScroll(DanmakuItem item, DanmakuOption option) {
+    if (_clockMs < _nextScrollAdmissionMs) return;
     _TextLayout? layout;
     final durationMs = option.duration * 1000;
+    var nextAdmission = double.infinity;
 
     for (var index = 0; index < _scrollTracks.length; index++) {
       // Tail clearance does not depend on the new text width. Do not shape
       // text that cannot enter any lane, especially during dense bursts.
-      if (_clockMs < _scrollTracks[index]._tailFreeMs) continue;
+      final tailFree = _scrollTracks[index]._tailFreeMs;
+      nextAdmission = math.min(nextAdmission, tailFree);
+      if (_clockMs < tailFree) continue;
       layout ??= _layoutDanmaku(item.text, item.color, option);
       if (layout == null) return;
       final speed = (_viewWidth + layout.size.width) / durationMs;
@@ -314,6 +339,7 @@ class _DanmakuViewState extends State<DanmakuView>
         layout: layout,
       );
       _active.add(entry);
+      _scrollingCount++;
       _nextExpiryMs = math.min(_nextExpiryMs, entry.endMs);
       _scrollTracks[index].register(
         startMs: entry.startMs,
@@ -323,19 +349,32 @@ class _DanmakuViewState extends State<DanmakuView>
       );
       return;
     }
+    // A saturated burst shares one rejection deadline; don't rescan every
+    // lane for each comment until a tail can possibly clear.
+    _nextScrollAdmissionMs = nextAdmission;
     layout?.dispose();
   }
 
   void _emitFixed(DanmakuItem item, DanmakuOption option, {required bool top}) {
+    if (_clockMs < (top ? _nextTopAdmissionMs : _nextBottomAdmissionMs)) return;
     final busy = top ? _topBusyUntil : _bottomBusyUntil;
     var trackIndex = -1;
+    var nextAdmission = double.infinity;
     for (var index = 0; index < busy.length; index++) {
+      nextAdmission = math.min(nextAdmission, busy[index]);
       if (_clockMs >= busy[index]) {
         trackIndex = index;
         break;
       }
     }
-    if (trackIndex < 0) return;
+    if (trackIndex < 0) {
+      if (top) {
+        _nextTopAdmissionMs = nextAdmission;
+      } else {
+        _nextBottomAdmissionMs = nextAdmission;
+      }
+      return;
+    }
 
     final layout = _layoutDanmaku(item.text, item.color, option);
     if (layout == null) return;
@@ -363,7 +402,7 @@ class _DanmakuViewState extends State<DanmakuView>
         _nextExpiryMs = math.min(_nextExpiryMs, entry.endMs);
         return false;
       }
-      entry.layout.dispose();
+      _disposeEntry(entry);
       return true;
     });
     _repaint.value++;
@@ -412,7 +451,7 @@ class _DanmakuViewState extends State<DanmakuView>
       final scroll = entry.item.type == 1;
       final trackCount = scroll ? _scrollTracks.length : _topBusyUntil.length;
       if (entry.track >= trackCount) {
-        entry.layout.dispose();
+        _disposeEntry(entry);
         return true;
       }
       if (relayoutText) {
@@ -422,7 +461,7 @@ class _DanmakuViewState extends State<DanmakuView>
           option,
         );
         if (layout == null) {
-          entry.layout.dispose();
+          _disposeEntry(entry);
           return true;
         }
         entry.layout.dispose();
@@ -469,6 +508,9 @@ class _DanmakuViewState extends State<DanmakuView>
       : _viewHeight - (index + 1) * _lineHeight * _trackSpacing;
 
   void _resetTracks() {
+    _nextScrollAdmissionMs = double.negativeInfinity;
+    _nextTopAdmissionMs = double.negativeInfinity;
+    _nextBottomAdmissionMs = double.negativeInfinity;
     for (final track in _scrollTracks) {
       track.reset();
     }
@@ -494,6 +536,7 @@ class _DanmakuViewState extends State<DanmakuView>
       entry.layout.dispose();
     }
     _active.clear();
+    _scrollingCount = 0;
     _nextExpiryMs = double.infinity;
   }
 
@@ -506,9 +549,25 @@ class _DanmakuViewState extends State<DanmakuView>
   }
 
   void _stopWork() {
+    _advanceSleepingClock();
     _wakeTimer?.cancel();
     _wakeTimer = null;
     _ticker.stop();
+  }
+
+  double _scheduledWakeMs = double.infinity;
+
+  void _advanceSleepingClock() {
+    if (!_sleepClock.isRunning) return;
+    _clockMs += _sleepClock.elapsedMicroseconds / 1000 * _sleepRate;
+    _sleepClock
+      ..stop()
+      ..reset();
+  }
+
+  void _disposeEntry(_Entry entry) {
+    if (entry.item.type == 1) _scrollingCount--;
+    entry.layout.dispose();
   }
 
   void _log(String message) {

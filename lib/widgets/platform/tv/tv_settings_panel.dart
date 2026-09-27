@@ -9,6 +9,7 @@ import 'package:baka/widgets/baka_player/widgets/player_info_hud.dart';
 import 'package:baka/services/playback/danmaku_controller.dart';
 import 'package:baka/services/playback/playback_settings.dart';
 import 'package:baka/widgets/platform/tv/tv_focusable.dart';
+import 'package:baka/widgets/common/value_selector.dart';
 
 class TvSettingsPanel extends StatefulWidget {
   final PlaybackController controller;
@@ -34,25 +35,42 @@ class _TvSettingsPanelState extends State<TvSettingsPanel> {
   PlaybackController get _ctrl => widget.controller;
   DanmakuController get _danmaku => widget.danmakuController;
 
-  late double _speed;
+  late final _options = ValueNotifier(_danmaku.option);
   bool _optionChanged = false;
 
   @override
-  void initState() {
-    super.initState();
-    _speed = _ctrl.core.value.playbackRate;
+  void didUpdateWidget(covariant TvSettingsPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.danmakuController != _danmaku) {
+      if (_optionChanged) {
+        DanmakuController.saveSettings(oldWidget.danmakuController);
+      }
+      _optionChanged = false;
+      _options.value = _danmaku.option;
+    }
   }
 
   @override
   void dispose() {
     if (_optionChanged) DanmakuController.saveSettings(_danmaku);
+    _options.dispose();
     super.dispose();
   }
 
   void _setDanmakuOption(DanmakuOption option) {
-    setState(() => _danmaku.updateOption(option));
+    _danmaku.updateOption(option);
+    _options.value = option;
     _optionChanged = true;
   }
+
+  Widget _optionItem<S>(
+    S Function(DanmakuOption) select,
+    Widget Function(DanmakuOption) builder,
+  ) => ValueSelector<DanmakuOption, S>(
+    valueListenable: _options,
+    select: select,
+    builder: (_, _) => builder(_danmaku.option),
+  );
 
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
@@ -68,7 +86,6 @@ class _TvSettingsPanelState extends State<TvSettingsPanel> {
 
   @override
   Widget build(BuildContext context) {
-    final option = _danmaku.option;
     return FocusScope(
       autofocus: true,
       child: Focus(
@@ -130,88 +147,120 @@ class _TvSettingsPanelState extends State<TvSettingsPanel> {
                   ),
                   const SizedBox(height: 8),
 
-                  _TvSelectItem(
-                    icon: Icons.font_download_outlined,
-                    title: '弹幕字体',
-                    value: option.fontFamily,
-                    options: _fontOptions,
-                    onChanged: (fontFamily) => _setDanmakuOption(
-                      option.copyWith(fontFamily: fontFamily),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-
-                  _TvSliderItem(
-                    icon: Icons.format_size,
-                    title: '弹幕字号',
-                    value: option.fontSize,
-                    min: 10,
-                    max: 36,
-                    step: 2,
-                    displayValue: '${option.fontSize.toInt()}',
-                    onChanged: (value) =>
-                        _setDanmakuOption(option.copyWith(fontSize: value)),
-                  ),
-                  const SizedBox(height: 8),
-
-                  _TvSliderItem(
-                    icon: Icons.opacity,
-                    title: '弹幕透明度',
-                    value: option.opacity,
-                    min: 0.1,
-                    max: 1.0,
-                    step: 0.1,
-                    displayValue: '${(option.opacity * 100).toInt()}%',
-                    onChanged: (value) => _setDanmakuOption(
-                      option.copyWith(
-                        opacity: double.parse(value.toStringAsFixed(1)),
+                  _optionItem(
+                    (o) => o.fontFamily,
+                    (option) => _TvSelectItem(
+                      icon: Icons.font_download_outlined,
+                      title: '弹幕字体',
+                      value: option.fontFamily,
+                      options: _fontOptions,
+                      onChanged: (fontFamily) => _setDanmakuOption(
+                        _danmaku.option.copyWith(fontFamily: fontFamily),
                       ),
                     ),
                   ),
+
                   const SizedBox(height: 8),
 
-                  _TvSliderItem(
-                    icon: Icons.crop_free,
-                    title: '弹幕区域',
-                    value: option.area,
-                    min: 0.25,
-                    max: 1.0,
-                    step: 0.25,
-                    displayValue: '${(option.area * 100).toInt()}%',
-                    onChanged: (value) => _setDanmakuOption(
-                      option.copyWith(
-                        area: double.parse(value.toStringAsFixed(2)),
+                  _optionItem(
+                    (o) => o.fontSize,
+                    (option) => _TvSliderItem(
+                      icon: Icons.format_size,
+                      title: '弹幕字号',
+                      value: option.fontSize,
+                      min: 10,
+                      max: 36,
+                      step: 2,
+                      displayValue: '${option.fontSize.toInt()}',
+                      onChanged: (value) => _setDanmakuOption(
+                        _danmaku.option.copyWith(fontSize: value),
                       ),
                     ),
                   ),
+
                   const SizedBox(height: 8),
 
-                  _buildToggleItem(
-                    icon: Icons.vertical_align_top,
-                    title: '隐藏顶部弹幕',
-                    value: option.hideTop,
-                    onToggle: () => _setDanmakuOption(
-                      option.copyWith(hideTop: !option.hideTop),
+                  _optionItem(
+                    (o) => o.opacity,
+                    (option) => _TvSliderItem(
+                      icon: Icons.opacity,
+                      title: '弹幕透明度',
+                      value: option.opacity,
+                      min: 0.1,
+                      max: 1.0,
+                      step: 0.1,
+                      displayValue: '${(option.opacity * 100).toInt()}%',
+                      onChanged: (value) => _setDanmakuOption(
+                        _danmaku.option.copyWith(
+                          opacity: (value * 10).round() / 10,
+                        ),
+                      ),
                     ),
                   ),
+
                   const SizedBox(height: 8),
 
-                  _buildToggleItem(
-                    icon: Icons.vertical_align_bottom,
-                    title: '隐藏底部弹幕',
-                    value: option.hideBottom,
-                    onToggle: () => _setDanmakuOption(
-                      option.copyWith(hideBottom: !option.hideBottom),
+                  _optionItem(
+                    (o) => o.area,
+                    (option) => _TvSliderItem(
+                      icon: Icons.crop_free,
+                      title: '弹幕区域',
+                      value: option.area,
+                      min: 0.25,
+                      max: 1.0,
+                      step: 0.25,
+                      displayValue: '${(option.area * 100).toInt()}%',
+                      onChanged: (value) => _setDanmakuOption(
+                        _danmaku.option.copyWith(
+                          area: (value * 100).round() / 100,
+                        ),
+                      ),
                     ),
                   ),
+
                   const SizedBox(height: 8),
 
-                  _buildToggleItem(
-                    icon: Icons.swap_horiz,
-                    title: '隐藏滚动弹幕',
-                    value: option.hideScroll,
-                    onToggle: () => _setDanmakuOption(
-                      option.copyWith(hideScroll: !option.hideScroll),
+                  _optionItem(
+                    (o) => o.hideTop,
+                    (option) => _buildToggleItem(
+                      icon: Icons.vertical_align_top,
+                      title: '隐藏顶部弹幕',
+                      value: option.hideTop,
+                      onToggle: () => _setDanmakuOption(
+                        _danmaku.option.copyWith(hideTop: !option.hideTop),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  _optionItem(
+                    (o) => o.hideBottom,
+                    (option) => _buildToggleItem(
+                      icon: Icons.vertical_align_bottom,
+                      title: '隐藏底部弹幕',
+                      value: option.hideBottom,
+                      onToggle: () => _setDanmakuOption(
+                        _danmaku.option.copyWith(
+                          hideBottom: !option.hideBottom,
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  _optionItem(
+                    (o) => o.hideScroll,
+                    (option) => _buildToggleItem(
+                      icon: Icons.swap_horiz,
+                      title: '隐藏滚动弹幕',
+                      value: option.hideScroll,
+                      onToggle: () => _setDanmakuOption(
+                        _danmaku.option.copyWith(
+                          hideScroll: !option.hideScroll,
+                        ),
+                      ),
                     ),
                   ),
 
@@ -220,19 +269,19 @@ class _TvSettingsPanelState extends State<TvSettingsPanel> {
                   _buildSectionTitle('播放'),
                   const SizedBox(height: 12),
 
-                  _TvSliderItem(
-                    icon: Icons.speed,
-                    title: '播放速度',
-                    value: _speed,
-                    min: 0.5,
-                    max: 3.0,
-                    step: 0.25,
-                    displayValue: '${_speed}x',
-                    onChanged: (v) {
-                      final speed = double.parse(v.toStringAsFixed(2));
-                      setState(() => _speed = speed);
-                      _ctrl.setRate(speed);
-                    },
+                  ValueSelector<PlaybackCoreState, double>(
+                    valueListenable: _ctrl.core,
+                    select: (core) => core.playbackRate,
+                    builder: (_, speed) => _TvSliderItem(
+                      icon: Icons.speed,
+                      title: '播放速度',
+                      value: speed,
+                      min: 0.5,
+                      max: 3.0,
+                      step: 0.25,
+                      displayValue: '${speed}x',
+                      onChanged: _ctrl.setRate,
+                    ),
                   ),
                   const SizedBox(height: 8),
 

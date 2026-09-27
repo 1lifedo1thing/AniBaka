@@ -29,13 +29,26 @@ source file.
 The complete license is included at `assets/eva-icons-LICENSE.txt` and is
 packaged with the application.
 
+## media_kit_video Windows bridge
+
+- Package: `media_kit_video`, resolved through pub Git dependencies
+- Fork: <https://github.com/AniBakaBaka/media-kit>
+- Upstream: <https://github.com/media-kit/media-kit>
+- License: MIT
+
+The fork retains the upstream history and carries AniBaka's Windows renderer
+under `media_kit_video/windows/anibaka/`. AniBaka opts into that renderer and
+provides its native GPU backend. The package's license is also installed in
+the Windows application's `data/licenses/media_kit_video_windows/` directory.
+
 ## screen_brightness compatibility package
 
-- Location: `third_party/screen_brightness_no_windows/`
+- Package: `screen_brightness`, resolved through pub Git dependencies
+- Fork: <https://github.com/AniBakaBaka/screen_brightness>
 - Upstream interface: <https://github.com/aaassseee/screen_brightness>
 - Copyright: Copyright (c) 2021 Jack Liu
 - License: MIT
 
-The local package preserves the public `screen_brightness` interface while
-omitting Windows plugin registration. Its license text is included beside the
-package.
+The fork preserves the upstream Dart API while omitting the Windows dependency
+and plugin registration. Its license text is included in the package. Both
+forks are pinned to commits in `pubspec.yaml` and `pubspec.lock`.

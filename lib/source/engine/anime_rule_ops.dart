@@ -8,6 +8,11 @@ import 'package:baka/source/models/source.dart';
 
 typedef Anime1PageFetcher = Future<String> Function(String url);
 
+final class _TokenNode {
+  final children = <int, _TokenNode>{};
+  String? value;
+}
+
 /// One parsed Anime1 category page.
 class Anime1EpisodePage {
   const Anime1EpisodePage({required this.tokens, this.nextPageUrl});
@@ -254,25 +259,39 @@ class AnimeRuleOps {
       return '';
     }
 
-    final entries =
-        charMap.entries.where((entry) => entry.key.isNotEmpty).toList()
-          ..sort((a, b) => b.key.length.compareTo(a.key.length));
+    final root = _TokenNode();
+    for (final entry in charMap.entries) {
+      if (entry.key.isEmpty) continue;
+      var node = root;
+      for (var i = 0; i < entry.key.length; i++) {
+        node = node.children.putIfAbsent(
+          entry.key.codeUnitAt(i),
+          _TokenNode.new,
+        );
+      }
+      node.value = entry.value;
+    }
     final output = StringBuffer();
     var offset = 0;
     while (offset < decoded.length) {
-      MapEntry<String, String>? matched;
-      for (final entry in entries) {
-        if (decoded.startsWith(entry.key, offset)) {
-          matched = entry;
-          break;
+      var node = root;
+      String? replacement;
+      var end = offset;
+      for (var cursor = offset; cursor < decoded.length; cursor++) {
+        final child = node.children[decoded.codeUnitAt(cursor)];
+        if (child == null) break;
+        node = child;
+        if (node.value != null) {
+          replacement = node.value;
+          end = cursor + 1;
         }
       }
-      if (matched == null) {
-        output.write(decoded[offset]);
+      if (replacement == null) {
+        output.writeCharCode(decoded.codeUnitAt(offset));
         offset++;
       } else {
-        output.write(matched.value);
-        offset += matched.key.length;
+        output.write(replacement);
+        offset = end;
       }
     }
     return output.toString();

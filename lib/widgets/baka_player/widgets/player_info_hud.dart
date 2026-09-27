@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui';
 
 import 'package:baka/models/playback_state.dart';
 import 'package:baka/services/playback/playback_settings.dart';
@@ -22,7 +21,17 @@ class PlayerInfoHud extends StatefulWidget {
 }
 
 class _PlayerInfoHudState extends State<PlayerInfoHud> {
-  PlaybackTechnicalInfo? _info;
+  ({
+    String resolution,
+    String codec,
+    String bitrate,
+    String renderer,
+    String drops,
+    String enhancement,
+    String audio,
+  })?
+  _rows;
+  bool _fetching = false;
   Timer? _refreshTimer;
 
   @override
@@ -41,93 +50,103 @@ class _PlayerInfoHudState extends State<PlayerInfoHud> {
   }
 
   Future<void> _fetchInfo() async {
+    if (_fetching) return;
+    _fetching = true;
+    final controller = widget.controller;
     try {
-      final info = await widget.controller.loadTechnicalInfo();
-      if (mounted) {
-        setState(() => _info = info);
-      }
-    } catch (_) {}
+      final info = await controller.loadTechnicalInfo();
+      if (!mounted || !identical(controller, widget.controller)) return;
+      final rows = (
+        resolution: _formatResolution(info),
+        codec: _formatVideoCodec(info),
+        bitrate: _formatBitrate(info.videoBitrate),
+        renderer: _formatRenderer(info),
+        drops: _formatFrameDrops(info),
+        enhancement: _formatEnhancement(info),
+        audio: _formatAudio(info),
+      );
+      if (_rows != rows) setState(() => _rows = rows);
+    } catch (_) {
+    } finally {
+      _fetching = false;
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final info = _info;
+    final rows = _rows;
 
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () {}, // 阻止手势穿透到底层播放器
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(10),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-          child: Container(
-            width: 230,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.65),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: Colors.white.withValues(alpha: 0.08),
-                width: 0.5,
-              ),
+    return RepaintBoundary(
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () {}, // 阻止手势穿透到底层播放器
+        child: Container(
+          width: 230,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: const Color(0xF0181818),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.08),
+              width: 0.5,
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // 极简顶部标题与关闭按钮
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      '播放数据',
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.8),
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // 极简顶部标题与关闭按钮
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    '播放数据',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.8),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(4),
+                    onTap: widget.onClose,
+                    child: Padding(
+                      padding: const EdgeInsets.all(2),
+                      child: Icon(
+                        Icons.close_rounded,
+                        size: 15,
+                        color: Colors.white.withValues(alpha: 0.5),
                       ),
                     ),
-                    InkWell(
-                      borderRadius: BorderRadius.circular(4),
-                      onTap: widget.onClose,
-                      child: Padding(
-                        padding: const EdgeInsets.all(2),
-                        child: Icon(
-                          Icons.close_rounded,
-                          size: 15,
-                          color: Colors.white.withValues(alpha: 0.5),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-
-                if (info == null)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 16),
-                    child: Center(
-                      child: SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white54,
-                        ),
-                      ),
-                    ),
-                  )
-                else ...[
-                  _buildItem('分辨率', _formatResolution(info)),
-                  _buildItem('视频编码', _formatVideoCodec(info)),
-                  _buildItem('视频码率', _formatBitrate(info.videoBitrate)),
-                  _buildItem('渲染输出', _formatRenderer(info)),
-                  _buildItem('渲染掉帧', _formatFrameDrops(info)),
-                  _buildItem('画质增强', _formatEnhancement(info)),
-                  _buildItem('音频规格', _formatAudio(info)),
+                  ),
                 ],
+              ),
+              const SizedBox(height: 8),
+
+              if (rows == null)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 16),
+                  child: Center(
+                    child: SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white54,
+                      ),
+                    ),
+                  ),
+                )
+              else ...[
+                _buildItem('分辨率', rows.resolution),
+                _buildItem('视频编码', rows.codec),
+                _buildItem('视频码率', rows.bitrate),
+                _buildItem('渲染输出', rows.renderer),
+                _buildItem('渲染掉帧', rows.drops),
+                _buildItem('画质增强', rows.enhancement),
+                _buildItem('音频规格', rows.audio),
               ],
-            ),
+            ],
           ),
         ),
       ),

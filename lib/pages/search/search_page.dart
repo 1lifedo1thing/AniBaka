@@ -54,7 +54,7 @@ class _SearchPageState extends State<SearchPage> {
   void _onSearchChanged(String value) {
     _debounce?.cancel();
     // A response for the previous text must not replace the current query.
-    _searchService.activeSearchId++;
+    _searchService.invalidateSearch();
     _searchService.keywordNotifier.value = value;
 
     if (value.trim().isEmpty) {
@@ -77,6 +77,7 @@ class _SearchPageState extends State<SearchPage> {
     _searchService.keywordNotifier.value = query;
     // Set loading before showing the result area so stale results never flash.
     _searchService.isLoadingNotifier.value = true;
+    _searchService.resultsNotifier.value = const [];
     _searchService.showResultsNotifier.value = true;
 
     try {
@@ -351,7 +352,7 @@ class _SearchPageState extends State<SearchPage> {
 
   Future<void> _openSourceManagement() async {
     _debounce?.cancel();
-    _searchService.activeSearchId++;
+    _searchService.invalidateSearch();
     await Navigator.of(context).push(
       MaterialPageRoute<void>(builder: (_) => const SourceManagementPage()),
     );
@@ -396,6 +397,10 @@ class _SearchPageState extends State<SearchPage> {
                     child: InkWell(
                       borderRadius: BorderRadius.circular(8),
                       onTap: () {
+                        if (_searchService.selectedSourceIndexNotifier.value ==
+                            index) {
+                          return;
+                        }
                         _searchService.selectedSourceIndexNotifier.value =
                             index;
                         if (_searchService.keywordNotifier.value
@@ -482,16 +487,17 @@ class _SearchPageState extends State<SearchPage> {
             return ValueListenableBuilder<int>(
               valueListenable: _searchService.selectedSourceIndexNotifier,
               builder: (context, selectedSource, _) {
-                return SingleChildScrollView(
+                return ListView.builder(
                   scrollDirection: Axis.horizontal,
                   physics: const BouncingScrollPhysics(),
                   padding: EdgeInsets.symmetric(
                     horizontal: _isWindows ? 24 : 16,
                   ),
-                  child: Row(
-                    children: [
-                      for (var index = 0; index < sources.length; index++)
-                        Padding(
+                  itemCount: sources.length + 2,
+                  itemBuilder: (context, index) {
+                    if (index < sources.length) {
+                      return Center(
+                        child: Padding(
                           padding: const EdgeInsets.only(right: 8),
                           child: ChoiceChip(
                             label: Text(sources[index]),
@@ -509,18 +515,21 @@ class _SearchPageState extends State<SearchPage> {
                             },
                           ),
                         ),
-                      IconButton(
+                      );
+                    }
+                    if (index == sources.length) {
+                      return IconButton(
                         tooltip: '管理搜索源',
                         icon: const Icon(Icons.settings_outlined, size: 19),
                         onPressed: _openSourceManagement,
-                      ),
-                      IconButton(
-                        tooltip: '切换为竖向源列表',
-                        icon: const Icon(Icons.view_sidebar_outlined, size: 19),
-                        onPressed: () => _searchService.isVerticalLayout = true,
-                      ),
-                    ],
-                  ),
+                      );
+                    }
+                    return IconButton(
+                      tooltip: '切换为竖向源列表',
+                      icon: const Icon(Icons.view_sidebar_outlined, size: 19),
+                      onPressed: () => _searchService.isVerticalLayout = true,
+                    );
+                  },
                 );
               },
             );
@@ -732,7 +741,7 @@ class _PinnedHeaderDelegate extends SliverPersistentHeaderDelegate {
     bool overlapsContent,
   ) {
     return ColoredBox(
-      color: backgroundColor.withValues(alpha: 0.95),
+      color: backgroundColor,
       child: SizedBox(
         height: height,
         child: Center(child: child),

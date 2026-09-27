@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:baka/widgets/common/platform_tooltip.dart';
 
 /// Bangumi 1–10 分人数分布柱形图（桌面详情页）。
 class ScoreDistributionChart extends StatelessWidget {
@@ -153,7 +154,7 @@ class _Bar extends StatelessWidget {
                 overflow: TextOverflow.clip,
               ),
             ),
-          Tooltip(
+          PlatformTooltip(
             message: '$count 人',
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 280),

@@ -76,6 +76,21 @@ class NavigationService {
         preview: preview,
         reduceMotion: MediaQuery.disableAnimationsOf(context),
       );
+    } else if (Instances.isDesktopPlatform && !autoMatch) {
+      final duration = MediaQuery.disableAnimationsOf(context)
+          ? Duration.zero
+          : const Duration(milliseconds: 300);
+      route = platformPageRoute<void>(
+        builder: (_) => page,
+        transitionDuration: duration,
+        reverseTransitionDuration: duration,
+        // The cover flies in the Hero overlay. Fade the remaining detail
+        // surface with the same route animation so it clears as the card lands.
+        transitionsBuilder: (_, animation, _, child) => FadeTransition(
+          opacity: animation.drive(CurveTween(curve: Curves.easeInOutCubic)),
+          child: child,
+        ),
+      );
     } else {
       route = _pageRoute(page);
     }

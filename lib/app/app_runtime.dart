@@ -22,6 +22,7 @@ import 'package:baka/services/collection/collection_repository.dart';
 import 'package:baka/services/download/download_manager.dart';
 import 'package:baka/services/playback/media_session.dart';
 import 'package:baka/services/playback/playback_settings.dart';
+import 'package:baka/services/playback/dlss_global_playback.dart';
 import 'package:baka/services/playback/watch_party.dart';
 import 'package:baka/services/source/source_repository.dart';
 import 'package:baka/utils/app_logger.dart';
@@ -42,7 +43,8 @@ class AppRuntime {
   bool _ready = false;
   Future<void>? _initializing, _closing;
   Set<PlaybackController>? _playbacks;
-  Set<PlaybackController> get playbacks => _playbacks ??= <PlaybackController>{};
+  Set<PlaybackController> get playbacks =>
+      _playbacks ??= <PlaybackController>{};
   late AccountSession account;
   late WatchPartyService party;
   late WatchPartyLinks links;
@@ -129,6 +131,8 @@ class AppRuntime {
       boxes: AppStorage.startupBoxes,
     );
     await platformSetup();
+    await DlssGlobalPlayback.instance.initialize();
+    _cleanup.add(DlssGlobalPlayback.instance.close);
     Get.put(this, permanent: true);
     Get.put(account, permanent: true);
     Get.put(apiTransport, permanent: true);

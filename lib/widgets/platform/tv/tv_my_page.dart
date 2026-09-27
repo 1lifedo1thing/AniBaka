@@ -34,6 +34,8 @@ class _TvMyPageState extends State<TvMyPage> {
   String? _qrContent;
   String? _qrError;
   Timer? _qrTimeoutTimer;
+  Future<void>? _qrTask;
+  int _userGeneration = -1;
 
   CollectionStats? _stats;
   int _historyCount = 0;
@@ -51,7 +53,12 @@ class _TvMyPageState extends State<TvMyPage> {
   }
 
   void _loadUserData() {
-    if (!Get.find<AccountSession>().isLoggedIn) {
+    final session = Get.find<AccountSession>();
+    if (_userGeneration == session.generation) return;
+    _userGeneration = session.generation;
+    if (!session.isLoggedIn) {
+      _stats = null;
+      _historyCount = 0;
       _startQrServer();
     } else {
       _qrServer.stop();
@@ -61,10 +68,11 @@ class _TvMyPageState extends State<TvMyPage> {
   }
 
   Future<void> _loadStats() async {
+    final generation = Get.find<AccountSession>().generation;
     try {
       final stats = await collections.getStats();
       final history = historyRepository.getHistoryList();
-      if (mounted) {
+      if (mounted && generation == Get.find<AccountSession>().generation) {
         setState(() {
           _stats = stats;
           _historyCount = history.length;
@@ -75,7 +83,17 @@ class _TvMyPageState extends State<TvMyPage> {
     }
   }
 
-  Future<void> _startQrServer() async {
+  Future<void> _startQrServer() {
+    if (_qrTask != null) return _qrTask!;
+    late final Future<void> task;
+    task = _runQrServer().whenComplete(() {
+      if (identical(_qrTask, task)) _qrTask = null;
+    });
+    return _qrTask = task;
+  }
+
+  Future<void> _runQrServer() async {
+    _qrTimeoutTimer?.cancel();
     if (mounted) {
       setState(() {
         _isQrLoading = true;
@@ -84,6 +102,7 @@ class _TvMyPageState extends State<TvMyPage> {
     }
     try {
       await _qrServer.start();
+      if (!mounted || Get.find<AccountSession>().isLoggedIn) return;
       if (_qrServer.localIp == null) {
         if (mounted) {
           setState(() {
@@ -102,6 +121,7 @@ class _TvMyPageState extends State<TvMyPage> {
 
       _qrTimeoutTimer = Timer(const Duration(minutes: 5), () {
         if (mounted && !Get.find<AccountSession>().isLoggedIn) {
+          _qrServer.stop();
           setState(() {
             _qrError = '二维码已过期，请点击刷新';
           });
@@ -111,7 +131,7 @@ class _TvMyPageState extends State<TvMyPage> {
       final result = await _qrServer.loginResult;
       _qrTimeoutTimer?.cancel();
 
-      if (!mounted) return;
+      if (!mounted || result == null) return;
 
       await Get.find<AccountSession>().saveLoginInfo(
         result['token'] as String,
@@ -120,8 +140,7 @@ class _TvMyPageState extends State<TvMyPage> {
         tokenExpiresAt: result['token_expires_at'] as String?,
       );
 
-      showSnackBar('登录成功');
-      Get.find<AccountSession>().refreshView();
+      if (mounted) showSnackBar('登录成功');
     } catch (e) {
       if (mounted) {
         setState(() {

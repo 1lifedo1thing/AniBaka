@@ -779,10 +779,11 @@ packages:
   media_kit_video:
     dependency: "direct main"
     description:
-      name: media_kit_video
-      sha256: afaa509e7b7e0bf247557a3a740cde903a52c34ace9810f94500e127bd7b043d
-      url: "https://pub.dev"
-    source: hosted
+      path: media_kit_video
+      ref: "12e1fdd72ffec6ef08f2f1b78490ca95632be4d5"
+      resolved-ref: "12e1fdd72ffec6ef08f2f1b78490ca95632be4d5"
+      url: "https://github.com/AniBakaBaka/media-kit.git"
+    source: git
     version: "2.0.1"
   meta:
     dependency: transitive
@@ -1075,9 +1076,11 @@ packages:
   screen_brightness:
     dependency: "direct main"
     description:
-      path: "third_party/screen_brightness_no_windows"
-      relative: true
-    source: path
+      path: screen_brightness
+      ref: df73d230307caee2d1910f254eeacdc3d360c204
+      resolved-ref: df73d230307caee2d1910f254eeacdc3d360c204
+      url: "https://github.com/AniBakaBaka/screen_brightness.git"
+    source: git
     version: "2.1.7"
   screen_brightness_android:
     dependency: transitive

@@ -10,9 +10,15 @@ import 'dart:math';
 /// 手机端扫码后，将已登录的 token 和 userinfo 发送到该服务器，
 /// TV 端接收后完成登录。
 class QrLoginServer {
+  QrLoginServer({Future<InternetAddress?> Function()? findAddress})
+    : _findAddress = findAddress ?? LanAddress.findIpv4;
+
+  final Future<InternetAddress?> Function() _findAddress;
   HttpServer? _server;
   String? _sessionId;
-  final _completer = Completer<Map<String, dynamic>>();
+  var _completer = Completer<Map<String, dynamic>?>();
+  Future<void>? _starting;
+  int _generation = 0;
 
   /// 服务器监听的端口
   int _port = 0;
@@ -29,20 +35,39 @@ class QrLoginServer {
   }
 
   /// 登录结果 Future，手机端发送 token 后完成
-  Future<Map<String, dynamic>> get loginResult => _completer.future;
+  Future<Map<String, dynamic>?> get loginResult => _completer.future;
 
   /// 启动服务器
-  Future<void> start() async {
-    _sessionId = _generateSessionId();
-    _localIp = (await LanAddress.findIpv4())?.address;
+  Future<void> start() {
+    if (_server != null) return Future.value();
+    if (_starting != null) return _starting!;
+    if (_completer.isCompleted) _completer = Completer<Map<String, dynamic>?>();
+    final generation = ++_generation;
+    late final Future<void> task;
+    task = _start(generation).whenComplete(() {
+      if (identical(_starting, task)) _starting = null;
+    });
+    return _starting = task;
+  }
 
-    _server = await HttpServer.bind(
+  Future<void> _start(int generation) async {
+    final address = await _findAddress();
+    if (generation != _generation) return;
+    _localIp = address?.address;
+    if (address == null) return;
+    _sessionId = _generateSessionId();
+
+    final server = await HttpServer.bind(
       InternetAddress.anyIPv4,
       0, // 自动分配端口
     );
-    _port = _server!.port;
-
-    _server!.listen(_handleRequest);
+    if (generation != _generation) {
+      await server.close(force: true);
+      return;
+    }
+    _server = server;
+    _port = server.port;
+    server.listen(_handleRequest);
   }
 
   void _handleRequest(HttpRequest request) {
@@ -63,12 +88,13 @@ class QrLoginServer {
   }
 
   Future<void> _handleAuth(HttpRequest request) async {
+    final generation = _generation;
     try {
       final body = await utf8.decoder.bind(request).join();
       final data = jsonDecode(body) as Map<String, dynamic>;
 
       final session = request.uri.queryParameters['session'];
-      if (session != _sessionId) {
+      if (generation != _generation || session != _sessionId) {
         request.response
           ..statusCode = HttpStatus.forbidden
           ..write(jsonEncode({'msg': 'session mismatch'}))
@@ -112,8 +138,21 @@ class QrLoginServer {
 
   /// 停止服务器
   Future<void> stop() async {
-    await _server?.close(force: true);
+    _generation++;
+    final starting = _starting;
+    final server = _server;
+    _starting = null;
     _server = null;
+    _sessionId = null;
+    _localIp = null;
+    _port = 0;
+    if (!_completer.isCompleted) _completer.complete(null);
+    await server?.close(force: true);
+    try {
+      await starting;
+    } catch (_) {
+      // The start caller owns startup errors; cancellation must still finish.
+    }
   }
 
   String _generateSessionId() {

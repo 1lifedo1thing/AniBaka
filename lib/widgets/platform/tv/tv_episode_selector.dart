@@ -7,6 +7,7 @@ import 'package:baka/models/playback_episode.dart';
 import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/widgets/platform/tv/tv_focusable.dart';
 import 'package:baka/widgets/platform/tv/tv_theme_util.dart';
+import 'package:baka/widgets/common/value_selector.dart';
 
 class TvEpisodeSelector extends StatefulWidget {
   final List<PlaybackEpisode> videoList;
@@ -42,7 +43,10 @@ class _TvEpisodeSelectorState extends State<TvEpisodeSelector> {
   static const _stillsCacheLimit = 5;
   static const _cardExtent = 110.0 * 16 / 9 + 14;
   int _tabIndex = 0; // 0: 选集, 1: 线路
-  late int _focusedIndex;
+  final _focusedEpisode = ValueNotifier(0);
+  final _stillsRevision = ValueNotifier(0);
+  int get _focusedIndex => _focusedEpisode.value;
+  set _focusedIndex(int value) => _focusedEpisode.value = value;
   late final ScrollController _horizontalScrollController;
   bool _sortAscending = true;
 
@@ -101,6 +105,9 @@ class _TvEpisodeSelectorState extends State<TvEpisodeSelector> {
   @override
   void dispose() {
     _horizontalScrollController.dispose();
+    _focusedEpisode.dispose();
+    _stillsRevision.dispose();
+    _stillsCache.clear();
     super.dispose();
   }
 
@@ -136,10 +143,16 @@ class _TvEpisodeSelectorState extends State<TvEpisodeSelector> {
     _loadEpisodeDetails(episodeIndex);
     _loadEpisodeDetails(episodeIndex - 1);
     _loadEpisodeDetails(episodeIndex + 1);
+    _stillsRevision.value++;
   }
 
   void _loadEpisodeDetails(int episodeIndex) {
     if (episodeIndex < 0 || episodeIndex >= widget.videoList.length) return;
+    if ((widget.bgmId ?? 0) <= 0 &&
+        (widget.tmdbId ?? 0) <= 0 &&
+        (widget.tvdbId == null || widget.tvdbId!.isEmpty)) {
+      return;
+    }
     final cached = _stillsCache.remove(episodeIndex);
     if (cached != null) {
       _stillsCache[episodeIndex] = cached;
@@ -176,7 +189,8 @@ class _TvEpisodeSelectorState extends State<TvEpisodeSelector> {
           ? fallback
           : CachedNetworkImage(
               imageUrl: url,
-              memCacheWidth: 420,
+              memCacheWidth: (210 * MediaQuery.devicePixelRatioOf(context))
+                  .ceil(),
               fit: BoxFit.cover,
               placeholder: (context, url) => const SizedBox.expand(),
               errorWidget: (context, url, error) => fallback,
@@ -186,10 +200,8 @@ class _TvEpisodeSelectorState extends State<TvEpisodeSelector> {
 
   void _onEpisodeFocused(int episodeIndex) {
     if (_focusedIndex != episodeIndex) {
-      setState(() {
-        _focusedIndex = episodeIndex;
-      });
       _fetchEpisodeDetails(episodeIndex);
+      _focusedIndex = episodeIndex;
     }
   }
 
@@ -233,13 +245,16 @@ class _TvEpisodeSelectorState extends State<TvEpisodeSelector> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              FutureBuilder<Map<String, dynamic>?>(
-                key: ValueKey(_stillsCache[_focusedIndex]),
-                future: _stillsCache[_focusedIndex],
-                builder: (context, snapshot) => _buildFocusedDetailsHeader(
-                  primaryColor,
-                  showLineTab,
-                  snapshot.data,
+              ValueListenableBuilder<int>(
+                valueListenable: _focusedEpisode,
+                builder: (_, index, _) => FutureBuilder<Map<String, dynamic>?>(
+                  key: ValueKey(_stillsCache[index]),
+                  future: _stillsCache[index],
+                  builder: (context, snapshot) => _buildFocusedDetailsHeader(
+                    primaryColor,
+                    showLineTab,
+                    snapshot.data,
+                  ),
                 ),
               ),
 
@@ -507,134 +522,139 @@ class _TvEpisodeSelectorState extends State<TvEpisodeSelector> {
             : widget.videoList.length - index - 1;
         final item = widget.videoList[episodeIndex];
         final isPlaying = episodeIndex == widget.currentIndex;
-        return FutureBuilder<Map<String, dynamic>?>(
+        return ValueSelector<int, Future<Map<String, dynamic>?>?>(
           key: ValueKey(episodeIndex),
-          future: _stillsCache[episodeIndex],
-          builder: (context, snapshot) {
-            final stillUrl = _stillUrl(snapshot.data);
-            final epName =
-                BgmUtils.trimmed(snapshot.data?['name']) ?? item.title;
-            return Padding(
-              padding: const EdgeInsets.only(right: 14),
-              child: Center(
-                child: TvFocusable(
-                  autofocus: isPlaying,
-                  onFocusChange: (focused) {
-                    if (focused) _onEpisodeFocused(episodeIndex);
-                  },
-                  onPressed: () => widget.onEpisodeSelected(episodeIndex),
-                  borderRadius: BorderRadius.circular(12),
-                  focusScale: 1.06,
-                  enableGlow: true,
-                  focusBorderWidth: 2.5,
-                  child: SizedBox(
-                    height: 110,
-                    child: AspectRatio(
-                      aspectRatio: 16 / 9,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: context.tvHighlightColor(0.06),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: isPlaying
-                                ? primaryColor
-                                : context.tvHighlightColor(0.12),
-                            width: isPlaying ? 1.5 : 0.8,
+          valueListenable: _stillsRevision,
+          select: (_) => _stillsCache[episodeIndex],
+          builder: (_, future) => FutureBuilder<Map<String, dynamic>?>(
+            future: future,
+            builder: (context, snapshot) {
+              final stillUrl = _stillUrl(snapshot.data);
+              final epName =
+                  BgmUtils.trimmed(snapshot.data?['name']) ?? item.title;
+              return Padding(
+                padding: const EdgeInsets.only(right: 14),
+                child: Center(
+                  child: TvFocusable(
+                    autofocus: isPlaying,
+                    onFocusChange: (focused) {
+                      if (focused) _onEpisodeFocused(episodeIndex);
+                    },
+                    onPressed: () => widget.onEpisodeSelected(episodeIndex),
+                    borderRadius: BorderRadius.circular(12),
+                    focusScale: 1.06,
+                    enableGlow: true,
+                    focusBorderWidth: 2.5,
+                    child: SizedBox(
+                      height: 110,
+                      child: AspectRatio(
+                        aspectRatio: 16 / 9,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: context.tvHighlightColor(0.06),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: isPlaying
+                                  ? primaryColor
+                                  : context.tvHighlightColor(0.12),
+                              width: isPlaying ? 1.5 : 0.8,
+                            ),
                           ),
-                        ),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(11),
-                          child: Stack(
-                            children: [
-                              Positioned.fill(
-                                child: _buildStill(
-                                  stillUrl,
-                                  Icons.play_circle_outline,
-                                  32,
-                                ),
-                              ),
-
-                              Positioned.fill(
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    gradient: LinearGradient(
-                                      begin: Alignment.topCenter,
-                                      end: Alignment.bottomCenter,
-                                      colors: [
-                                        Colors.transparent,
-                                        Colors.black.withValues(alpha: 0.85),
-                                      ],
-                                      stops: const [0.4, 1.0],
-                                    ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(11),
+                            child: Stack(
+                              children: [
+                                Positioned.fill(
+                                  child: _buildStill(
+                                    stillUrl,
+                                    Icons.play_circle_outline,
+                                    32,
                                   ),
                                 ),
-                              ),
 
-                              if (isPlaying)
-                                Positioned(
-                                  top: 8,
-                                  left: 8,
+                                Positioned.fill(
                                   child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 6,
-                                      vertical: 3,
-                                    ),
                                     decoration: BoxDecoration(
-                                      color: primaryColor,
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                    child: const Icon(
-                                      Icons.play_arrow_rounded,
-                                      color: Colors.black,
-                                      size: 14,
+                                      gradient: LinearGradient(
+                                        begin: Alignment.topCenter,
+                                        end: Alignment.bottomCenter,
+                                        colors: [
+                                          Colors.transparent,
+                                          Colors.black.withValues(alpha: 0.85),
+                                        ],
+                                        stops: const [0.4, 1.0],
+                                      ),
                                     ),
                                   ),
                                 ),
 
-                              Positioned(
-                                left: 10,
-                                right: 10,
-                                bottom: 8,
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text(
-                                      'EP ${episodeIndex + 1}',
-                                      style: TextStyle(
-                                        color: isPlaying
-                                            ? primaryColor
-                                            : Colors.white.withValues(
-                                                alpha: 0.7,
-                                              ),
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w700,
+                                if (isPlaying)
+                                  Positioned(
+                                    top: 8,
+                                    left: 8,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                        vertical: 3,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: primaryColor,
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: const Icon(
+                                        Icons.play_arrow_rounded,
+                                        color: Colors.black,
+                                        size: 14,
                                       ),
                                     ),
-                                    const SizedBox(height: 1),
-                                    Text(
-                                      epName,
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w600,
+                                  ),
+
+                                Positioned(
+                                  left: 10,
+                                  right: 10,
+                                  bottom: 8,
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        'EP ${episodeIndex + 1}',
+                                        style: TextStyle(
+                                          color: isPlaying
+                                              ? primaryColor
+                                              : Colors.white.withValues(
+                                                  alpha: 0.7,
+                                                ),
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w700,
+                                        ),
                                       ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ],
+                                      const SizedBox(height: 1),
+                                      Text(
+                                        epName,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
                       ),
                     ),
                   ),
                 ),
-              ),
-            );
-          },
+              );
+            },
+          ),
         );
       },
     );

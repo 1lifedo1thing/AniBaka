@@ -93,17 +93,18 @@ class BakaApp extends StatelessWidget {
           home: const MyHomePage(),
           title: 'Baka',
           onGenerateRoute: _onGenerateRoute,
-          builder: (context, child) {
+          builder: (context, child) => Obx(() {
             final mediaQuery = MediaQuery.of(context);
             return MediaQuery(
               data: mediaQuery.copyWith(
                 textScaler: TextScaler.linear(appState.fontScale),
                 disableAnimations:
-                    mediaQuery.disableAnimations || appState.reduceVisualEffects,
+                    mediaQuery.disableAnimations ||
+                    appState.reduceVisualEffects,
               ),
               child: child ?? const SizedBox.shrink(),
             );
-          },
+          }),
         );
       }),
     );

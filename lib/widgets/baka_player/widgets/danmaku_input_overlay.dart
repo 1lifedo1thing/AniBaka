@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:baka/widgets/common/platform_tooltip.dart';
 import '../controller.dart';
 
 class DanmakuInputOverlay extends StatefulWidget {
@@ -225,7 +226,7 @@ class _DanmakuInputOverlayState extends State<DanmakuInputOverlay>
         final isSelected = _selectedType == t.type;
         return GestureDetector(
           onTap: () => setState(() => _selectedType = t.type),
-          child: Tooltip(
+          child: PlatformTooltip(
             message: t.tooltip,
             child: Container(
               margin: const EdgeInsets.only(right: 4),

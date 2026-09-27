@@ -13,7 +13,7 @@ class Anime4K {
 
   static const _assetRoot = 'assets/anime4k';
   static Directory? _cachedDirectory;
-  static final Set<String> _stagedFiles = <String>{};
+  static final Map<String, Future<File>> _stagedFiles = {};
 
   static bool get isMobilePlatform =>
       Platform.isAndroid || Platform.isIOS || Instances.isTV;
@@ -118,21 +118,32 @@ class Anime4K {
 
     for (final name in files) {
       final filePath = '${dir.path}$sep$name';
-      if (!_stagedFiles.contains(name)) {
-        final target = File(filePath);
-        if (!await target.exists() || (await target.length()) == 0) {
-          final data = await rootBundle.load('$_assetRoot/$name');
-          final bytes = data.buffer.asUint8List(
-            data.offsetInBytes,
-            data.lengthInBytes,
-          );
-          await target.writeAsBytes(bytes, flush: true);
+      // Check bundled bytes once per process, including after app upgrades.
+      // Share pending writes so simultaneous players cannot read a partial file.
+      final pending = _stagedFiles.putIfAbsent(
+        filePath,
+        () => _stageAsset(dir, name),
+      );
+      try {
+        await pending;
+      } catch (_) {
+        if (identical(_stagedFiles[filePath], pending)) {
+          _stagedFiles.remove(filePath);
         }
-        _stagedFiles.add(name);
+        rethrow;
       }
       staged.add(filePath);
     }
     return staged.join(Platform.isWindows ? ';' : ':');
+  }
+
+  static Future<File> _stageAsset(Directory directory, String name) async {
+    final data = await rootBundle.load('$_assetRoot/$name');
+    return _stageBytes(
+      directory,
+      name,
+      data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+    );
   }
 
   static Future<Directory> _shaderDirectory() async {
@@ -157,12 +168,20 @@ class Anime4K {
     Directory directory,
     String name,
     List<int> bytes,
+  ) => _stageBytes(directory, name, bytes);
+
+  static Future<File> _stageBytes(
+    Directory directory,
+    String name,
+    List<int> bytes,
   ) async {
     if (!await directory.exists()) {
       await directory.create(recursive: true);
     }
     final file = File('${directory.path}${Platform.pathSeparator}$name');
-    await file.writeAsBytes(bytes, flush: true);
+    if (!await file.exists() || !listEquals(await file.readAsBytes(), bytes)) {
+      await file.writeAsBytes(bytes, flush: true);
+    }
     return file;
   }
 }

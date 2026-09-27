@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:baka/widgets/common/platform_tooltip.dart';
 
 import 'package:baka/instance.dart';
 import 'package:baka/models/playback_episode.dart';
@@ -294,7 +295,7 @@ class _WindowsPlayerLayoutState extends State<WindowsPlayerLayout>
     required VoidCallback onTap,
     bool isActive = false,
   }) {
-    return Tooltip(
+    return PlatformTooltip(
       message: tooltip,
       child: InkResponse(
         onTap: onTap,

@@ -1,0 +1,122 @@
+import 'dart:convert';
+import 'dart:math';
+import 'package:baka/services/source/source_codec.dart';
+import 'package:baka/source/engine/anime_rule_ops.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+void main() {
+  test('JSON paths select the first existing candidate', () {
+    for (final (input, path, expected) in <(Object, String, Object?)>[
+      (
+        {
+          'data': {'url': 'video.m3u8'},
+        },
+        'data.url',
+        'video.m3u8',
+      ),
+      (
+        {
+          'data': {'url': 'video.m3u8'},
+        },
+        'data.url|data',
+        'video.m3u8',
+      ),
+      ({'data': 'direct.mp4'}, 'data.url|data', 'direct.mp4'),
+      ({'data': {}}, 'data.url|data.missing', null),
+    ]) {
+      expect(
+        AnimeRuleOps.jsonPath(input, path),
+        expected,
+        reason: '$input / $path',
+      );
+    }
+  });
+
+  group('mapped base64', () {
+    String decode(String text, Map<String, String> map) =>
+        AnimeRuleOps.decodeMappedBase64(base64.encode(utf8.encode(text)), map);
+    test(
+      'longest token wins; unmatched Unicode and empty replacements survive',
+      () {
+        expect(
+          decode('ababa😀!?', {
+            'a': '1',
+            'ab': '2',
+            'aba': '3',
+            '😀': '',
+            '': 'ignored',
+          }),
+          '3b1!?',
+        );
+        expect(decode('未命中😀', {'abc': 'x'}), '未命中😀');
+      },
+    );
+    test('random inputs agree with the previous longest-first scan', () {
+      final random = Random(7);
+      String word(int length) => String.fromCharCodes(
+        List.generate(length, (_) => 97 + random.nextInt(4)),
+      );
+      for (var run = 0; run < 100; run++) {
+        final map = {
+          for (var i = 0; i < 20; i++) word(1 + random.nextInt(5)): '$i',
+        };
+        final entries = map.entries.toList()
+          ..sort((a, b) => b.key.length.compareTo(a.key.length));
+        final text = word(200);
+        final expected = StringBuffer();
+        for (var offset = 0; offset < text.length;) {
+          var found = false;
+          for (final entry in entries) {
+            if (!text.startsWith(entry.key, offset)) continue;
+            expected.write(entry.value);
+            offset += entry.key.length;
+            found = true;
+            break;
+          }
+          if (!found) expected.write(text[offset++]);
+        }
+        expect(decode(text, map), expected.toString());
+      }
+    });
+  });
+
+  group('source codec', () {
+    const config = <String, dynamic>{
+      'id': 'example',
+      'name': 'Example',
+      'pipeline': <String, dynamic>{
+        'search': <Object>[],
+        'detail': <Object>[],
+        'play': <Object>[],
+      },
+    };
+
+    test('baka format round-trips compressed JSON', () {
+      final encoded = SourceCodec.encode(config);
+
+      expect(encoded, startsWith(SourceCodec.scheme));
+      expect(SourceCodec.decode(encoded), config);
+    });
+
+    test('bakax format round-trips encrypted JSON', () {
+      final encrypted = SourceCodec.encrypt(config);
+
+      expect(encrypted, startsWith(SourceCodec.encryptedScheme));
+      expect(SourceCodec.decode(encrypted), config);
+    });
+
+    test('decoder accepts naked JSON collections', () {
+      expect(SourceCodec.decode(jsonEncode([config])), [config]);
+    });
+
+    test('decoder rejects empty and malformed input', () {
+      expect(() => SourceCodec.decode(''), throwsFormatException);
+      expect(() => SourceCodec.decode('not-a-rule'), throwsFormatException);
+      final legacy = base64.encode(utf8.encode(jsonEncode(config)));
+      expect(
+        () => SourceCodec.decode('${SourceCodec.scheme}$legacy'),
+        throwsA(anything),
+      );
+    });
+  });
+}

@@ -22,6 +22,7 @@ class _TvSearchPageState extends State<TvSearchPage> {
   final _searchController = TextEditingController();
   final _searchBoxFocusNode = FocusNode();
   final _textFieldFocusNode = FocusNode();
+  (String, int, int)? _pendingQuery;
 
   @override
   void initState() {
@@ -32,6 +33,7 @@ class _TvSearchPageState extends State<TvSearchPage> {
 
   Future<void> _initSearch() async {
     await _svc.init(initialKeyword: widget.initialKeyword);
+    if (!mounted) return;
     if (widget.initialKeyword != null) {
       _searchController.text = _svc.keywordNotifier.value;
       await _search(_svc.keywordNotifier.value);
@@ -53,10 +55,15 @@ class _TvSearchPageState extends State<TvSearchPage> {
       _svc.resetSearch();
       return;
     }
+    final source = _svc.selectedSourceIndexNotifier.value;
+    if (_pendingQuery == (query, source, _svc.activeSearchId)) return;
     final searchId = ++_svc.activeSearchId;
+    final pending = (query, source, searchId);
+    _pendingQuery = pending;
     _svc.keywordNotifier.value = query;
-    _svc.showResultsNotifier.value = true;
     _svc.isLoadingNotifier.value = true;
+    _svc.resultsNotifier.value = const [];
+    _svc.showResultsNotifier.value = true;
     try {
       final results = await _svc.executeSearch(query);
       if (!mounted || !_svc.isActiveSearch(searchId)) return;
@@ -67,6 +74,8 @@ class _TvSearchPageState extends State<TvSearchPage> {
       if (!mounted || !_svc.isActiveSearch(searchId)) return;
       _svc.resultsNotifier.value = const [];
       _svc.isLoadingNotifier.value = false;
+    } finally {
+      if (_pendingQuery == pending) _pendingQuery = null;
     }
   }
 

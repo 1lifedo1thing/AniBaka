@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:baka/widgets/common/platform_tooltip.dart';
 
 import 'package:baka/pages/player/bgm_detail_page.dart';
 import 'package:baka/utils/bgm_utils.dart';
@@ -37,7 +38,7 @@ class BgmFollowPill extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (score != null) ...[
-            Tooltip(
+            PlatformTooltip(
               message: bgmInfo.subjectId == null
                   ? 'Bangumi 评分'
                   : '查看 Bangumi 详情',
@@ -86,7 +87,7 @@ class BgmFollowPill extends StatelessWidget {
               color: theme.dividerColor.withValues(alpha: 0.32),
             ),
           ],
-          Tooltip(
+          PlatformTooltip(
             message: isFollowed ? '已追番，点击更新状态' : '追番',
             child: InkWell(
               onTap: onFollowPressed,

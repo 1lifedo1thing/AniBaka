@@ -18,33 +18,41 @@ class TagPage extends StatefulWidget {
 
 class _TagPageState extends State<TagPage> {
   List<Map> _items = [];
+  final _itemsRevision = ValueNotifier<int>(0);
   int _page = 0;
+  bool _hasMore = true;
 
   Future<bool> _loadPage(int page) async {
     try {
+      const pageSize = 15;
       List<Map> posts = const [];
+      var received = 0;
       if (widget.tag.isNotEmpty) {
-        const pageSize = 15;
         final subjects = await searchBgmByTag(
           [widget.tag],
           limit: pageSize,
           offset: (page - 1) * pageSize,
         );
-        posts = convertBgmSubjectsToAppFormat(subjects);
+        if (!mounted) return false;
+        received = subjects.length;
+        posts = convertBgmSubjectsToAppFormat(subjects, compact: true);
       } else if (widget.uid != 0) {
-        posts = await getPost('', '', page, 15, uid: widget.uid);
+        posts = await getPost('', '', page, pageSize, uid: widget.uid);
+        received = posts.length;
       }
 
       if (!mounted) return posts.isNotEmpty;
-      setState(() {
-        _page = page;
-        if (page == 1) {
-          _items = posts;
-        } else {
-          _items.addAll(posts);
-        }
-      });
-      return posts.isNotEmpty;
+      _page = page;
+      // Use the raw page size: conversion can filter malformed subjects.
+      _hasMore = received == pageSize;
+      if (page == 1) {
+        _items = posts;
+        _itemsRevision.value++;
+      } else if (posts.isNotEmpty) {
+        _items.addAll(posts);
+        _itemsRevision.value++;
+      }
+      return _hasMore;
     } catch (e) {
       debugPrint('Error getting tag list: $e');
       return false;
@@ -55,7 +63,15 @@ class _TagPageState extends State<TagPage> {
     await _loadPage(1);
   }
 
-  Future<bool> _loadMore() => _loadPage(_page + 1);
+  Future<bool> _loadMore() =>
+      _hasMore ? _loadPage(_page + 1) : Future<bool>.value(false);
+
+  @override
+  void dispose() {
+    _items = const [];
+    _itemsRevision.dispose();
+    super.dispose();
+  }
 
   void _openBgmSubject(Map data) {
     Navigator.of(context).push(
@@ -84,23 +100,26 @@ class _TagPageState extends State<TagPage> {
       body: RefreshWrapper(
         onRefresh: _refresh,
         onLoadMore: _loadMore,
-        child: GridView.builder(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.all(10),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 3,
-            mainAxisSpacing: 10,
-            crossAxisSpacing: 10,
-            childAspectRatio: 0.58,
+        child: ValueListenableBuilder<int>(
+          valueListenable: _itemsRevision,
+          builder: (context, _, _) => GridView.builder(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.all(10),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              mainAxisSpacing: 10,
+              crossAxisSpacing: 10,
+              childAspectRatio: 0.58,
+            ),
+            itemCount: _items.length,
+            itemBuilder: (_, index) {
+              final data = _items[index];
+              return PostCard(
+                data,
+                onTap: widget.tag.isEmpty ? null : () => _openBgmSubject(data),
+              );
+            },
           ),
-          itemCount: _items.length,
-          itemBuilder: (_, index) {
-            final data = _items[index];
-            return PostCard(
-              data,
-              onTap: widget.tag.isEmpty ? null : () => _openBgmSubject(data),
-            );
-          },
         ),
       ),
     );

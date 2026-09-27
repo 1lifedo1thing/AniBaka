@@ -30,7 +30,11 @@ class _ValueSelectorState<T, S> extends State<ValueSelector<T, S>> {
 
   void _update() {
     final next = widget.select(widget.valueListenable.value);
-    if (next != _value) setState(() => _value = next);
+    if (next != _value) {
+      setState(() {
+        _value = next;
+      });
+    }
   }
 
   @override

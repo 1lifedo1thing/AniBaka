@@ -12,6 +12,7 @@ import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/widgets/platform/tv/tv_focusable.dart';
 import 'package:baka/widgets/platform/tv/tv_episode_selector.dart';
 import 'package:baka/widgets/platform/tv/tv_settings_panel.dart';
+import 'package:baka/widgets/common/value_selector.dart';
 
 enum _Panel { none, episodes, settings }
 
@@ -66,7 +67,6 @@ class _TvPlayerLayoutState extends State<TvPlayerLayout> {
   void initState() {
     super.initState();
     _log('TV player layout created');
-    _scheduleClockTick();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _playerFocusNode.requestFocus();
     });
@@ -106,6 +106,8 @@ class _TvPlayerLayoutState extends State<TvPlayerLayout> {
     if (!_showOverlay) {
       _log('Control overlay shown');
       setState(() => _showOverlay = true);
+      _clock.value = _fmtClock(DateTime.now());
+      _scheduleClockTick();
     }
     _resetOverlayTimer();
   }
@@ -114,6 +116,7 @@ class _TvPlayerLayoutState extends State<TvPlayerLayout> {
     if (!_showOverlay && _panel == _Panel.none) return;
     _log('Control overlay hidden: previousPanel=${_panel.name}');
     _overlayTimer?.cancel();
+    _clockTimer?.cancel();
     setState(() {
       _showOverlay = false;
       _panel = _Panel.none;
@@ -124,6 +127,7 @@ class _TvPlayerLayoutState extends State<TvPlayerLayout> {
     _overlayTimer?.cancel();
     _overlayTimer = Timer(const Duration(seconds: 5), () {
       if (mounted && _panel == _Panel.none) {
+        _clockTimer?.cancel();
         setState(() => _showOverlay = false);
       }
     });
@@ -139,7 +143,7 @@ class _TvPlayerLayoutState extends State<TvPlayerLayout> {
         microseconds: -now.microsecond,
       ),
       () {
-        if (!mounted) return;
+        if (!mounted || !_showOverlay) return;
         _clock.value = _fmtClock(DateTime.now());
         _scheduleClockTick();
       },
@@ -178,6 +182,8 @@ class _TvPlayerLayoutState extends State<TvPlayerLayout> {
       _panel = p;
     });
     _overlayTimer?.cancel();
+    _clock.value = _fmtClock(DateTime.now());
+    _scheduleClockTick();
   }
 
   void _closePanel() {
@@ -278,8 +284,9 @@ class _TvPlayerLayoutState extends State<TvPlayerLayout> {
               fit: StackFit.expand,
               children: [
                 _buildPlayer(),
-                if (_showOverlay) _buildControlOverlay(),
-                _buildPanel(),
+                if (_showOverlay)
+                  RepaintBoundary(child: _buildControlOverlay()),
+                RepaintBoundary(child: _buildPanel()),
               ],
             ),
           ),
@@ -340,10 +347,11 @@ class _TvPlayerLayoutState extends State<TvPlayerLayout> {
   }
 
   Widget _buildPlayer() {
-    return ValueListenableBuilder<PlaybackCoreState>(
+    return ValueSelector<PlaybackCoreState, bool>(
       valueListenable: ctr.core,
-      builder: (context, core, _) {
-        if (core.failed) {
+      select: (core) => core.failed,
+      builder: (context, failed) {
+        if (failed) {
           return _buildErrorState();
         }
         if (!widget.inited) return _buildLoadingState();

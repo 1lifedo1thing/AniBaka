@@ -5,6 +5,7 @@ import 'package:baka/pages/home/miniapp_page.dart';
 import 'package:baka/pages/mine/mine_profile.dart';
 import 'package:baka/app/navigation.dart';
 import 'package:flutter/material.dart';
+import 'package:baka/widgets/common/platform_tooltip.dart';
 import 'package:get/get.dart' hide ContextExtensionss;
 
 class WindowsSidebar extends StatefulWidget {
@@ -112,7 +113,7 @@ class _WindowsSidebarState extends State<WindowsSidebar> {
   Widget _buildUserInfo(ThemeData theme) {
     if (_isSidebarCollapsed) {
       return Center(
-        child: Tooltip(
+        child: PlatformTooltip(
           message: Get.find<AccountSession>().isLoggedIn ? '账号与 Bangumi' : '登录',
           child: InkResponse(
             onTap: _openLoginPage,

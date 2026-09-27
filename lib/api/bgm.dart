@@ -359,6 +359,8 @@ String? _scoreCacheKey(String bgmId, String title) {
 List<Map<String, dynamic>> convertBgmSubjectsToAppFormat(
   List<Map<String, dynamic>> items, {
   bool trending = false,
+  // Card lists that open by bgmId do not need to retain full subject metadata.
+  bool compact = false,
 }) {
   final result = <Map<String, dynamic>>[];
   for (final item in items) {
@@ -374,20 +376,21 @@ List<Map<String, dynamic>> convertBgmSubjectsToAppFormat(
     final imageUrl = BgmUtils.pickImageUrl(subject['images']) ?? '';
     final rating = subject['rating'];
     final converted = <String, dynamic>{
-      'id': id,
+      if (!compact) 'id': id,
       'title': title,
       'subtitle': nameCn != null && name != null && name != nameCn ? name : '',
       'content': imageUrl,
       'bgmImageUrl': imageUrl,
-      'tag': '动画',
-      'sort': trending ? '推荐' : '',
-      'status': 'public',
-      'time': BgmUtils.trimmed(subject['date']) ?? '',
+      if (!compact) 'tag': '动画',
+      if (!compact) 'sort': trending ? '推荐' : '',
+      if (!compact) 'status': 'public',
+      if (!compact) 'time': BgmUtils.trimmed(subject['date']) ?? '',
       'bgmId': id,
       'score': BgmUtils.extractScore(rating) ?? 0.0,
-      'rank': BgmUtils.toInt(rating is Map ? rating['rank'] : null) ?? 0,
-      'summary': BgmUtils.trimmed(subject['summary']) ?? '',
-      'eps': subject['eps'] ?? subject['total_episodes'] ?? 0,
+      if (!compact)
+        'rank': BgmUtils.toInt(rating is Map ? rating['rank'] : null) ?? 0,
+      if (!compact) 'summary': BgmUtils.trimmed(subject['summary']) ?? '',
+      if (!compact) 'eps': subject['eps'] ?? subject['total_episodes'] ?? 0,
       'source': 'bgm',
     };
     if (trending) {

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:baka/widgets/common/platform_tooltip.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:baka/models/playback_episode.dart';
 import 'package:baka/widgets/platform/windows/windows_line_selector.dart';
@@ -461,7 +462,7 @@ class _WindowsEpisodeListState extends State<WindowsEpisodeList> {
     required String tooltip,
     VoidCallback? onPressed,
   }) {
-    return Tooltip(
+    return PlatformTooltip(
       message: tooltip,
       child: InkResponse(
         onTap: onPressed,

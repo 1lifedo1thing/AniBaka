@@ -14,6 +14,7 @@ import 'package:baka/source/pipeline_source_adapter.dart';
 import 'package:baka/source/source_registry.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:flutter/material.dart';
+import 'package:baka/widgets/common/platform_tooltip.dart';
 import 'package:flutter/services.dart';
 
 enum _TestStage { search, episodes, playback }
@@ -561,7 +562,7 @@ class _AiRuleAuthoringPageState extends State<AiRuleAuthoringPage> {
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
               ),
             ),
-            Tooltip(
+            PlatformTooltip(
               message: '达到轮数后停止；不限制时可手动中止',
               child: Icon(
                 Icons.info_outline_rounded,
@@ -599,7 +600,7 @@ class _AiRuleAuthoringPageState extends State<AiRuleAuthoringPage> {
             const SizedBox(width: 12),
             ValueListenableBuilder(
               valueListenable: _enabled,
-              builder: (context, enabled, _) => Tooltip(
+              builder: (context, enabled, _) => PlatformTooltip(
                 message: enabled ? '图源已启用' : '图源已停用',
                 child: Column(
                   mainAxisSize: MainAxisSize.min,

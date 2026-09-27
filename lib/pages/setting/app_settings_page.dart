@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart' hide ContextExtensionss;
@@ -15,6 +17,7 @@ import 'package:baka/pages/mine/mine_profile.dart';
 import 'package:baka/pages/setting/ai_rule_settings_page.dart';
 import 'package:baka/pages/setting/bangumi_sync_page.dart';
 import 'package:baka/pages/setting/font_settings_page.dart';
+import 'package:baka/pages/setting/labs_settings_page.dart';
 import 'package:baka/pages/setting/playback_settings_page.dart';
 import 'package:baka/pages/source/source_management_page.dart';
 import 'package:baka/services/account/bangumi_session.dart';
@@ -318,8 +321,16 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
               value: 'OpenAI 兼容模型 / API Key',
               icon: Icons.auto_awesome_rounded,
               onTap: () => _pushPage(const AiRuleSettingsPage()),
-              showDivider: false,
+              showDivider: Platform.isWindows,
             ),
+            if (Platform.isWindows)
+              SettingsTile(
+                title: '实验室',
+                value: 'DLSS 5 视频增强',
+                icon: Icons.science_outlined,
+                onTap: () => _pushPage(const LabsSettingsPage()),
+                showDivider: false,
+              ),
           ],
         ),
         const SizedBox(height: 24),

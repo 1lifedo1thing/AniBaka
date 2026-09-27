@@ -154,7 +154,12 @@ class AppStorage {
   // ---- 文件缓存（图片 / 临时文件）统计与清理 ----
 
   /// 获取当前缓存大小（字节）。仅在设置页显式请求时扫描。
-  static Future<int> getCacheSize() async {
+  static Future<int>? _cacheScan;
+
+  static Future<int> getCacheSize() =>
+      _cacheScan ??= _scanCacheSize().whenComplete(() => _cacheScan = null);
+
+  static Future<int> _scanCacheSize() async {
     var totalSize = 0;
     try {
       for (final directory in await _getCacheDirectories()) {

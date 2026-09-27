@@ -41,6 +41,7 @@ Baka 是使用 Flutter 开发的多端媒体客户端，通过规则驱动的视
 - 本地播放历史及登录后的历史同步
 - Windows、Android、macOS、iOS 和 Android TV 界面
 - Windows Anime4K 实时画质增强
+- Windows [DLSS 5 实验性视频增强](docs/dlss5-video-enhancement.md)，实验室开关可为所有内置播放启用 NVIDIA 神经渲染、2 倍超分与帧生成，并支持独立窗口和离线转换
 
 内置规则随应用打包，社区规则由
 [AniBakaRule](https://github.com/AniBakaBaka/AniBakaRule) 维护并通过规则中心获取。
@@ -114,16 +115,30 @@ fvm flutter build ios --release --no-codesign
 
 ## 开发与测试
 
+### 组织维护的依赖
+
+`media_kit_video` 和 `screen_brightness` 通过 pub 的 Git 依赖引用组织 fork，
+`pubspec.yaml` 固定提交，`pubspec.lock` 记录解析结果。运行 `fvm flutter pub get`
+即可获取，无需复制 `third_party` 或修改 Pub 缓存。
+
+- [media-kit](https://github.com/AniBakaBaka/media-kit/tree/main)：
+  Windows 播放器增强补丁；主项目 CMake 启用 `MEDIA_KIT_VIDEO_ENABLE_DLSS`，
+  并提供 `windows/runner/dlss_realtime` 中的 GPU 后端。
+- [screen_brightness](https://github.com/AniBakaBaka/screen_brightness/tree/main)：
+  移除 Windows 亮度插件注册，保留上游 Dart API 和其他平台实现。
+
+更新补丁时，先合并到对应 fork 的 `main`，再更新 `pubspec.yaml` 的 `ref` 并运行
+`fvm flutter pub get`，同时提交锁文件。两个仓库保留上游 fork 关系。
+
+### 检查
+
 ```bash
 fvm flutter analyze
 fvm flutter test
 ```
 
-真实站点规则测试默认跳过。需要联网验证规则时运行：
-
-```bash
-fvm flutter test test/source/live_new_rules_test.dart --dart-define=LIVE=true
-```
+测试按核心逻辑、服务和用户交互整理在 `test/core/`、`test/services/`、
+`test/features/`。保留范围和维护约定见 [测试说明](test/README.md)。
 
 第三方站点接口和页面结构可能随时变化。修改规则时，请至少验证搜索、详情、播放清单及实际媒体分片。
 

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:baka/services/playback/dlss_global_playback.dart';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:baka/instance.dart';
@@ -7,6 +8,7 @@ import 'package:baka/models/playback_state.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:baka/utils/platform_page_route.dart';
 import 'package:flutter/material.dart';
+import 'package:baka/widgets/common/platform_tooltip.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_volume_controller/flutter_volume_controller.dart';
 import 'package:fullscreen_window/fullscreen_window.dart';
@@ -890,7 +892,7 @@ class _BakaPlayerState extends State<BakaPlayer> {
                 ),
               );
               actions.add(
-                Tooltip(
+                PlatformTooltip(
                   message: '播放器详情',
                   child: _buildHeaderButton(
                     icon: Icons.info_outline_rounded,
@@ -1012,7 +1014,7 @@ class _BakaPlayerState extends State<BakaPlayer> {
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             if (hasNext && onNext != null) ...[
-              Tooltip(
+              PlatformTooltip(
                 message: '下一集',
                 child: InkResponse(
                   onTap: onNext,
@@ -1032,7 +1034,7 @@ class _BakaPlayerState extends State<BakaPlayer> {
               ),
               SizedBox(width: isWide ? 8 : 6),
             ],
-            Tooltip(
+            PlatformTooltip(
               message: '选择剧集',
               child: InkWell(
                 onTap: widget.onPickEpisode,
@@ -1160,7 +1162,7 @@ class _BakaPlayerState extends State<BakaPlayer> {
     final controller = widget.controller;
     if (!widget.full) return null;
 
-    return ValueListenableBuilder<VideoEnhancementState>(
+    final anime4kButton = ValueListenableBuilder<VideoEnhancementState>(
       valueListenable: controller.enhancement,
       builder: (context, enhancement, _) {
         final isActive = enhancement.enabled;
@@ -1201,6 +1203,87 @@ class _BakaPlayerState extends State<BakaPlayer> {
               ),
             ),
           ),
+        );
+      },
+    );
+    if (!Platform.isWindows) return anime4kButton;
+    return ListenableBuilder(
+      listenable: DlssGlobalPlayback.instance,
+      builder: (context, _) {
+        final service = DlssGlobalPlayback.instance;
+        if (!service.enabled) return anime4kButton;
+        final color = service.hasFallback
+            ? Colors.orangeAccent
+            : service.hasEnhancedOutput
+            ? Theme.of(context).colorScheme.primary
+            : Colors.white.withValues(alpha: .7);
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            anime4kButton,
+            const SizedBox(width: 8),
+            _buildCapsule(
+              radius: isWide ? 22 : 18,
+              child: PlatformTooltip(
+                message: '${service.status}\n点击开关 DLSS；长按或右键查看详情及调整效果',
+                child: GestureDetector(
+                  onSecondaryTap: () => showDlssEffectsDialog(context),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(isWide ? 22 : 18),
+                    onTap: service.busy
+                        ? null
+                        : () async {
+                            controller.setControlsVisible(true);
+                            await service.setPlaybackEnabled(
+                              !service.playbackEnabled,
+                            );
+                            if (!mounted) return;
+                            showSnackBar(
+                              service.error ??
+                                  (service.playbackEnabled
+                                      ? '已请求开启 DLSS，正在等待增强画面'
+                                      : 'DLSS 播放增强已关闭'),
+                            );
+                          },
+                    onLongPress: () => showDlssEffectsDialog(context),
+                    child: SizedBox(
+                      height: isWide ? 42 : 34,
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: isWide ? 14 : 12,
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              service.hasFallback
+                                  ? Icons.warning_amber_rounded
+                                  : service.busy ||
+                                        (service.playbackEnabled &&
+                                            !service.hasEnhancedOutput)
+                                  ? Icons.hourglass_top_rounded
+                                  : Icons.auto_fix_high_rounded,
+                              size: isWide ? 18 : 15,
+                              color: color,
+                            ),
+                            SizedBox(width: isWide ? 6 : 4),
+                            Text(
+                              service.hasFallback ? 'DLSS 回退' : 'DLSS',
+                              style: TextStyle(
+                                color: color,
+                                fontSize: isWide ? 14 : 12,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
         );
       },
     );

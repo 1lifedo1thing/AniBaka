@@ -37,6 +37,7 @@ class _TvQrLoginPageState extends State<TvQrLoginPage> {
   Future<void> _startServer() async {
     try {
       await _server.start();
+      if (!mounted) return;
       final qrContent = _server.qrContent;
       if (_server.localIp == null) {
         setState(() {
@@ -52,6 +53,7 @@ class _TvQrLoginPageState extends State<TvQrLoginPage> {
 
       _timeoutTimer = Timer(const Duration(minutes: 5), () {
         if (mounted && _state == _QrLoginState.waiting) {
+          _server.stop();
           setState(() {
             _state = _QrLoginState.error;
             _errorMsg = '二维码已过期，请重新打开页面';
@@ -62,7 +64,7 @@ class _TvQrLoginPageState extends State<TvQrLoginPage> {
       final result = await _server.loginResult;
       _timeoutTimer?.cancel();
 
-      if (!mounted || _state != _QrLoginState.waiting) return;
+      if (!mounted || result == null || _state != _QrLoginState.waiting) return;
 
       await Get.find<AccountSession>().saveLoginInfo(
         result['token'] as String,
@@ -71,6 +73,7 @@ class _TvQrLoginPageState extends State<TvQrLoginPage> {
         tokenExpiresAt: result['token_expires_at'] as String?,
       );
 
+      if (!mounted) return;
       setState(() => _state = _QrLoginState.success);
 
       showSnackBar('登录成功');

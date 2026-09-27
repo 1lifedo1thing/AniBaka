@@ -28,7 +28,7 @@ class _TvHomePageState extends State<TvHomePage> {
   _TvSection _selectedSection = _TvSection.home;
   final _focusedItem = ValueNotifier<Map?>(null);
   final ScrollController _scrollController = ScrollController();
-  bool _loadingMore = false;
+  final _loadingMore = ValueNotifier(false);
   String? _exhaustedTag;
 
   @override
@@ -41,11 +41,12 @@ class _TvHomePageState extends State<TvHomePage> {
   void dispose() {
     _scrollController.dispose();
     _focusedItem.dispose();
+    _loadingMore.dispose();
     super.dispose();
   }
 
   void _onScroll() {
-    if (_loadingMore) return;
+    if (_loadingMore.value) return;
     if (_exhaustedTag == widget.svc.tag.value) return;
     if (!_scrollController.hasClients) return;
     final pos = _scrollController.position;
@@ -55,8 +56,8 @@ class _TvHomePageState extends State<TvHomePage> {
   }
 
   Future<void> _loadMore() async {
-    if (_loadingMore || _exhaustedTag == widget.svc.tag.value) return;
-    _loadingMore = true;
+    if (_loadingMore.value || _exhaustedTag == widget.svc.tag.value) return;
+    _loadingMore.value = true;
     final tag = widget.svc.tag.value;
     try {
       final hasMore = await widget.svc.loadMore();
@@ -65,9 +66,7 @@ class _TvHomePageState extends State<TvHomePage> {
       }
     } finally {
       if (mounted) {
-        setState(() {
-          _loadingMore = false;
-        });
+        _loadingMore.value = false;
       }
     }
   }
@@ -252,8 +251,11 @@ class _TvHomePageState extends State<TvHomePage> {
                           }, childCount: items.length),
                         ),
 
-                  if (_loadingMore)
-                    SliverToBoxAdapter(
+                  SliverToBoxAdapter(
+                    child: ValueListenableBuilder<bool>(
+                      valueListenable: _loadingMore,
+                      builder: (_, loading, child) =>
+                          loading ? child! : const SizedBox.shrink(),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(vertical: 20),
                         child: Center(
@@ -270,6 +272,7 @@ class _TvHomePageState extends State<TvHomePage> {
                         ),
                       ),
                     ),
+                  ),
 
                   const SliverToBoxAdapter(child: SizedBox(height: 40)),
                 ],
@@ -353,7 +356,8 @@ class _TvHomeHeroState extends State<_TvHomeHero> {
                 child: CachedNetworkImage(
                   key: ValueKey(backdropUrl),
                   imageUrl: backdropUrl,
-                  memCacheWidth: 1520,
+                  memCacheWidth: (760 * MediaQuery.devicePixelRatioOf(context))
+                      .ceil(),
                   fit: BoxFit.cover,
                   alignment: Alignment.topCenter,
                   width: double.infinity,
@@ -486,7 +490,7 @@ class _TvHomeHeroState extends State<_TvHomeHero> {
       child: CachedNetworkImage(
         key: ValueKey(logoUrl),
         imageUrl: logoUrl,
-        memCacheHeight: 170,
+        memCacheHeight: (85 * MediaQuery.devicePixelRatioOf(context)).ceil(),
         fit: BoxFit.contain,
         alignment: Alignment.centerLeft,
         errorWidget: (context, url, error) => text,

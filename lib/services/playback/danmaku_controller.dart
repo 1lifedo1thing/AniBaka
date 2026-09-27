@@ -7,6 +7,7 @@ import 'package:baka/api/post.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/theme.dart';
 import 'package:baka/utils/bgm_utils.dart';
+import 'package:baka/utils/substring_matcher.dart';
 
 /// 弹幕控制器：负责整集弹幕数据获取、高效解码、缓存管理、配置持久化与视图驱动。
 class DanmakuController extends ChangeNotifier {
@@ -243,7 +244,27 @@ class DanmakuController extends ChangeNotifier {
   double _playbackRate = 1.0;
   bool blockRepeat = false;
   bool blockColor = false;
-  List<String> blockWords = [];
+  List<String> _blockWords = const [];
+  SubstringMatcher? _blockMatcher;
+
+  List<String> get blockWords => _blockWords;
+  set blockWords(List<String> words) {
+    _blockWords = List.unmodifiable(words);
+    _blockMatcher = words.isEmpty ? null : SubstringMatcher(_blockWords);
+  }
+
+  void addBlockWord(String word) {
+    if (_blockWords.contains(word)) return;
+    blockWords = [..._blockWords, word];
+  }
+
+  void removeBlockWord(String word) {
+    blockWords = [
+      for (final value in _blockWords)
+        if (value != word) value,
+    ];
+  }
+
   List<DanmakuItem> _items = const [];
   DanmakuOption _option = DanmakuOption(
     fontSize: DanmakuOption.defaultFontSize,
@@ -345,10 +366,8 @@ class DanmakuController extends ChangeNotifier {
   }
 
   bool isBlocked(String text) {
-    for (var i = 0; i < blockWords.length; i++) {
-      if (text.contains(blockWords[i])) return true;
-    }
-    return false;
+    if (_blockWords.isEmpty) return false;
+    return _blockMatcher!.matches(text);
   }
 
   bool isColorBlocked(Color color) =>
@@ -370,6 +389,15 @@ class DanmakuController extends ChangeNotifier {
 
   void detach(DanmakuListener listener) {
     _listeners = [..._listeners]..remove(listener);
+  }
+
+  @override
+  void dispose() {
+    _listeners = const [];
+    _items = const [];
+    _blockWords = const [];
+    _blockMatcher = null;
+    super.dispose();
   }
 }
 

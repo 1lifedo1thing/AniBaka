@@ -60,7 +60,7 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
     final option = DanmakuOption(fontSize: DanmakuOption.defaultFontSize);
     setState(() {
       widget.controller.updateOption(option);
-      widget.controller.blockWords.clear();
+      widget.controller.blockWords = const [];
       widget.controller.blockRepeat = false;
       widget.controller.blockColor = false;
     });
@@ -71,12 +71,12 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
   void _addBlockWord(String word) {
     final t = word.trim();
     if (t.isEmpty || widget.controller.blockWords.contains(t)) return;
-    setState(() => widget.controller.blockWords.add(t));
+    setState(() => widget.controller.addBlockWord(t));
     _saveSettings();
   }
 
   void _removeBlockWord(String word) {
-    setState(() => widget.controller.blockWords.remove(word));
+    setState(() => widget.controller.removeBlockWord(word));
     _saveSettings();
   }
 

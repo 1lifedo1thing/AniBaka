@@ -77,6 +77,7 @@ class AppState extends GetxService with WidgetsBindingObserver {
   }
 
   void toggleHideBottomNavOnScroll(bool value) {
+    if (isHideBottomNavOnScroll.value == value) return;
     isHideBottomNavOnScroll.value = value;
     Instances.sp.setBool('hide_bottom_nav_on_scroll', value);
     if (!value) {
@@ -89,35 +90,40 @@ class AppState extends GetxService with WidgetsBindingObserver {
   }
 
   void setThemeMode(int mode) {
-    if (mode < 0 || mode > 2) return;
+    if (mode < 0 || mode > 2 || _themeMode.value == mode) return;
     _themeMode.value = mode;
     Instances.sp.setInt(_themeModeKey, mode);
   }
 
   void setDynamicColor(bool value) {
+    if (_dynamicColor.value == value) return;
     _dynamicColor.value = value;
     Instances.sp.setBool(_dynamicColorKey, value);
   }
 
   void setFontFamily(String fontFamily) {
+    fontFamily = AppFonts.normalizeFont(fontFamily);
+    if (_fontFamily.value == fontFamily) return;
     _fontFamily.value = fontFamily;
     Instances.sp.setString(AppFonts.spKey, fontFamily);
   }
 
   void setFontScale(double scale) {
-    _fontScale.value = scale.clamp(0.8, 1.4);
+    final next = scale.clamp(0.8, 1.4);
+    if (_fontScale.value == next) return;
+    _fontScale.value = next;
     Instances.sp.setDouble(AppFonts.fontScaleKey, _fontScale.value);
   }
 
   void setFontWeightIndex(int index) {
-    _fontWeightIndex.value = index.clamp(
-      0,
-      AppFonts.availableWeights.length - 1,
-    );
+    final next = index.clamp(0, AppFonts.availableWeights.length - 1);
+    if (_fontWeightIndex.value == next) return;
+    _fontWeightIndex.value = next;
     Instances.sp.setInt(AppFonts.fontWeightKey, _fontWeightIndex.value);
   }
 
   void setReduceVisualEffects(bool value) {
+    if (_reduceVisualEffects.value == value) return;
     _reduceVisualEffects.value = value;
     Instances.sp.setBool(_reduceVisualEffectsKey, value);
   }
