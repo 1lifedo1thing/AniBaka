@@ -1,4 +1,6 @@
 import 'dart:typed_data';
+import 'dart:async';
+import 'dart:io';
 import 'package:baka/services/torrent/piece_manager.dart';
 import 'package:baka/services/torrent/torrent_model.dart';
 import 'package:baka/services/torrent/torrent_service.dart';
@@ -96,6 +98,40 @@ final Map<String, dynamic> _mikanParams = {
 void main() {
   group('torrent', () {
     final torrent = TorrentService();
+    tearDownAll(torrent.dispose);
+    test(
+      'dispose cancels a torrent fetch during startup and drains repeated stop',
+      () async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        final started = Completer<void>();
+        server.listen((request) {
+          started.complete();
+        });
+        final service = TorrentService();
+        addTearDown(() async {
+          await service.dispose();
+          await server.close(force: true);
+        });
+        final pending = service.resolvePlaybackUrl(
+          'http://127.0.0.1:${server.port}/slow.torrent',
+        );
+        final rejected = expectLater(
+          pending,
+          throwsA(isA<TorrentPlaybackException>()),
+        );
+        await started.future.timeout(const Duration(seconds: 3));
+        await Future.wait([
+          service.stopStream(),
+          service.dispose(),
+          service.dispose(),
+        ]).timeout(const Duration(seconds: 3));
+        await rejected;
+        await expectLater(
+          service.resolvePlaybackUrl('magnet:?xt=urn:btih:abc'),
+          throwsStateError,
+        );
+      },
+    );
     test('BT link detection accepts magnets and torrent URLs only', () {
       expect(TorrentService.isBtLink('magnet:?xt=urn:btih:abc'), isTrue);
       expect(

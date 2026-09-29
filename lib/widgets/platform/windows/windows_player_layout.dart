@@ -1,3 +1,4 @@
+import 'package:baka/models/bgm.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:baka/widgets/common/platform_tooltip.dart';
@@ -7,7 +8,6 @@ import 'package:baka/models/playback_episode.dart';
 import 'package:baka/pages/setting/player_settings_page.dart';
 import 'package:baka/services/torrent/torrent_engine.dart';
 import 'package:baka/services/torrent/torrent_service.dart';
-import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/utils/format_utils.dart';
 import 'package:baka/widgets/baka_player/controller.dart';
 import 'package:baka/widgets/baka_player/view.dart';
@@ -271,7 +271,7 @@ class _WindowsPlayerLayoutState extends State<WindowsPlayerLayout>
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.arrow_upward_rounded, size: 13, color: primaryColor),
+              Icon(Icons.arrow_downward_rounded, size: 13, color: primaryColor),
               const SizedBox(width: 2),
               Text(
                 speedText,
@@ -515,6 +515,7 @@ class _WindowsPlayerLayoutState extends State<WindowsPlayerLayout>
       key: const ValueKey('intro_tab'),
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: WindowsEpisodeList(
+        torrent: widget.torrent,
         videoList: widget.videoList,
         currentIndex: widget.currPlayIndex,
         onEpisodeSelected: widget.onEpisodeChanged,
@@ -524,7 +525,7 @@ class _WindowsPlayerLayoutState extends State<WindowsPlayerLayout>
         sourceNames: widget.sourceNames,
         bgmId: widget.bgmInfo.subjectId,
         bgmEpisodes: bgmEpisodes,
-        fallbackCoverUrl: BgmUtils.resolveCoverImage(
+        fallbackCoverUrl: resolveCoverImage(
           widget.data,
           bgmInfo: widget.bgmInfo,
         ),

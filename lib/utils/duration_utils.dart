@@ -5,23 +5,28 @@ extension DurationExtension on Duration {
     return this;
   }
 
-  String label({Duration? reference}) {
-    reference ??= this;
-    if (reference > const Duration(days: 1)) {
-      final days = inDays.toString().padLeft(3, '0');
-      final hours = (inHours - inDays * 24).toString().padLeft(2, '0');
-      final minutes = (inMinutes - inHours * 60).toString().padLeft(2, '0');
-      final seconds = (inSeconds - inMinutes * 60).toString().padLeft(2, '0');
-      return '$days:$hours:$minutes:$seconds';
-    }
-    if (reference > const Duration(hours: 1)) {
-      final hours = inHours.toString().padLeft(2, '0');
-      final minutes = (inMinutes - inHours * 60).toString().padLeft(2, '0');
-      final seconds = (inSeconds - inMinutes * 60).toString().padLeft(2, '0');
-      return '$hours:$minutes:$seconds';
-    }
-    final minutes = inMinutes.toString().padLeft(2, '0');
-    final seconds = (inSeconds - inMinutes * 60).toString().padLeft(2, '0');
-    return '$minutes:$seconds';
+  /// MM:SS / HH:MM:SS；reference 用于让进度与总时长保持相同位数。
+  /// 长视频可用 includeDays 显示 DDD:HH:MM:SS。
+  String toTimeString({Duration? reference, bool includeDays = false}) {
+    final total = reference ?? this;
+    final seconds = inSeconds;
+    final minutes = inMinutes;
+    final hours = inHours;
+    final showDays = includeDays && total > const Duration(days: 1);
+    final showHours = total >= const Duration(hours: 1);
+    final mm = (showHours ? minutes - hours * 60 : minutes).toString().padLeft(
+      2,
+      '0',
+    );
+    final ss = (seconds - minutes * 60).toString().padLeft(2, '0');
+    if (!showHours) return '$mm:$ss';
+    final days = showDays ? inDays : 0;
+    final hh = (showDays ? hours - days * 24 : hours).toString().padLeft(
+      2,
+      '0',
+    );
+    return showDays
+        ? '${days.toString().padLeft(3, '0')}:$hh:$mm:$ss'
+        : '$hh:$mm:$ss';
   }
 }

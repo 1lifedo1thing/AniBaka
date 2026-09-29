@@ -1,3 +1,5 @@
+import 'package:baka/models/bgm.dart';
+import 'package:baka/models/anime_detail_view_data.dart';
 import 'package:flutter/foundation.dart';
 
 import 'package:baka/api/bgm.dart';
@@ -5,7 +7,6 @@ import 'package:baka/api/anibaka_api.dart';
 import 'package:baka/api/post.dart';
 import 'package:baka/api/request_cache.dart';
 import 'package:baka/core/app_storage.dart';
-import 'package:baka/utils/bgm_utils.dart';
 
 typedef HomeItem = Map;
 typedef HomeItems = List<HomeItem>;
@@ -25,11 +26,12 @@ class HomeController {
   static const String pureTag = '纯净';
   static const List<String> baseTags = [recommendTag, latestTag, pureTag];
 
-  static const String _swiperTag = '幻灯';
-  static const String _swiperCacheKey = 'home_swiper_backdrop_v2';
   static final RequestDeduplicator<String, Object> _requests =
       RequestDeduplicator<String, Object>();
 
+  final DateTime Function() _now;
+  late String _swipersKey;
+  int _swipersRequest = 0;
   final _feed = _FeedNotifier();
   final ValueNotifier<HomeItems> swipers = ValueNotifier(const []);
   final ValueNotifier<List<HomeItems>> schedule = ValueNotifier(
@@ -51,12 +53,13 @@ class HomeController {
   ValueNotifier<HomeItems> get feed => _feed;
   ValueNotifier<List<HomeItems>> get ranks => _ranks;
 
-  HomeController() {
+  HomeController({DateTime Function()? now}) : _now = now ?? DateTime.now {
     final cachedFeed = _readCache(
       'home_feed_$recommendTag',
       allowExpired: true,
     );
-    final cachedSwipers = _readCache(_swiperCacheKey, allowExpired: true);
+    _swipersKey = _swiperCacheKey(_seasonStart(_now()));
+    final cachedSwipers = _readCache(_swipersKey, allowExpired: true);
     final cachedRank = _readCache('home_rank_bgm_0', allowExpired: true);
     final cachedSchedule = _readCache('home_xinfan_bgm_v2', allowExpired: true);
 
@@ -84,6 +87,7 @@ class HomeController {
       baseTags.contains(tag.value) ? baseTags : [...baseTags, tag.value];
 
   void dispose() {
+    ++_swipersRequest;
     _feed.dispose();
     swipers.dispose();
     schedule.dispose();
@@ -251,42 +255,84 @@ class HomeController {
   }
 
   Future<void> loadSwipers({bool force = false}) async {
+    final season = _seasonStart(_now());
+    final key = _swiperCacheKey(season);
+    final request = ++_swipersRequest;
+    if (_swipersKey != key) {
+      _swipersKey = key;
+      swipers.value = const [];
+    }
     try {
-      swipers.value = _itemList(
-        await _cached(_swiperCacheKey, _fetchSwipers, force: force),
+      final items = _itemList(
+        await _cached(key, () => _fetchSwipers(season), force: force),
       );
+      if (request != _swipersRequest ||
+          key != _swiperCacheKey(_seasonStart(_now()))) {
+        return;
+      }
+      swipers.value = items;
     } catch (error) {
       debugPrint('home swipers: $error');
     }
   }
 
-  static Future<HomeItems> _fetchSwipers() async {
-    final items = await getPost('', _swiperTag, 1, 6);
+  static DateTime _seasonStart(DateTime date) =>
+      DateTime(date.year, ((date.month - 1) ~/ 3) * 3 + 1);
+
+  static String _swiperCacheKey(DateTime season) =>
+      'home_swiper_bgm_season_v1_${season.year}_${season.month}';
+
+  /// 当季首播的 TV / WEB 动画按 Bangumi 收藏热度选取，名单不依赖站内帖子。
+  static Future<HomeItems> _fetchSwipers(DateTime season) async {
+    final end = DateTime(season.year, season.month + 3);
+    final subjects = await searchBgmByTag(
+      const [],
+      limit: 24,
+      sort: 'heat',
+      airDate: [
+        '>=${season.toIso8601String().substring(0, 10)}',
+        '<${end.toIso8601String().substring(0, 10)}',
+      ],
+    );
+    final candidates = subjects.where((subject) {
+      final platform = subject['platform']?.toString().toLowerCase();
+      final date = DateTime.tryParse(subject['date']?.toString() ?? '');
+      return (platform == 'tv' || platform == 'web') &&
+          subject['nsfw'] != true &&
+          date != null &&
+          !date.isBefore(season) &&
+          date.isBefore(end);
+    }).toList();
+    final seen = <int>{};
+    final items = convertBgmSubjectsToAppFormat(candidates)
+        .where(
+          (item) =>
+              resolveCoverImage(item) != null && seen.add(item['bgmId'] as int),
+        )
+        .take(6)
+        .toList();
+    // 不把上游空响应缓存一天；同季已有内容可保留，后续刷新还能重试。
+    if (items.isEmpty) throw StateError('Bangumi 当季暂无可展示的番剧');
 
     await Future.wait(
       items.map((item) async {
-        var bgmId = BgmUtils.toInt(item['bgmId']);
-        if (bgmId == null) {
-          final subject = await resolveBgmSubject(
-            title: item['title']?.toString() ?? '',
-          );
-          bgmId = subject?.subjectId;
-          if (bgmId != null) item['bgmId'] = bgmId;
+        final bgmId = item['bgmId'] as int;
+        item['bannerImageUrl'] = resolveCoverImage(item)!;
+        try {
+          // 横图只是增强：补图失败或超时仍使用 Bangumi 封面。
+          final detail = await AniBakaApi.getAnimeDetail(
+            bgmId,
+          ).timeout(const Duration(seconds: 8));
+          final url = AnimeDetailViewData.pickTmdbBackdrop(detail);
+          if (url != null) {
+            item['backdropUrl'] = url;
+            item['bannerImageUrl'] = url;
+          }
+        } catch (error) {
+          debugPrint('home swiper backdrop $bgmId: $error');
         }
-        if (bgmId == null) return;
-
-        final detail = await AniBakaApi.getAnimeDetail(bgmId);
-        final url = BgmUtils.pickAniBakaTmdbBackdrop(detail);
-        if (url != null) item['backdropUrl'] = url;
       }),
     );
-    for (final item in items) {
-      item['bannerImageUrl'] =
-          BgmUtils.trimmed(item['backdropUrl']) ??
-          BgmUtils.trimmed(item['posterUrl']) ??
-          BgmUtils.resolveCoverImage(item) ??
-          '';
-    }
     return items;
   }
 

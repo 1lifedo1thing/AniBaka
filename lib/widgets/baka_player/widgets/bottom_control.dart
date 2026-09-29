@@ -125,12 +125,8 @@ class BottomControl extends StatelessWidget {
   }
 
   Widget _buildTimeline(Color colorTheme, bool isWide) {
-    Widget buildTimeline(PlaybackTimelineState state) => _TimelineControl(
-      controller: controller,
-      timeline: state,
-      colorTheme: colorTheme,
-      isWideScreen: isWide,
-    );
+    Widget buildTimeline(PlaybackTimelineState state) =>
+        _buildTimelineRow(state, colorTheme, isWide);
 
     if (!updatesEnabled) return buildTimeline(controller.timeline.value);
     return ValueListenableBuilder<PlaybackTimelineState>(
@@ -161,63 +157,12 @@ class BottomControl extends StatelessWidget {
       builder: (context, show) => buildBtn(show),
     );
   }
-}
 
-class _PlayerIconButton extends StatelessWidget {
-  const _PlayerIconButton({
-    required this.icon,
-    required this.onTap,
-    required this.isWide,
-    this.tooltip,
-    this.color = Colors.white,
-    this.size = 22,
-  });
-
-  final IconData icon;
-  final VoidCallback onTap;
-  final bool isWide;
-  final String? tooltip;
-  final Color color;
-  final double size;
-
-  @override
-  Widget build(BuildContext context) {
-    final buttonSize = isWide ? 42.0 : 36.0;
-    return SizedBox(
-      width: buttonSize,
-      height: buttonSize,
-      child: Material(
-        type: MaterialType.transparency,
-        child: InkResponse(
-          radius: buttonSize / 2,
-          onTap: () {
-            HapticFeedback.lightImpact();
-            onTap();
-          },
-          child: Center(
-            child: Icon(icon, color: color, size: isWide ? size * 1.15 : size),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _TimelineControl extends StatelessWidget {
-  const _TimelineControl({
-    required this.controller,
-    required this.timeline,
-    required this.colorTheme,
-    required this.isWideScreen,
-  });
-
-  final PlaybackController controller;
-  final PlaybackTimelineState timeline;
-  final Color colorTheme;
-  final bool isWideScreen;
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildTimelineRow(
+    PlaybackTimelineState timeline,
+    Color colorTheme,
+    bool isWideScreen,
+  ) {
     final total = timeline.duration;
     final progress =
         (timeline.seeking ? timeline.previewPosition : timeline.position).clamp(
@@ -230,7 +175,7 @@ class _TimelineControl extends StatelessWidget {
     return Row(
       children: [
         Text(
-          progress.label(reference: total),
+          progress.toTimeString(reference: total, includeDays: true),
           style: TextStyle(
             color: timeline.seeking ? colorTheme : Colors.white,
             fontSize: fontSize,
@@ -271,7 +216,7 @@ class _TimelineControl extends StatelessWidget {
         ),
         SizedBox(width: isWideScreen ? 12 : 8),
         Text(
-          total.label(),
+          total.toTimeString(includeDays: true),
           style: TextStyle(
             color: Colors.white.withValues(alpha: 0.6),
             fontSize: fontSize,
@@ -280,6 +225,46 @@ class _TimelineControl extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _PlayerIconButton extends StatelessWidget {
+  const _PlayerIconButton({
+    required this.icon,
+    required this.onTap,
+    required this.isWide,
+    this.tooltip,
+    this.color = Colors.white,
+    this.size = 22,
+  });
+
+  final IconData icon;
+  final VoidCallback onTap;
+  final bool isWide;
+  final String? tooltip;
+  final Color color;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final buttonSize = isWide ? 42.0 : 36.0;
+    return SizedBox(
+      width: buttonSize,
+      height: buttonSize,
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkResponse(
+          radius: buttonSize / 2,
+          onTap: () {
+            HapticFeedback.lightImpact();
+            onTap();
+          },
+          child: Center(
+            child: Icon(icon, color: color, size: isWide ? size * 1.15 : size),
+          ),
+        ),
+      ),
     );
   }
 }

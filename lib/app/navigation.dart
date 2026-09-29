@@ -5,8 +5,8 @@ import 'package:baka/pages/anime_detail/anime_detail_page.dart';
 import 'package:baka/pages/player/player_page.dart';
 import 'package:baka/pages/search/search_page.dart';
 import 'package:baka/pages/source/source_management_page.dart';
-import 'package:baka/utils/platform_page_route.dart';
-import 'package:baka/utils/card_page_route.dart';
+import 'package:baka/app/platform_page_route.dart';
+import 'package:baka/app/card_page_route.dart';
 
 /// 集中管理页面导航，解耦 Widget 对具体 Page 的直接依赖。
 class NavigationService {
@@ -30,7 +30,7 @@ class NavigationService {
   }) {
     // Detail and later playback enrich their route data independently. Keep
     // those mutations away from the source card while retaining its episode.
-    final routeData = data.cast<String, dynamic>();
+    final routeData = Map<String, dynamic>.from(data);
     if (posIndex != null) routeData['currPlayIndex'] = posIndex;
     final page = autoMatch
         ? PlayerPage(
@@ -104,16 +104,29 @@ class NavigationService {
     bool popFirst = false,
     bool fade = false,
     bool autoMatch = true,
+  }) => toPlayback(
+    context,
+    PlaybackRequest.fromMap(data),
+    posIndex: posIndex,
+    popFirst: popFirst,
+    fade: fade,
+    autoMatch: autoMatch,
+  );
+
+  static void toPlayback(
+    BuildContext context,
+    PlaybackRequest request, {
+    int? posIndex,
+    bool popFirst = false,
+    bool fade = false,
+    bool autoMatch = true,
   }) {
     final navigator = Navigator.of(context);
     if (popFirst) navigator.pop();
-    // Playback selection mutates the page data as episodes and lines change.
-    // Do not leak that state back into a detail page or search result card.
-    final routeData = data.cast<String, dynamic>();
     final PageRoute<void> route = fade
         ? platformPageRoute<void>(
             builder: (_) => PlayerPage(
-              request: PlaybackRequest.fromMap(routeData),
+              request: request,
               posIndex: posIndex,
               autoMatch: autoMatch,
             ),
@@ -123,7 +136,7 @@ class NavigationService {
           )
         : _pageRoute(
             PlayerPage(
-              request: PlaybackRequest.fromMap(routeData),
+              request: request,
               posIndex: posIndex,
               autoMatch: autoMatch,
             ),

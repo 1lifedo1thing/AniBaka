@@ -1,13 +1,17 @@
+import 'package:baka/models/bgm.dart';
+import 'package:baka/theme.dart';
+import 'package:baka/utils/json_values.dart';
 import 'package:flutter/material.dart';
 import 'package:baka/widgets/common/platform_tooltip.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:baka/models/playback_episode.dart';
 import 'package:baka/widgets/platform/windows/windows_line_selector.dart';
 import 'package:baka/api/anibaka_api.dart';
-import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/services/playback/danmaku_controller.dart';
 import 'package:baka/widgets/danmaku/danmaku_list_sheet.dart';
 import 'package:baka/widgets/player/bgm_follow_pill.dart';
+import 'package:baka/services/torrent/torrent_service.dart';
+import 'package:baka/widgets/player/download_indicators.dart';
 
 class WindowsEpisodeList extends StatefulWidget {
   const WindowsEpisodeList({
@@ -31,6 +35,7 @@ class WindowsEpisodeList extends StatefulWidget {
     this.bgmId,
     this.bgmEpisodes,
     this.fallbackCoverUrl,
+    this.torrent,
   });
 
   final List<PlaybackEpisode> videoList;
@@ -43,6 +48,7 @@ class WindowsEpisodeList extends StatefulWidget {
   final int? bgmId;
   final List<Map<String, dynamic>>? bgmEpisodes;
   final String? fallbackCoverUrl;
+  final TorrentService? torrent;
 
   final String? title;
   final BgmInfo? bgmInfo;
@@ -113,8 +119,8 @@ class _WindowsEpisodeListState extends State<WindowsEpisodeList> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final primaryColor = theme.colorScheme.primary;
-    final source = BgmUtils.trimmed(widget.sourceName) ?? '切换播放源';
-    final line = BgmUtils.trimmed(widget.lineName);
+    final source = trimmed(widget.sourceName) ?? '切换播放源';
+    final line = trimmed(widget.lineName);
     final danmaku = widget.danmakuController;
     final itemCount = _filteredList?.length ?? widget.videoList.length;
     final episodes = SliverChildBuilderDelegate(
@@ -160,6 +166,7 @@ class _WindowsEpisodeListState extends State<WindowsEpisodeList> {
               _buildAnimeHeader(),
               const SizedBox(height: 8),
               _buildActionRow(
+                context: context,
                 label: '播放源',
                 action: '切换源',
                 accent: primaryColor,
@@ -174,6 +181,7 @@ class _WindowsEpisodeListState extends State<WindowsEpisodeList> {
               ),
               const SizedBox(height: 6),
               _buildActionRow(
+                context: context,
                 label: '弹幕库',
                 action: '匹配管理',
                 onTap: danmaku == null
@@ -196,6 +204,11 @@ class _WindowsEpisodeListState extends State<WindowsEpisodeList> {
                       ),
               ),
               const SizedBox(height: 12),
+              if (widget.torrent case final torrent?)
+                BtProgressIndicator(
+                  torrent: torrent,
+                  padding: const EdgeInsets.only(bottom: 12),
+                ),
               _buildEpisodeHeaderSection(),
               const SizedBox(height: 6),
             ],
@@ -276,6 +289,7 @@ class _WindowsEpisodeListState extends State<WindowsEpisodeList> {
   }
 
   Widget _buildActionRow({
+    required BuildContext context,
     required String label,
     required String action,
     required Widget child,
@@ -306,10 +320,13 @@ class _WindowsEpisodeListState extends State<WindowsEpisodeList> {
               const SizedBox(width: 10),
               Expanded(
                 child: DefaultTextStyle(
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white,
+                  // DefaultTextStyle 会替换环境默认文字样式，全局字体要显式继承。
+                  style: context.withAppFont(
+                    const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                    ),
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -536,12 +553,9 @@ class _WindowsEpisodeListItemState extends State<_WindowsEpisodeListItem> {
         ? bgmEpisodes[index]
         : null;
     final name = episode != null
-        ? BgmUtils.trimmed(episode['name_cn']) ??
-              BgmUtils.trimmed(episode['name']) ??
-              item.title
-        : BgmUtils.trimmed(still?['name']) ?? item.title.trim();
-    final rawTitle =
-        episode == null && BgmUtils.trimmed(still?['name']) == null;
+        ? trimmed(episode['name_cn']) ?? trimmed(episode['name']) ?? item.title
+        : trimmed(still?['name']) ?? item.title.trim();
+    final rawTitle = episode == null && trimmed(still?['name']) == null;
     final title =
         name.startsWith('S') ||
             name.startsWith('第') ||
@@ -549,21 +563,17 @@ class _WindowsEpisodeListItemState extends State<_WindowsEpisodeListItem> {
         ? name
         : 'S1E${index + 1}: $name';
     final airDate =
-        BgmUtils.trimmed(episode?['airdate']) ??
-        BgmUtils.trimmed(still?['air_date']) ??
-        '';
+        trimmed(episode?['airdate']) ?? trimmed(still?['air_date']) ?? '';
     final overview =
-        BgmUtils.trimmed(still?['overview']) ??
-        BgmUtils.trimmed(episode?['desc']) ??
-        '暂无本集剧情简介';
+        trimmed(still?['overview']) ?? trimmed(episode?['desc']) ?? '暂无本集剧情简介';
     final stillUrl =
-        BgmUtils.trimmed(still?['still_url']) ??
-        BgmUtils.trimmed(still?['still_thumb']) ??
+        trimmed(still?['still_url']) ??
+        trimmed(still?['still_thumb']) ??
         widget.fallbackCoverUrl ??
         '';
     final isPlaying = widget.isPlaying;
     final primaryColor = widget.primaryColor;
-    final lineCount = item.lineCount;
+    final lineCount = item.availableLineIndexes.length;
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 160),
@@ -684,6 +694,9 @@ class _WindowsEpisodeListItemState extends State<_WindowsEpisodeListItem> {
                     ),
                   ),
                   WindowsLineSelector(
+                    availableLineIndexes: item.availableLineIndexes.toList(
+                      growable: false,
+                    ),
                     lineCount: lineCount,
                     currUrl: widget.currUrl ?? 1,
                     onUrlChanged: (urlIndex) =>

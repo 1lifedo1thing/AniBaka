@@ -1,4 +1,5 @@
 import 'package:baka/models/playback_state.dart';
+import 'package:baka/widgets/common/value_selector.dart';
 import '../controller.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:flutter/material.dart';
@@ -27,40 +28,47 @@ class PlayerPrompts extends StatelessWidget {
       fit: StackFit.expand,
       clipBehavior: Clip.none,
       children: [
-        ValueListenableBuilder<PlayerOverlayState>(
+        ValueSelector<PlayerOverlayState, (SkipState, bool, String)>(
           valueListenable: controller.overlay,
-          builder: (context, overlay, _) => Stack(
+          select: (state) => (
+            state.skipState,
+            state.showJumpPrompt,
+            state.showJumpPrompt ? state.jumpPromptText : '',
+          ),
+          builder: (context, prompt) => Stack(
             fit: StackFit.expand,
             children: [
-              if (overlay.skipState == SkipState.showingCancel)
+              if (prompt.$1 == SkipState.showingCancel)
                 _buildSkipCancelPrompt(),
-              if (overlay.skipState == SkipState.waiting)
-                _buildWaitingPrompt(),
-              if (overlay.showJumpPrompt)
-                _buildJumpPrompt(overlay.jumpPromptText),
+              if (prompt.$1 == SkipState.waiting) _buildWaitingPrompt(),
+              if (prompt.$2) _buildJumpPrompt(prompt.$3),
             ],
           ),
         ),
         if (hasNextEpisode)
-          ValueListenableBuilder<PlaybackPreferences>(
+          ValueSelector<PlaybackPreferences, bool>(
             valueListenable: controller.preferences,
-            builder: (context, preferences, _) {
-              if (!preferences.showNextEpisodeButton) {
+            select: (state) => state.showNextEpisodeButton,
+            builder: (context, showNextEpisode) {
+              if (!showNextEpisode) {
                 return const SizedBox.shrink();
               }
-              return ValueListenableBuilder<PlaybackTimelineState>(
+              return ValueSelector<PlaybackTimelineState, int?>(
                 valueListenable: controller.timeline,
-                builder: (context, timeline, _) {
+                select: (timeline) {
                   final position = timeline.position.inSeconds;
                   final duration = timeline.duration.inSeconds;
                   final remaining = duration - position;
                   if (duration <= _nextEpisodeWaitSeconds ||
                       remaining > _nextEpisodeWaitSeconds ||
                       position <= 0) {
-                    return const SizedBox.shrink();
+                    return null;
                   }
-                  return _buildNextEpisodePrompt(remaining);
+                  return remaining;
                 },
+                builder: (context, remaining) => remaining == null
+                    ? const SizedBox.shrink()
+                    : _buildNextEpisodePrompt(remaining),
               );
             },
           ),
@@ -239,7 +247,8 @@ class PlayerPrompts extends StatelessWidget {
                   alignment: Alignment.center,
                   children: [
                     CircularProgressIndicator(
-                      value: (_nextEpisodeWaitSeconds - remaining) /
+                      value:
+                          (_nextEpisodeWaitSeconds - remaining) /
                           _nextEpisodeWaitSeconds,
                       backgroundColor: Colors.white.withValues(alpha: 0.2),
                       color: Colors.blueAccent,
@@ -366,7 +375,11 @@ class _PillButton extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, color: isClose ? Colors.white70 : effectiveColor, size: 14),
+            Icon(
+              icon,
+              color: isClose ? Colors.white70 : effectiveColor,
+              size: 14,
+            ),
             if (label != null) ...[
               const SizedBox(width: 4),
               Text(
@@ -384,4 +397,3 @@ class _PillButton extends StatelessWidget {
     );
   }
 }
-

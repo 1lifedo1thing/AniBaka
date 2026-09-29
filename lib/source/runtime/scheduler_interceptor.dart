@@ -1,4 +1,7 @@
+import 'dart:async';
+import 'dart:typed_data';
 import 'package:dio/dio.dart';
+import 'package:baka/source/runtime/source_operation.dart';
 
 import 'package:baka/source/runtime/request_scheduler.dart';
 
@@ -12,7 +15,9 @@ import 'package:baka/source/runtime/request_scheduler.dart';
 class SchedulerInterceptor extends Interceptor {
   static const String priorityKey = 'anx.priority';
 
-  final RequestScheduler scheduler = RequestScheduler.instance;
+  SchedulerInterceptor({RequestScheduler? scheduler})
+    : scheduler = scheduler ?? RequestScheduler.instance;
+  final RequestScheduler scheduler;
 
   @override
   void onRequest(
@@ -22,10 +27,22 @@ class SchedulerInterceptor extends Interceptor {
     final host = options.uri.host;
     final p = options.extra[priorityKey];
     final priority = p is RequestPriority ? p : RequestPriority.search;
-    final cancel = options.cancelToken;
-    final queuedCancel = cancel == null ? null : RequestCancelToken();
-    if (cancel?.isCancelled ?? false) queuedCancel!.cancel();
-    cancel?.whenCancel.then((_) => queuedCancel!.cancel());
+    final operation = SourceOperation.current;
+    final cancel = options.cancelToken ??= CancelToken();
+    // Tokens created here bypass Options.compose, which normally binds this.
+    cancel.requestOptions ??= options;
+    final detach = operation?.token.onCancel(
+      () => cancel.cancel('source operation cancelled'),
+    );
+    options.extra['anx.detach'] = detach;
+    final queuedCancel = RequestCancelToken();
+    if (cancel.isCancelled) queuedCancel.cancel();
+    cancel.whenCancel.then((_) {
+      queuedCancel.cancel();
+      // A shared token's error may point at another request. Release this
+      // request's slot directly, even if Dio skips or delays its error chain.
+      _release(options);
+    });
     try {
       await scheduler.acquire(
         host,
@@ -33,13 +50,14 @@ class SchedulerInterceptor extends Interceptor {
         cancelToken: queuedCancel,
       );
     } on RequestCancelledException {
-      handler.reject(cancel!.cancelError!);
+      _release(options);
+      handler.reject(cancel.cancelError!);
       return;
     }
     options.extra['anx.acquired'] = host;
-    if (cancel?.isCancelled ?? false) {
+    if (cancel.isCancelled) {
       _release(options);
-      handler.reject(cancel!.cancelError!);
+      handler.reject(cancel.cancelError!);
       return;
     }
     handler.next(options);
@@ -47,7 +65,78 @@ class SchedulerInterceptor extends Interceptor {
 
   @override
   void onResponse(Response response, ResponseInterceptorHandler handler) {
-    _release(response.requestOptions);
+    if (response.data case final ResponseBody body) {
+      final options = response.requestOptions;
+      // Take ownership from RequestOptions: retries may reuse that object.
+      final host = options.extra.remove('anx.acquired');
+      final detach = options.extra.remove('anx.detach') as void Function()?;
+      var released = false;
+      void release() {
+        if (released) return;
+        released = true;
+        detach?.call();
+        if (host is String) scheduler.release(host);
+      }
+
+      StreamSubscription<Uint8List>? subscription;
+      late StreamController<Uint8List> controller;
+      Future<void>? cancelling;
+      Future<void> closeBody() async {
+        release();
+        if (subscription != null) {
+          await subscription!.cancel();
+        } else {
+          await body.stream.listen(null, onError: (Object _) {}).cancel();
+        }
+      }
+
+      Future<void> cancelBody() => cancelling ??= closeBody();
+      controller = StreamController<Uint8List>(
+        sync: true,
+        onListen: () {
+          if (released) {
+            unawaited(controller.close());
+            return;
+          }
+          subscription = body.stream.listen(
+            controller.add,
+            onError: (Object e, StackTrace s) {
+              release();
+              controller.addError(e, s);
+              unawaited(subscription?.cancel());
+              unawaited(controller.close());
+            },
+            onDone: () {
+              release();
+              unawaited(controller.close());
+            },
+          );
+        },
+        onPause: () => subscription?.pause(),
+        onResume: () => subscription?.resume(),
+        onCancel: cancelBody,
+      );
+      options.cancelToken?.whenCancel.then((_) {
+        if (!released) {
+          unawaited(cancelBody());
+          unawaited(controller.close());
+        }
+      });
+      response.data = ResponseBody(
+        controller.stream,
+        body.statusCode,
+        headers: body.headers,
+        statusMessage: body.statusMessage,
+        isRedirect: body.isRedirect,
+        redirects: body.redirects,
+        onClose: () {
+          unawaited(cancelBody());
+          unawaited(controller.close());
+        },
+      )..extra = body.extra;
+    } else {
+      _release(response.requestOptions);
+    }
     handler.next(response);
   }
 
@@ -58,6 +147,7 @@ class SchedulerInterceptor extends Interceptor {
   }
 
   void _release(RequestOptions options) {
+    (options.extra.remove('anx.detach') as void Function()?)?.call();
     final host = options.extra.remove('anx.acquired');
     if (host is String) scheduler.release(host);
   }

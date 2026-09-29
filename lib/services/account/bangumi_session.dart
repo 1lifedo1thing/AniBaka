@@ -1,9 +1,10 @@
+import 'package:baka/utils/json_values.dart';
 import 'package:baka/api/bangumi_account_api.dart';
 import 'dart:convert';
+import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:baka/core/account_session.dart';
 import 'package:baka/models/collection.dart';
-import 'package:baka/utils/bgm_utils.dart';
 
 late BangumiSession bangumiSession;
 
@@ -15,6 +16,7 @@ class BangumiSession {
   int generation = 0;
   BangumiAccount? _account;
   Future<String>? _refresh;
+  Completer<void>? _oauthAbort;
   void ensureCurrent(int revision) {
     if (revision != generation) {
       throw const BangumiSyncException('Bangumi 账号已变更');
@@ -65,7 +67,7 @@ class BangumiSession {
     if (value == null || value.isEmpty) return null;
     try {
       return _account = BangumiAccount.fromJson(
-        BgmUtils.parseJsonMap(jsonDecode(value)) ?? const {},
+        jsonDecode(value) as Map<String, dynamic>,
       );
     } catch (_) {
       return null;
@@ -77,26 +79,60 @@ class BangumiSession {
   }
 
   Future<BangumiOAuthStart> beginOAuthLogin() async {
-    return oauth.begin();
+    cancelOAuthLogin();
+    final revision = ++generation;
+    final abort = _oauthAbort = Completer<void>();
+    try {
+      final login = await oauth.begin(abortTrigger: abort.future);
+      ensureCurrent(revision);
+      return login;
+    } catch (_) {
+      if (identical(_oauthAbort, abort)) cancelOAuthLogin();
+      rethrow;
+    }
+  }
+
+  void cancelOAuthLogin() {
+    final abort = _oauthAbort;
+    if (abort == null) return;
+    generation++;
+    _oauthAbort = null;
+    abort.complete();
   }
 
   Future<BangumiAccount> completeOAuthLogin(String state) async {
-    final revision = ++generation;
+    final revision = generation;
+    final abort = _oauthAbort;
+    if (abort == null) throw const BangumiSyncException('Bangumi 登录已取消');
     _account = null;
     _refresh = null;
-    final token = await oauth.waitForCompletion(state);
-    ensureCurrent(revision);
-    final user = await api.getMe(token.accessToken);
-    ensureCurrent(revision);
-    if (user.username.isEmpty) {
-      throw const BangumiSyncException('无法识别 Bangumi 账号');
+    try {
+      final token = await oauth.waitForCompletion(
+        state,
+        abortTrigger: abort.future,
+      );
+      ensureCurrent(revision);
+      final user = await api.getMe(
+        token.accessToken,
+        abortTrigger: abort.future,
+      );
+      ensureCurrent(revision);
+      if (user.username.isEmpty) {
+        throw const BangumiSyncException('无法识别 Bangumi 账号');
+      }
+      await _saveOAuthToken(token);
+      await preferences.setString(accountKey, jsonEncode(user.toJson()));
+      return user;
+    } finally {
+      if (identical(_oauthAbort, abort)) {
+        _oauthAbort = null;
+        abort.complete();
+      }
     }
-    await _saveOAuthToken(token);
-    await preferences.setString(accountKey, jsonEncode(user.toJson()));
-    return user;
   }
 
   Future<BangumiAccount> connect(String rawToken) async {
+    cancelOAuthLogin();
     final revision = ++generation;
     _account = null;
     _refresh = null;
@@ -120,6 +156,7 @@ class BangumiSession {
   }
 
   Future<void> disconnect() async {
+    cancelOAuthLogin();
     generation++;
     _account = null;
     _refresh = null;
@@ -281,7 +318,7 @@ class BangumiSession {
     final value = preferences.getString(snapshotKey);
     if (value == null || value.isEmpty) return {};
     try {
-      final json = BgmUtils.parseJsonMap(jsonDecode(value)) ?? const {};
+      final json = jsonDecode(value) as Map<String, dynamic>;
       return json.map((key, value) => MapEntry(key, value.toString()));
     } catch (_) {
       return {};
@@ -292,9 +329,7 @@ class BangumiSession {
     final value = preferences.getString(pendingPushKey);
     if (value == null || value.isEmpty) return {};
     try {
-      return BgmUtils.parseJsonList(
-        jsonDecode(value),
-      ).map(BgmUtils.toInt).whereType<int>().toSet();
+      return (jsonDecode(value) as List).map(toInt).whereType<int>().toSet();
     } catch (_) {
       return {};
     }
@@ -304,10 +339,8 @@ class BangumiSession {
     final value = preferences.getString(_autoProgressKey);
     if (value == null || value.isEmpty) return {};
     try {
-      final json = BgmUtils.parseJsonMap(jsonDecode(value)) ?? const {};
-      return json.map(
-        (key, value) => MapEntry(key, BgmUtils.toInt(value) ?? 0),
-      );
+      final json = jsonDecode(value) as Map<String, dynamic>;
+      return json.map((key, value) => MapEntry(key, toInt(value) ?? 0));
     } catch (_) {
       return {};
     }

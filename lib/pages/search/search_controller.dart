@@ -1,3 +1,4 @@
+import 'package:baka/source/runtime/source_operation.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -9,6 +10,7 @@ import 'package:baka/api/bgm.dart';
 import 'package:baka/models/custom_source_config.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/services/source/source_repository.dart';
+import 'package:baka/services/matching/source_match_engine.dart';
 import 'package:baka/utils/bgm_utils.dart';
 
 class AnimeSearchController {
@@ -16,6 +18,7 @@ class AnimeSearchController {
   static const int maxHistoryCount = 15;
   static const String _searchHistoryKey = 'search_history';
   static const String noDescriptionText = '暂无描述';
+  static const int aggregateSourceIndex = 1;
 
   static const String _isVerticalLayoutKey = 'search_is_vertical_layout';
 
@@ -28,7 +31,7 @@ class AnimeSearchController {
   final ValueNotifier<bool> showResultsNotifier = ValueNotifier<bool>(false);
   final ValueNotifier<bool> isLoadingNotifier = ValueNotifier<bool>(false);
   final ValueNotifier<List<String>> sourceLabelsNotifier =
-      ValueNotifier<List<String>>(const ['BGM']);
+      ValueNotifier<List<String>>(const ['BGM', '聚合搜索']);
   final ValueNotifier<bool> isVerticalLayoutNotifier = ValueNotifier<bool>(
     false,
   );
@@ -73,6 +76,7 @@ class AnimeSearchController {
 
     sourceLabelsNotifier.value = List<String>.unmodifiable([
       'BGM',
+      '聚合搜索',
       ...builtinAdapterSources.map((s) => s.displayName),
       ...customSources.map((s) => s.name),
     ]);
@@ -100,17 +104,19 @@ class AnimeSearchController {
   bool isActiveSearch(int searchId) => !_disposed && searchId == activeSearchId;
 
   // Input changes invalidate queued work immediately, before the debounce fires.
-  // Running transport work cannot be aborted through every adapter's API.
+  // Cancel source work too, so the newest queued keyword can start immediately.
   void invalidateSearch() {
     activeSearchId++;
     _running?.wanted = false;
+    _running?.operation.cancel();
     _pending?.completion.complete(const []);
     _pending = null;
   }
 
   String _sourceKey(int source) {
     if (source == 0) return 'bgm';
-    final builtin = source - 1;
+    if (source == aggregateSourceIndex) return 'all';
+    final builtin = source - 2;
     if (builtin >= 0 && builtin < builtinAdapterSources.length) {
       return builtinAdapterSources[builtin].key;
     }
@@ -134,7 +140,7 @@ class AnimeSearchController {
     if (_pending?.key == key) return _pending!.completion.future;
     _pending?.completion.complete(const []);
     _pending = null;
-    if (_running?.key == key) {
+    if (_running?.key == key && !_running!.operation.isCancelled) {
       _running!.wanted = true;
       return _running!.completion.future;
     }
@@ -144,6 +150,7 @@ class AnimeSearchController {
       unawaited(_drainSearches(task));
     } else {
       _running!.wanted = false;
+      _running!.operation.cancel();
       _pending = task;
     }
     return task.completion.future;
@@ -158,7 +165,7 @@ class AnimeSearchController {
           final gv = int.tryParse(query.substring(2));
           results = gv == null ? const [] : [await getPostDetail(gv)];
         } else {
-          results = await _searchSelectedSource(task);
+          results = await task.operation.run(() => _searchSelectedSource(task));
         }
         final accepted = !_disposed && task.wanted;
         if (accepted && !_isGvKey(query)) addSearchHistory(query);
@@ -170,6 +177,7 @@ class AnimeSearchController {
           task.completion.complete(const []);
         }
       }
+      task.operation.close();
       final next = _pending;
       _pending = null;
       _running = next;
@@ -187,6 +195,7 @@ class AnimeSearchController {
     final searchKey = task.key.query;
     final source = task.key.source;
     try {
+      if (source == 'all') return await _searchAllSources(task);
       if (source == 'bgm') {
         final subjects = await searchBgmSubjects(searchKey);
         if (_disposed || !task.wanted) return const [];
@@ -214,20 +223,69 @@ class AnimeSearchController {
       }
 
       if (source.isEmpty) return const [];
-      return await _sourceAdapterService.search(
+      final results = await _sourceAdapterService.search(
         source,
         searchKey,
         fallbackDescription: noDescriptionText,
         skipBgmEnhancement: AdapterRegistry.isCustomSource(source),
       );
+      return [for (final result in results) result.toLegacyMap()];
     } catch (error) {
       debugPrint('Search failed for $selectedSourceLabel: $error');
       return const [];
     }
   }
 
-  Future<Map<String, dynamic>?> buildPlayerData(Map<String, dynamic> item) =>
-      _sourceAdapterService.buildPlayerData(item);
+  Future<List<Map<String, dynamic>>> _searchAllSources(_SearchTask task) async {
+    final sources = [
+      ...builtinAdapterSources.map((source) => source.key),
+      ...customSources.map(
+        (source) => AdapterRegistry.customSourceKey(source.id),
+      ),
+    ];
+    final results = <Map<String, dynamic>>[];
+    var next = 0;
+    bool isActive() => !_disposed && task.wanted && !task.operation.isCancelled;
+
+    Future<void> worker() async {
+      while (next < sources.length && isActive()) {
+        final source = sources[next++];
+        final operation = SourceOperation(
+          parent: task.operation,
+          timeout: SourceMatchEngine.sourceSearchBudget,
+        );
+        try {
+          final items = await _sourceAdapterService.search(
+            source,
+            task.key.query,
+            operation: operation,
+            fallbackDescription: noDescriptionText,
+            skipBgmEnhancement: true,
+          );
+          if (!isActive()) return;
+          if (items.isNotEmpty) {
+            results.addAll(items.map((result) => result.toLegacyMap()));
+            resultsNotifier.value = List.unmodifiable(results);
+          }
+        } catch (error) {
+          if (isActive()) debugPrint('Search failed for $source: $error');
+        } finally {
+          operation.cancel();
+          operation.close();
+        }
+      }
+    }
+
+    await Future.wait([
+      for (
+        var i = 0;
+        i < sources.length && i < SourceMatchEngine.autoSearchConcurrency;
+        i++
+      )
+        worker(),
+    ]);
+    return isActive() ? results : const [];
+  }
 
   List<String> _loadHistory() {
     final historyJson = Instances.sp.getString(_searchHistoryKey);
@@ -307,5 +365,6 @@ final class _SearchTask {
   _SearchTask(this.key);
   final ({String source, String query, int revision}) key;
   final completion = Completer<List<Map<String, dynamic>>>();
+  final SourceOperation operation = SourceOperation();
   bool wanted = true;
 }

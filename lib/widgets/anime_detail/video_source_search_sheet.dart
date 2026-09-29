@@ -1,10 +1,12 @@
+import 'package:baka/models/playback_request.dart';
+import 'package:baka/models/bgm.dart';
+import 'package:baka/utils/json_values.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 import 'package:baka/source/source_registry.dart';
 import 'package:baka/app/navigation.dart';
 import 'package:baka/services/source/source_repository.dart';
-import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/widgets/anime_detail/controller/video_source_search_controller.dart';
 
 /// 视频源搜索与线路切换底部滑栏
@@ -28,7 +30,7 @@ class VideoSourceSearchSheet extends StatefulWidget {
     super.key,
   });
 
-  static Future<Map<String, dynamic>?> show(
+  static Future<PlaybackRequest?> show(
     BuildContext context, {
     required Map<String, dynamic> seedData,
     int currentEpisodeIndex = 0,
@@ -36,7 +38,7 @@ class VideoSourceSearchSheet extends StatefulWidget {
     String? currentSource,
     VideoSourceSearchController? searchController,
     String? heroTag,
-  }) => showModalBottomSheet<Map<String, dynamic>>(
+  }) => showModalBottomSheet<PlaybackRequest>(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
@@ -84,12 +86,10 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
     super.initState();
     final seed = widget.seedData;
     _title = seed['title']?.toString().trim() ?? '';
-    _cover = BgmUtils.resolveCoverImage(seed) ?? '';
-    _score = BgmUtils.readFromData(seed).score;
-    final rating = BgmUtils.asMap(
-      BgmUtils.asMap(seed['bgmDetailData'])?['rating'],
-    );
-    _scoreCount = BgmUtils.toInt(rating?['total']);
+    _cover = resolveCoverImage(seed) ?? '';
+    _score = BgmInfo.fromData(seed).score;
+    final rating = asMap(asMap(seed['bgmDetailData'])?['rating']);
+    _scoreCount = toInt(rating?['total']);
 
     _currentIds = {
       for (final key in _identityKeys)
@@ -152,11 +152,7 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
             widget.currentLineIndex) {
       return false;
     }
-    for (final key in _identityKeys) {
-      final val = origin.item.data[key]?.toString().trim();
-      if (val != null && _currentIds.contains(val)) return true;
-    }
-    return false;
+    return _currentIds.contains(origin.item.seriesId);
   }
 
   Future<void> _selectBest() async {
@@ -192,10 +188,11 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
         return;
       }
       final lineIndex = probe.resolvedLineIndex ?? probe.preferredLine;
-      final selectionData = data..['currUrl'] = lineIndex;
+      final selectionData = data.copyWith(lineIndex: lineIndex);
       await _controller.persistMatchMemory(origin.item, selectionData);
       if (mounted) {
         if (_isFromPlayer) {
+          _controller.cancelSearch();
           Navigator.of(context).pop(selectionData);
         } else {
           _navigateToPlayer(selectionData);
@@ -261,11 +258,11 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
     }
   }
 
-  void _navigateToPlayer(Map<String, dynamic> videoData) {
+  void _navigateToPlayer(PlaybackRequest videoData) {
     if (!mounted) return;
     _controller.cancelSearch();
     VideoSourceSearchController.cacheGlobal(_title, _controller);
-    NavigationService.toPlayer(
+    NavigationService.toPlayback(
       context,
       videoData,
       popFirst: true,
@@ -1026,8 +1023,8 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
     if (item.sourceType == 'internal') {
       return '站内';
     }
-    final displayName = item.data['sourceDisplayName']?.toString().trim();
-    if (displayName != null && displayName.isNotEmpty) return displayName;
+    final displayName = item.displayName.trim();
+    if (displayName.isNotEmpty) return displayName;
     return _meta[item.sourceType].label;
   }
 }

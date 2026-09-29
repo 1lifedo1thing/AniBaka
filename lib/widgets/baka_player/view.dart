@@ -5,8 +5,9 @@ import 'package:baka/services/playback/dlss_global_playback.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/models/playback_state.dart';
+import 'package:baka/pages/search/search_controller.dart';
 import 'package:baka/utils/toast_utils.dart';
-import 'package:baka/utils/platform_page_route.dart';
+import 'package:baka/app/platform_page_route.dart';
 import 'package:flutter/material.dart';
 import 'package:baka/widgets/common/platform_tooltip.dart';
 import 'package:flutter/services.dart';
@@ -453,29 +454,35 @@ class _BakaPlayerState extends State<BakaPlayer> {
             ),
           );
         }
-        return ValueListenableBuilder<PlaybackPreferences>(
+        return ValueSelector<
+          PlaybackPreferences,
+          (SubtitleConfig, bool, BoxFit)
+        >(
           valueListenable: widget.controller.preferences,
-          builder: (context, preferences, _) {
+          select: (state) =>
+              (state.subtitleConfig, state.showSubtitle, state.videoFit),
+          builder: (context, preferences) {
             if (!widget.full && _fullscreenRouteActive) {
               return const ColoredBox(
                 color: Colors.black,
                 child: SizedBox.expand(),
               );
             }
-            final cfg = preferences.subtitleConfig;
+            final cfg = preferences.$1;
             final height = MediaQuery.sizeOf(context).height * 0.5;
-            return ValueListenableBuilder<VideoEnhancementState>(
+            return ValueSelector<VideoEnhancementState, FilterQuality>(
               valueListenable: widget.controller.enhancement,
-              builder: (context, enhancement, _) => Video(
+              select: (state) => Platform.isAndroid && state.enabled
+                  ? FilterQuality.medium
+                  : FilterQuality.low,
+              builder: (context, filterQuality) => Video(
                 controller: videoController,
                 controls: NoVideoControls,
                 pauseUponEnteringBackgroundMode: false,
                 resumeUponEnteringForegroundMode: true,
-                filterQuality: Platform.isAndroid && enhancement.enabled
-                    ? FilterQuality.medium
-                    : FilterQuality.low,
+                filterQuality: filterQuality,
                 subtitleViewConfiguration: SubtitleViewConfiguration(
-                  visible: preferences.showSubtitle,
+                  visible: preferences.$2,
                   style: TextStyle(
                     height: 1.5,
                     fontSize: cfg.fontSize,
@@ -501,7 +508,7 @@ class _BakaPlayerState extends State<BakaPlayer> {
                         : 24,
                   ),
                 ),
-                fit: preferences.videoFit,
+                fit: preferences.$3,
               ),
             );
           },
@@ -1339,7 +1346,11 @@ class _BakaPlayerState extends State<BakaPlayer> {
     final title = widget.controller.mediaInfo.value.title;
     if (title.isEmpty) return;
 
-    NavigationService.toSearch(context, keyword: title, initialSource: 2);
+    NavigationService.toSearch(
+      context,
+      keyword: title,
+      initialSource: AnimeSearchController.aggregateSourceIndex,
+    );
   }
 
   String _getCurrentTime() {

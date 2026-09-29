@@ -29,37 +29,37 @@ final class RequestCache<K, V> {
       return cached.value;
     }
 
-    final completion = Completer<V>();
-    final request = completion.future;
-    _pending[key] = request;
-    completion.complete(
-      Future<V>.sync(load).then(
-        (value) {
-          if (identical(_pending[key], request)) {
-            _pending.remove(key);
-            if (shouldCache?.call(value) != false) {
-              _evictForRoom();
-              _entries[key] = _RequestEntry(
-                request,
-                value,
-                ttl == null
-                    ? null
-                    : DateTime.now().millisecondsSinceEpoch +
-                          ttl!.inMilliseconds,
-              );
-            }
+    late final Future<V> request;
+    // Normalize SynchronousFuture before callbacks touch the pending table.
+    // The async loader also captures synchronous throws without a Completer.
+    Future<V> invoke() async => load();
+    request = invoke().then(
+      (value) {
+        if (identical(_pending[key], request)) {
+          _pending.remove(key);
+          if (shouldCache?.call(value) != false) {
+            _evictForRoom();
+            _entries[key] = _RequestEntry(
+              request,
+              value,
+              ttl == null
+                  ? null
+                  : DateTime.now().millisecondsSinceEpoch + ttl!.inMilliseconds,
+            );
           }
-          return value;
-        },
-        onError: (Object error, StackTrace stackTrace) {
-          if (identical(_pending[key], request)) _pending.remove(key);
-          Error.throwWithStackTrace(error, stackTrace);
-        },
-      ),
+        }
+        return value;
+      },
+      onError: (Object error, StackTrace stack) {
+        if (identical(_pending[key], request)) _pending.remove(key);
+        Error.throwWithStackTrace(error, stack);
+      },
     );
-    return request;
+    return _pending[key] = request;
   }
 
+  /// Invalidates retained/pending references; it does not cancel the loader.
+  /// Existing callers still complete, but the old result cannot repopulate us.
   void remove(K key) {
     _entries.remove(key);
     _pending.remove(key);
@@ -71,8 +71,9 @@ final class RequestCache<K, V> {
     final entry = _entries.remove(key);
     if (entry == null) return null;
     if (entry.expiresAt != null &&
-        DateTime.now().millisecondsSinceEpoch >= entry.expiresAt!)
+        DateTime.now().millisecondsSinceEpoch >= entry.expiresAt!) {
       return null;
+    }
     _entries[key] = entry;
     return entry.result;
   }
@@ -92,6 +93,7 @@ final class RequestCache<K, V> {
     );
   }
 
+  /// Invalidates all entries without cancelling in-flight I/O.
   void clear() {
     _entries.clear();
     _pending.clear();
@@ -112,17 +114,15 @@ final class RequestDeduplicator<K, V> {
     final active = _requests[key];
     if (active != null) return active;
 
-    final completion = Completer<V>();
-    final request = completion.future;
-    _requests[key] = request;
-    completion.complete(
-      Future<V>.sync(load).whenComplete(() {
-        if (identical(_requests[key], request)) _requests.remove(key);
-      }),
-    );
-    return request;
+    late final Future<V> request;
+    Future<V> invoke() async => load();
+    request = invoke().whenComplete(() {
+      if (identical(_requests[key], request)) _requests.remove(key);
+    });
+    return _requests[key] = request;
   }
 
+  /// Forgets pending requests; callers and the underlying I/O keep running.
   void clear() => _requests.clear();
 }
 

@@ -10,7 +10,7 @@ import 'package:baka/models/subtitle_config.dart';
 import 'package:baka/services/playback/anime4k.dart';
 import 'package:baka/services/playback/danmaku_controller.dart';
 import 'package:baka/services/playback/playback_settings.dart';
-import 'package:baka/utils/app_logger.dart';
+import 'package:baka/core/app_logger.dart';
 import 'package:baka/utils/duration_utils.dart';
 
 const String mediacodecEmbedRenderer = 'mediacodec_embed';
@@ -611,7 +611,7 @@ class PlaybackController {
     overlay.value = overlay.value.copyWith(
       showJumpPrompt: true,
       jumpPosition: position,
-      jumpPromptText: '继续播放${position.label()}？',
+      jumpPromptText: '继续播放${position.toTimeString(includeDays: true)}？',
     );
     _jumpPromptTimer?.cancel();
     _jumpPromptTimer = Timer(const Duration(seconds: 15), hideJumpPrompt);

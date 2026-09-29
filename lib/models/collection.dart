@@ -1,7 +1,7 @@
 /// 追番收藏数据模型
 library;
 
-import 'package:baka/utils/bgm_utils.dart';
+import 'package:baka/utils/json_values.dart';
 
 /// 收藏状态枚举
 enum CollectionStatus {
@@ -65,32 +65,32 @@ class AnimeCollection {
     this.bgmTitle,
   });
 
-  String get displayTitle =>
-      (postTitle != null && postTitle!.isNotEmpty)
-          ? postTitle!
-          : (bgmTitle ?? '');
+  String get displayTitle => (postTitle != null && postTitle!.isNotEmpty)
+      ? postTitle!
+      : (bgmTitle ?? '');
 
   String get displayCover => bgmImage ?? postCover ?? '';
 
-  factory AnimeCollection.fromJson(Map<String, dynamic> json) => AnimeCollection(
-    id: BgmUtils.toInt(json['id']),
-    userId: BgmUtils.toInt(json['user_id']),
-    postId: BgmUtils.toInt(json['post_id']),
-    bgmId: BgmUtils.toInt(json['bgm_id']),
-    status: BgmUtils.toInt(json['status']) ?? 1,
-    statusText: json['status_text']?.toString(),
-    rating: BgmUtils.toInt(json['rating']) ?? 0,
-    comment: json['comment']?.toString(),
-    epTotal: BgmUtils.toInt(json['ep_total']),
-    epWatched: BgmUtils.toInt(json['ep_watched']),
-    tags: json['tags']?.toString(),
-    isPrivate: json['is_private'] as bool? ?? false,
-    postTitle: json['post_title']?.toString(),
-    postCover: json['post_cover']?.toString(),
-    bgmRating: BgmUtils.toDouble(json['bgm_rating']),
-    bgmImage: json['bgm_image']?.toString(),
-    bgmTitle: json['bgm_title']?.toString(),
-  );
+  factory AnimeCollection.fromJson(Map<String, dynamic> json) =>
+      AnimeCollection(
+        id: toInt(json['id']),
+        userId: toInt(json['user_id']),
+        postId: toInt(json['post_id']),
+        bgmId: toInt(json['bgm_id']),
+        status: toInt(json['status']) ?? 1,
+        statusText: json['status_text']?.toString(),
+        rating: toInt(json['rating']) ?? 0,
+        comment: json['comment']?.toString(),
+        epTotal: toInt(json['ep_total']),
+        epWatched: toInt(json['ep_watched']),
+        tags: json['tags']?.toString(),
+        isPrivate: json['is_private'] as bool? ?? false,
+        postTitle: json['post_title']?.toString(),
+        postCover: json['post_cover']?.toString(),
+        bgmRating: toDouble(json['bgm_rating']),
+        bgmImage: json['bgm_image']?.toString(),
+        bgmTitle: json['bgm_title']?.toString(),
+      );
 
   Map<String, dynamic> toJson({bool includeLocalFields = false}) => {
     if (includeLocalFields && id != null) 'id': id,
@@ -113,32 +113,6 @@ class AnimeCollection {
   };
 }
 
-/// 追番收藏列表响应
-class CollectionListResponse {
-  final List<AnimeCollection> list;
-  final int total;
-  final int page;
-  final int pageSize;
-
-  CollectionListResponse({
-    required this.list,
-    required this.total,
-    required this.page,
-    required this.pageSize,
-  });
-
-  factory CollectionListResponse.fromJson(Map<String, dynamic> json) =>
-      CollectionListResponse(
-        list: (json['list'] as List<dynamic>? ?? const [])
-            .whereType<Map<String, dynamic>>()
-            .map(AnimeCollection.fromJson)
-            .toList(growable: false),
-        total: BgmUtils.toInt(json['total']) ?? 0,
-        page: BgmUtils.toInt(json['page']) ?? 1,
-        pageSize: BgmUtils.toInt(json['page_size']) ?? 20,
-      );
-}
-
 /// 收藏统计
 class CollectionStats {
   final int wish;
@@ -157,14 +131,15 @@ class CollectionStats {
     this.total = 0,
   });
 
-  factory CollectionStats.fromJson(Map<String, dynamic> json) => CollectionStats(
-    wish: BgmUtils.toInt(json['wish']) ?? 0,
-    collect: BgmUtils.toInt(json['collect']) ?? 0,
-    doing: BgmUtils.toInt(json['do']) ?? 0,
-    onHold: BgmUtils.toInt(json['on_hold']) ?? 0,
-    dropped: BgmUtils.toInt(json['dropped']) ?? 0,
-    total: BgmUtils.toInt(json['total']) ?? 0,
-  );
+  factory CollectionStats.fromJson(Map<String, dynamic> json) =>
+      CollectionStats(
+        wish: toInt(json['wish']) ?? 0,
+        collect: toInt(json['collect']) ?? 0,
+        doing: toInt(json['do']) ?? 0,
+        onHold: toInt(json['on_hold']) ?? 0,
+        dropped: toInt(json['dropped']) ?? 0,
+        total: toInt(json['total']) ?? 0,
+      );
 
   int countForStatus(CollectionStatus status) => switch (status) {
     CollectionStatus.wish => wish,

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -53,7 +54,11 @@ abstract final class HlsOfflineRemux {
   );
 
   /// 将清单对应分片合并为单文件，成功返回输出路径。
-  static Future<String?> remuxManifest(String manifestPath) async {
+  static Future<String?> remuxManifest(
+    String manifestPath, {
+    void Function()? checkCancelled,
+  }) async {
+    checkCancelled?.call();
     final file = File(manifestPath);
     if (!await file.exists()) return null;
     final dir = file.parent;
@@ -70,7 +75,11 @@ abstract final class HlsOfflineRemux {
 
     for (final part in plan.parts) {
       if (part.range != null) {
-        await sliceFileToByteRange(File(part.path), part.range!);
+        await sliceFileToByteRange(
+          File(part.path),
+          part.range!,
+          checkCancelled: checkCancelled,
+        );
       }
     }
 
@@ -83,14 +92,21 @@ abstract final class HlsOfflineRemux {
     final sink = partial.openWrite();
     try {
       for (final part in plan.parts) {
+        checkCancelled?.call();
         final src = File(part.path);
         if (!await src.exists()) {
           throw StateError('missing segment ${part.path}');
         }
-        await sink.addStream(src.openRead());
+        await sink.addStream(
+          src.openRead().map((chunk) {
+            checkCancelled?.call();
+            return chunk;
+          }),
+        );
       }
       await sink.flush();
       await sink.close();
+      checkCancelled?.call();
       if (await outFile.exists()) await outFile.delete();
       await partial.rename(outPath);
     } catch (error, stack) {
@@ -99,6 +115,7 @@ abstract final class HlsOfflineRemux {
         await sink.close();
       } catch (_) {}
       if (await partial.exists()) await partial.delete();
+      checkCancelled?.call();
       return null;
     }
 
@@ -110,8 +127,9 @@ abstract final class HlsOfflineRemux {
   /// 将 [file] 裁剪为 byterange 指定的内容。已是目标长度则跳过。
   static Future<bool> sliceFileToByteRange(
     File file,
-    HlsByteRange range,
-  ) async {
+    HlsByteRange range, {
+    void Function()? checkCancelled,
+  }) async {
     if (!await file.exists()) return false;
     final length = await file.length();
     if (length == range.length) return false;
@@ -122,12 +140,18 @@ abstract final class HlsOfflineRemux {
       if (await partial.exists()) await partial.delete();
       await file
           .openRead(range.offset, end)
+          .map((chunk) {
+            checkCancelled?.call();
+            return chunk;
+          })
           .pipe(partial.openWrite(mode: FileMode.writeOnly));
+      checkCancelled?.call();
       await file.delete();
       await partial.rename(file.path);
       return true;
     } catch (_) {
       if (await partial.exists()) await partial.delete();
+      checkCancelled?.call();
       return false;
     }
   }
@@ -157,6 +181,12 @@ abstract final class HlsOfflineRemux {
       final line = raw.trim();
       if (line.isEmpty) continue;
       final upper = line.toUpperCase();
+      // Concatenation cannot decrypt encrypted segments. Keep the local HLS
+      // manifest and keys so the player can handle them instead.
+      if (upper.startsWith('#EXT-X-KEY:') &&
+          _m3u8Attribute(line, 'METHOD')?.value != 'NONE') {
+        return null;
+      }
 
       final br = _standaloneByteRangeRe.firstMatch(line);
       if (br != null) {
@@ -241,4 +271,161 @@ class _RemuxPlan {
   const _RemuxPlan({required this.parts, required this.isFmp4});
   final List<_RemuxPart> parts;
   final bool isFmp4;
+}
+
+// Pure playlist planning: stable manifest order and URL/range deduplication.
+typedef HlsAsset = ({String url, String localName, HlsByteRange? byteRange});
+final _bandwidthRe = RegExp(r'BANDWIDTH=(\d+)');
+
+/// 取码率最高的变体。单趟扫描直接留最大值，不再物化整张变体表再排序。
+Uri? selectHlsVariant(String content, Uri playlistUrl) {
+  Uri? best;
+  var bestBandwidth = -1;
+  int? pendingBandwidth;
+  for (final raw in LineSplitter.split(content)) {
+    final line = raw.trim();
+    if (line.isEmpty) continue;
+    if (line.startsWith('#EXT-X-STREAM-INF')) {
+      pendingBandwidth =
+          int.tryParse(_bandwidthRe.firstMatch(line)?.group(1) ?? '') ?? 0;
+      continue;
+    }
+    if (!line.startsWith('#') &&
+        pendingBandwidth != null &&
+        pendingBandwidth > bestBandwidth) {
+      best = playlistUrl.resolve(line);
+      bestBandwidth = pendingBandwidth;
+    }
+    pendingBandwidth = null;
+  }
+  return best;
+}
+
+({String localContent, List<HlsAsset> assets}) planHlsDownload(
+  Uri playlistUrl,
+  String content,
+) {
+  final rewritten = StringBuffer();
+  final assets = <HlsAsset>[];
+  // 同一 URL 不同 BYTERANGE 必须落成不同本地文件。
+  final localNameByKey = <String, String>{};
+  var segmentIndex = 0;
+  var keyIndex = 0;
+  var mapIndex = 0;
+  HlsByteRange? pendingByteRange;
+
+  String addAsset(String rawUrl, String localName, {HlsByteRange? byteRange}) {
+    final absoluteUrl = playlistUrl.resolve(rawUrl).toString();
+    final key = byteRange == null
+        ? absoluteUrl
+        : '$absoluteUrl#${byteRange.offset}:${byteRange.length}';
+    return localNameByKey.putIfAbsent(key, () {
+      assets.add((
+        url: absoluteUrl,
+        localName: localName,
+        byteRange: byteRange,
+      ));
+      return localName;
+    });
+  }
+
+  for (final line in LineSplitter.split(content)) {
+    final trimmed = line.trim();
+    if (trimmed.toUpperCase().startsWith('#EXT-X-BYTERANGE:')) {
+      pendingByteRange = HlsByteRange.tryParse(
+        trimmed.substring('#EXT-X-BYTERANGE:'.length),
+      );
+      // 离线文件是完整分片，清单里不再保留 BYTERANGE。
+      continue;
+    }
+
+    final isKey = trimmed.startsWith('#EXT-X-KEY');
+    if (isKey || trimmed.startsWith('#EXT-X-MAP')) {
+      final uri = _m3u8Attribute(line, 'URI');
+      if (uri == null || uri.value.isEmpty) {
+        rewritten.writeln(line);
+        continue;
+      }
+      final mapRange = HlsByteRange.tryParse(
+        _m3u8Attribute(line, 'BYTERANGE')?.value,
+      );
+      final localName = addAsset(
+        uri.value,
+        isKey
+            ? 'key_${(keyIndex++).toString().padLeft(3, '0')}'
+                  '${_extensionFromUrl(uri.value, '.key')}'
+            : 'map_${(mapIndex++).toString().padLeft(3, '0')}'
+                  '${_extensionFromUrl(uri.value, '.mp4')}',
+        byteRange: mapRange,
+      );
+      // 去掉 MAP 上的 BYTERANGE，URI 换成本地名。
+      var mapped = line.replaceRange(uri.start, uri.end, 'URI="$localName"');
+      mapped = mapped.replaceAll(
+        RegExp(r',?\s*BYTERANGE=(?:"[^"]+"|[^\s,]+)', caseSensitive: false),
+        '',
+      );
+      rewritten.writeln(mapped);
+      pendingByteRange = null;
+    } else if (trimmed.isEmpty || trimmed.startsWith('#')) {
+      rewritten.writeln(line);
+    } else {
+      final range = pendingByteRange;
+      pendingByteRange = null;
+      final localName = addAsset(
+        trimmed,
+        'segment_${(segmentIndex++).toString().padLeft(5, '0')}${_extensionFromUrl(trimmed, '.ts')}',
+        byteRange: range,
+      );
+      rewritten.writeln(localName);
+    }
+  }
+
+  if (segmentIndex == 0) {
+    throw StateError('m3u8 playlist has no segments');
+  }
+
+  var localContent = rewritten.toString();
+  if (!localContent.contains('#EXT-X-ENDLIST')) {
+    localContent = '$localContent#EXT-X-ENDLIST\n';
+  }
+  return (localContent: localContent, assets: assets);
+}
+
+/// 定位 `NAME=` 属性并同时给出值与可替换区间。
+///
+/// 取代原先「按属性名现编正则、读一次、再编一次同样的正则写回」的两趟写法：
+/// 属性语法只有「引号包裹」和「读到逗号为止」两种，单趟扫描即可，且每行零正则编译。
+({int start, int end, String value})? _m3u8Attribute(String line, String name) {
+  final at = line.indexOf('$name=');
+  if (at < 0) return null;
+
+  final valueStart = at + name.length + 1;
+  if (valueStart < line.length) {
+    final quote = line.codeUnitAt(valueStart);
+    if (quote == 0x22 || quote == 0x27) {
+      final close = line.indexOf(String.fromCharCode(quote), valueStart + 1);
+      if (close > 0) {
+        return (
+          start: at,
+          end: close + 1,
+          value: line.substring(valueStart + 1, close),
+        );
+      }
+    }
+  }
+
+  var end = line.indexOf(',', valueStart);
+  if (end < 0) end = line.length;
+  return (start: at, end: end, value: line.substring(valueStart, end).trim());
+}
+
+String _extensionFromUrl(String url, String fallback) {
+  final path = Uri.tryParse(url)?.path ?? url;
+  final fileName = path.split('/').last;
+  final dot = fileName.lastIndexOf('.');
+  if (dot == -1 || dot == fileName.length - 1) return fallback;
+
+  final extension = fileName.substring(dot);
+  if (extension.length > 8) return fallback;
+  return extension;
 }

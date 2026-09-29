@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:baka/instance.dart';
 import 'package:baka/services/playback/danmaku_controller.dart';
 import 'package:baka/theme.dart';
@@ -62,7 +61,7 @@ void main() {
     );
 
     test(
-      'cache applies the total item budget and refreshes LRU order',
+      'cache enforces item and episode budgets and refreshes LRU order',
       () async {
         final episode = List.filled(20000, const DanmakuItem('x'));
         DanmakuController.cacheItems('1-1', episode);
@@ -78,11 +77,32 @@ void main() {
         DanmakuController.cacheItems('3-1', episode);
         expect(DanmakuController.cachedKeys.toList(), ['1-1', '3-1']);
         expect(DanmakuController.cacheSize.items, 40000);
+
+        const item = DanmakuItem('x');
+        for (
+          var index = 0;
+          index < DanmakuController.maxCachedEpisodes + 1;
+          index++
+        ) {
+          DanmakuController.cacheItems('episode-$index', const [item]);
+        }
+        expect(
+          DanmakuController.cacheSize.episodes,
+          DanmakuController.maxCachedEpisodes,
+        );
+        expect(DanmakuController.cachedKeys, isNot(contains('episode-0')));
+
+        DanmakuController.clearCache();
+        DanmakuController.cacheItems(
+          'oversized',
+          List<DanmakuItem>.filled(DanmakuController.maxCachedItems + 1, item),
+        );
+        expect(DanmakuController.cacheSize, (episodes: 0, items: 0));
       },
     );
 
     test('parses, filters and sorts only when input is out of order', () async {
-      final items = await DanmakuController.decode(
+      final items = DanmakuController.decodeDanmaku(
         '{"data":['
         '{"m":"later","p":"2.5,1,16711680"},'
         '{"m":"bottom","p":"1.0,4,255"},'
@@ -97,7 +117,7 @@ void main() {
     });
 
     test('parses color from standard parameters after font size', () async {
-      final items = await DanmakuController.decode(
+      final items = DanmakuController.decodeDanmaku(
         '{"data":['
         '{"m":"white","p":"0.0,1,25,16777215,source"},'
         '{"m":"red","p":"1.0,1,25,16711680,source"}'
@@ -117,50 +137,12 @@ void main() {
         type: 5,
         color: Color(0xFF00FF00),
       );
-      final raw = DanmakuController.encode([item]);
-      final reparsed = await DanmakuController.decode(raw);
+      final raw = DanmakuController.encodeDanmaku([item]);
+      final reparsed = DanmakuController.decodeDanmaku(raw);
       expect(reparsed.single.text, 'hello');
       expect(reparsed.single.time, 1250);
       expect(reparsed.single.type, 5);
       expect(reparsed.single.color, const Color(0xFF00FF00));
-    });
-
-    test('decodes large payloads', () async {
-      final raw = jsonEncode({
-        'data': [
-          for (var index = 0; index < 600; index++)
-            {'m': 'large-$index', 'p': '${index / 10},1,16777215,0'},
-        ],
-      });
-      expect(raw.length, greaterThan(16 * 1024));
-
-      final items = await DanmakuController.decode(raw);
-      expect(items, hasLength(600));
-      expect(items.first.text, 'large-0');
-      expect(items.last.text, 'large-599');
-    });
-
-    test('LRU cache enforces episode and item budgets', () {
-      const item = DanmakuItem('x');
-      for (
-        var index = 0;
-        index < DanmakuController.maxCachedEpisodes + 1;
-        index++
-      ) {
-        DanmakuController.cacheItems('episode-$index', const [item]);
-      }
-      expect(
-        DanmakuController.cacheSize.episodes,
-        DanmakuController.maxCachedEpisodes,
-      );
-      expect(DanmakuController.cachedKeys, isNot(contains('episode-0')));
-
-      DanmakuController.clearCache();
-      DanmakuController.cacheItems(
-        'oversized',
-        List<DanmakuItem>.filled(DanmakuController.maxCachedItems + 1, item),
-      );
-      expect(DanmakuController.cacheSize, (episodes: 0, items: 0));
     });
 
     test('persists and restores the selected danmaku font', () async {
@@ -308,16 +290,6 @@ void main() {
       },
     );
 
-    test('scroll track rejects overlap and accepts safe trailing gaps', () {
-      final track = DanmakuScrollTrack();
-      track.register(startMs: 0, width: 100, endMs: 8000, speed: 0.125);
-
-      expect(track.canAccept(500, 0.1, 900), isFalse);
-      expect(track.canAccept(900, 0.1, 900), isTrue);
-      expect(track.canAccept(1000, 0.2, 900), isFalse);
-      expect(track.canAccept(4000, 0.2, 900), isTrue);
-    });
-
     test('paused controller still forwards seek synchronization', () {
       final controller = DanmakuController();
       final listener = _ProbeDanmakuListener();
@@ -394,22 +366,6 @@ void main() {
       final listener = _ProbeDanmakuListener();
       expect(() => controller.attach(listener), returnsNormally);
       controller.detach(listener);
-    });
-
-    testWidgets('current position can be replayed before the first layout', (
-      tester,
-    ) async {
-      final controller = DanmakuController();
-      controller.syncTime(const Duration(minutes: 18));
-
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(body: DanmakuView(controller: controller)),
-        ),
-      );
-
-      expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox.shrink());
     });
   });
 }

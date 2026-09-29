@@ -1,6 +1,5 @@
 import 'package:baka/api/api_config.dart';
 import 'package:baka/core/api_transport.dart';
-import 'package:baka/utils/bgm_utils.dart';
 
 String get host => ApiConfig.host;
 
@@ -10,48 +9,56 @@ Future<List<Map<String, dynamic>>> getPost(
   int page,
   int pageSize, {
   String status = 'public',
-  Object uid = '',
-  Object uv = '',
-}) async => BgmUtils.asMapList(
-  await apiTransport.getData<List<dynamic>>(
-    '$host/posts?status=$status&sort=$sort&tag=$tag&uid=$uid&uv=$uv'
-    '&page=$page&pageSize=$pageSize',
-  ),
+  Object? uid,
+  Object? uv,
+}) async => (await apiTransport.getData<List<dynamic>>(
+  Uri.parse('$host/posts')
+      .replace(
+        queryParameters: {
+          'status': status,
+          'sort': sort,
+          'tag': tag,
+          if (uid != null) 'uid': '$uid',
+          if (uv != null) 'uv': '$uv',
+          'page': '$page',
+          'pageSize': '$pageSize',
+        },
+      )
+      .toString(),
+)).cast<Map<String, dynamic>>();
+
+Future<Map<String, dynamic>> getPostDetail(
+  int pid, {
+  Future<void>? abortTrigger,
+}) => apiTransport.getData<Map<String, dynamic>>(
+  '$host/post/$pid',
+  abortTrigger: abortTrigger,
 );
 
-Future<Map<String, dynamic>> getPostDetail(int pid) async =>
-    await apiTransport.getData<Map<String, dynamic>>('$host/post/$pid') ??
-    (throw StateError('无法获取帖子 $pid'));
-
-Future<String> getPlayUrl(String url) =>
-    apiTransport.get('$host/play?url=$url');
-
 Future<List<Map<String, dynamic>>> getSearch(String? key) async =>
-    BgmUtils.asMapList(
-      await apiTransport.getData<List<dynamic>>('$host/search/posts?key=$key'),
-    );
+    (await apiTransport.getData<List<dynamic>>(
+      Uri.parse(
+        '$host/search/posts',
+      ).replace(queryParameters: {'key': ?key}).toString(),
+    )).cast<Map<String, dynamic>>();
 
 Future<List<dynamic>> getComments(
   int? pid,
   int pageSize,
   String? runame, {
   int page = 1,
-}) async =>
-    await apiTransport.getData<List<dynamic>>(
-      '$host/comments?pid=$pid&runame=$runame&page=$page&pageSize=$pageSize',
-    ) ??
-    const [];
-
-Future<String> getDanmu(int bgmId, int episodeIndex, String? title) {
-  final season = title == null ? null : BgmUtils.extractSeason(title);
-  final uri = Uri.https('danmu.anibaka.com', '/danmu/list', {
-    'gv': '$bgmId',
-    'p': '$episodeIndex',
-    if (title != null && title.isNotEmpty) 'title': title,
-    if (season != null) 'season': '$season',
-  });
-  return apiTransport.get(uri.toString());
-}
+}) => apiTransport.getData<List<dynamic>>(
+  Uri.parse('$host/comments')
+      .replace(
+        queryParameters: {
+          if (pid != null) 'pid': '$pid',
+          'runame': ?runame,
+          'page': '$page',
+          'pageSize': '$pageSize',
+        },
+      )
+      .toString(),
+);
 
 Future<bool> addComment(Map<String, Object?> data) async =>
     ApiTransport.accepted(
@@ -61,15 +68,17 @@ Future<bool> addComment(Map<String, Object?> data) async =>
       ),
     );
 
-Future<Map<String, dynamic>> checkAppUpdateApi() async =>
-    await apiTransport.getJson<Map<String, dynamic>>(
-      'https://version.anibaka.com/',
-    ) ??
-    (throw StateError('无法获取版本信息'));
-
-Future<String> updateCommentUv(Object cid, Object? name) async =>
-    (await apiTransport.postJson<Map<String, dynamic>>(
-          '$host/comment/uv?cid=$cid&name=$name',
-          {},
-        ))!['msg']
-        as String;
+Future<String> updateCommentUv(Object cid, Object? name) async {
+  final response = await apiTransport.postJson<Map<String, dynamic>>(
+    Uri.parse('$host/comment/uv')
+        .replace(
+          queryParameters: {'cid': '$cid', if (name != null) 'name': '$name'},
+        )
+        .toString(),
+    const {},
+  );
+  ApiTransport.accepted(response);
+  final message = response['msg'];
+  if (message is! String) throw const FormatException('评论点赞响应缺少 msg');
+  return message;
+}

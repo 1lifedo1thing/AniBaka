@@ -1,3 +1,4 @@
+import 'package:baka/source/runtime/source_operation.dart';
 import 'package:baka/source/models/series.dart';
 import 'package:baka/source/models/source.dart';
 import 'package:baka/source/runtime/request_scheduler.dart';
@@ -26,6 +27,7 @@ abstract class PipelineHost {
   bool isPlayable(String url);
 
   /// 经调度器发起 HTTP 请求，返回响应体文本。
+  /// [operation] defaults to the current source operation inherited by async work.
   ///
   /// [contentType] 为 `form` 时以 `application/x-www-form-urlencoded` 发送 Map
   /// 请求体；默认按 Dio 常规（Map→JSON）处理。
@@ -36,6 +38,7 @@ abstract class PipelineHost {
     Object? body,
     String? referer,
     String? contentType,
+    SourceOperation? operation,
     RequestPriority priority = RequestPriority.search,
   });
 

@@ -42,7 +42,7 @@ class BundledRuleStore {
     'mgnacg': 1,
     'ios_mifun': 4,
     'xifanacg': 4,
-    'tvtfun': 11,
+    'tvtfun': 12,
     'moonci': 1,
     'silisili': 0,
   };
@@ -64,7 +64,7 @@ class BundledRuleStore {
         if (decoded is! Map) {
           throw FormatException('${entry.value}: rule root must be an object');
         }
-        final rule = SourceRule.fromJson(Map<String, dynamic>.from(decoded));
+        final rule = SourceRule.fromJson(decoded.cast<String, dynamic>());
         assert(() {
           final validation = RuleValidator.validate(rule);
           if (!validation.isValid) {

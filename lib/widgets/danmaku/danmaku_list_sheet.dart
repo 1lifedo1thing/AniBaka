@@ -1,6 +1,6 @@
+import 'package:baka/models/bgm.dart';
 import 'package:baka/api/bgm.dart';
 import 'package:baka/services/playback/danmaku_controller.dart';
-import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:flutter/material.dart';
 

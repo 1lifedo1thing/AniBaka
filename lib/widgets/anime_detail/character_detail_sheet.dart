@@ -1,3 +1,4 @@
+import 'package:baka/utils/json_values.dart';
 import 'dart:math' as math;
 
 import 'package:baka/api/bgm.dart';
@@ -28,33 +29,43 @@ class _NetImage extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final proxyUrl = BgmUtils.bgmImageProxyUrl(url, width: proxyWidth);
-    final fallbackBg = (isDark ? Colors.white : Colors.black).withValues(alpha: 0.05);
-    final iconColor = (isDark ? Colors.white : Colors.black).withValues(alpha: 0.24);
+    final fallbackBg = (isDark ? Colors.white : Colors.black).withValues(
+      alpha: 0.05,
+    );
+    final iconColor = (isDark ? Colors.white : Colors.black).withValues(
+      alpha: 0.24,
+    );
 
     final fallback = Container(
       width: width,
       height: height,
       color: fallbackBg,
       alignment: Alignment.center,
-      child: Icon(Icons.person_off, color: iconColor, size: (width != null && width! < 50) ? 18 : 32),
+      child: Icon(
+        Icons.person_off,
+        color: iconColor,
+        size: (width != null && width! < 50) ? 18 : 32,
+      ),
     );
-    final child = proxyUrl.isEmpty ? fallback : CachedNetworkImage(
-        imageUrl: proxyUrl,
-        width: width,
-        height: height,
-        fit: BoxFit.cover,
-        alignment: Alignment.topCenter,
-        memCacheWidth: proxyWidth,
-        placeholder: (_, _) => Container(
-          width: width,
-          height: height,
-          color: fallbackBg,
-        ),
-        errorWidget: (_, _, _) => fallback,
-      );
+    final child = proxyUrl.isEmpty
+        ? fallback
+        : CachedNetworkImage(
+            imageUrl: proxyUrl,
+            width: width,
+            height: height,
+            fit: BoxFit.cover,
+            alignment: Alignment.topCenter,
+            memCacheWidth: proxyWidth,
+            placeholder: (_, _) =>
+                Container(width: width, height: height, color: fallbackBg),
+            errorWidget: (_, _, _) => fallback,
+          );
 
     return borderRadius > 0
-        ? ClipRRect(borderRadius: BorderRadius.circular(borderRadius), child: child)
+        ? ClipRRect(
+            borderRadius: BorderRadius.circular(borderRadius),
+            child: child,
+          )
         : child;
   }
 }
@@ -70,7 +81,8 @@ class CharacterCard extends StatelessWidget {
     final textColor = isDark ? Colors.white : Colors.black87;
     final name = character['name']?.toString() ?? '未知';
     final role = character['role_name']?.toString();
-    final voiceActor = (character['actors'] as List?)
+    final voiceActor =
+        (character['actors'] as List?)
             ?.map((actor) => (actor as Map)['name']?.toString())
             .where((v) => v != null && v.isNotEmpty)
             .join(' / ') ??
@@ -93,7 +105,10 @@ class CharacterCard extends StatelessWidget {
               ],
             ),
             child: _NetImage(
-              url: character['images']?['large']?.toString() ?? character['images']?['grid']?.toString() ?? '',
+              url:
+                  character['images']?['large']?.toString() ??
+                  character['images']?['grid']?.toString() ??
+                  '',
               borderRadius: 12,
               proxyWidth: 240,
             ),
@@ -102,7 +117,12 @@ class CharacterCard extends StatelessWidget {
         const SizedBox(height: 10),
         Text(
           name,
-          style: TextStyle(color: textColor, fontWeight: FontWeight.w600, fontSize: 13, height: 1.2),
+          style: TextStyle(
+            color: textColor,
+            fontWeight: FontWeight.w600,
+            fontSize: 13,
+            height: 1.2,
+          ),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
@@ -110,7 +130,11 @@ class CharacterCard extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             role,
-            style: TextStyle(color: textColor.withValues(alpha: 0.6), fontSize: 11, height: 1.2),
+            style: TextStyle(
+              color: textColor.withValues(alpha: 0.6),
+              fontSize: 11,
+              height: 1.2,
+            ),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
@@ -119,7 +143,11 @@ class CharacterCard extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             'CV: $voiceActor',
-            style: TextStyle(color: textColor.withValues(alpha: 0.4), fontSize: 10, height: 1.2),
+            style: TextStyle(
+              color: textColor.withValues(alpha: 0.4),
+              fontSize: 10,
+              height: 1.2,
+            ),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
@@ -146,8 +174,9 @@ class CharactersSection extends StatefulWidget {
 
 class _CharactersSectionState extends State<CharactersSection>
     with AutomaticKeepAliveClientMixin {
-  late Future<List<Map<String, dynamic>>> _characters =
-      getBgmCharacters(widget.subjectId);
+  late Future<List<Map<String, dynamic>>> _characters = getBgmCharacters(
+    widget.subjectId,
+  );
 
   @override
   bool get wantKeepAlive => true;
@@ -170,19 +199,25 @@ class _CharactersSectionState extends State<CharactersSection>
           return const Center(child: CircularProgressIndicator());
         }
         if (snapshot.hasError) {
-          return Center(child: TextButton(
-            onPressed: () => setState(() {
-              _characters = getBgmCharacters(widget.subjectId);
-            }),
-            child: const Text('角色加载失败，点击重试'),
-          ));
+          return Center(
+            child: TextButton(
+              onPressed: () => setState(() {
+                _characters = getBgmCharacters(widget.subjectId);
+              }),
+              child: const Text('角色加载失败，点击重试'),
+            ),
+          );
         }
         final characters = snapshot.data!;
         if (characters.isEmpty) return const Center(child: Text('暂无角色信息'));
         return LayoutBuilder(
           builder: (context, constraints) {
-            final columns = math.max(3, ((constraints.maxWidth - 8) / 120).floor());
-            final width = (constraints.maxWidth - 8 - 12 * (columns - 1)) / columns;
+            final columns = math.max(
+              3,
+              ((constraints.maxWidth - 8) / 120).floor(),
+            );
+            final width =
+                (constraints.maxWidth - 8 - 12 * (columns - 1)) / columns;
             final textScaler = MediaQuery.textScalerOf(context);
             return GridView.builder(
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 16),
@@ -191,7 +226,9 @@ class _CharactersSectionState extends State<CharactersSection>
                 crossAxisCount: columns,
                 crossAxisSpacing: 12,
                 mainAxisSpacing: 24,
-                mainAxisExtent: width * 4 / 3 + 18 +
+                mainAxisExtent:
+                    width * 4 / 3 +
+                    18 +
                     (textScaler.scale(13) * 1.2).ceilToDouble() +
                     (textScaler.scale(11) * 1.2).ceilToDouble() +
                     (textScaler.scale(10) * 1.2).ceilToDouble(),
@@ -211,8 +248,11 @@ class _CharactersSectionState extends State<CharactersSection>
 }
 
 /// 显示角色详情弹窗的便捷方法
-void showCharacterDetailSheet(BuildContext context, Map<String, dynamic> character) {
-  final characterId = BgmUtils.toInt(
+void showCharacterDetailSheet(
+  BuildContext context,
+  Map<String, dynamic> character,
+) {
+  final characterId = toInt(
     character['id'] ?? character['character_id'] ?? character['characterId'],
   );
   if (characterId == null) return;
@@ -222,10 +262,8 @@ void showCharacterDetailSheet(BuildContext context, Map<String, dynamic> charact
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
     barrierColor: Colors.black.withValues(alpha: 0.8),
-    builder: (_) => CharacterDetailSheet(
-      characterId: characterId,
-      initialData: character,
-    ),
+    builder: (_) =>
+        CharacterDetailSheet(characterId: characterId, initialData: character),
   );
 }
 
@@ -266,10 +304,7 @@ class _CharacterDetailSheetState extends State<CharacterDetailSheet> {
 
       setState(() {
         if (infoData.isNotEmpty) {
-          _charInfo = {
-            ...?_charInfo,
-            ...infoData,
-          };
+          _charInfo = {...?_charInfo, ...infoData};
         }
         _isLoading = false;
       });
@@ -310,88 +345,100 @@ class _CharacterDetailSheetState extends State<CharacterDetailSheet> {
             borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
           ),
           child: CustomScrollView(
-                  controller: scrollController,
-                  physics: const BouncingScrollPhysics(),
-                  slivers: [
-                    SliverToBoxAdapter(
-                      child: Center(
-                        child: Container(
-                          margin: const EdgeInsets.only(top: 12, bottom: 24),
-                          width: 36,
-                          height: 4,
-                          decoration: BoxDecoration(
-                            color: fgColor.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
-                      ),
+            controller: scrollController,
+            physics: const BouncingScrollPhysics(),
+            slivers: [
+              SliverToBoxAdapter(
+                child: Center(
+                  child: Container(
+                    margin: const EdgeInsets.only(top: 12, bottom: 24),
+                    width: 36,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: fgColor.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(2),
                     ),
-                    SliverToBoxAdapter(
-                      child: AppSkeletonizer(
-                        enabled: _isLoading && !hasBasicData,
-                        child: _CharHeader(info: _charInfo ?? {
-                          'name': _isLoading ? '角色名称占位' : '暂无角色信息',
-                        }),
-                      ),
-                    ),
-                    if (summary.isNotEmpty)
-                      SliverToBoxAdapter(
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(24, 24, 24, 0),
-                          child: Text(
-                            summary,
-                            style: TextStyle(
-                              color: textColor.withValues(alpha: 0.8),
-                              fontSize: 14,
-                              height: 1.7,
-                            ),
-                          ),
-                        ),
-                      ),
-                    SliverToBoxAdapter(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 24),
-                        child: Divider(color: fgColor.withValues(alpha: 0.05), height: 1),
-                      ),
-                    ),
-                    SliverToBoxAdapter(
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
-                        child: Text(
-                          '评论',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: textColor),
-                        ),
-                      ),
-                    ),
-                    if (_commentsLoading && _charComments.isEmpty)
-                      const SliverToBoxAdapter(
-                        child: Padding(
-                          padding: EdgeInsets.all(40),
-                          child: Center(child: CircularProgressIndicator.adaptive()),
-                        ),
-                      )
-                    else if (_charComments.isEmpty)
-                      SliverToBoxAdapter(
-                        child: Padding(
-                          padding: const EdgeInsets.all(40),
-                          child: Center(
-                            child: Text(
-                              '暂无评论',
-                              style: TextStyle(color: textColor.withValues(alpha: 0.4), fontSize: 13),
-                            ),
-                          ),
-                        ),
-                      )
-                    else
-                      SliverList(
-                        delegate: SliverChildBuilderDelegate(
-                          (context, index) => _CharCommentItem(comment: _charComments[index]),
-                          childCount: math.min(_charComments.length, 50),
-                        ),
-                      ),
-                    const SliverToBoxAdapter(child: SizedBox(height: 32)),
-                  ],
+                  ),
                 ),
+              ),
+              SliverToBoxAdapter(
+                child: AppSkeletonizer(
+                  enabled: _isLoading && !hasBasicData,
+                  child: _CharHeader(
+                    info:
+                        _charInfo ?? {'name': _isLoading ? '角色名称占位' : '暂无角色信息'},
+                  ),
+                ),
+              ),
+              if (summary.isNotEmpty)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 24, 24, 0),
+                    child: Text(
+                      summary,
+                      style: TextStyle(
+                        color: textColor.withValues(alpha: 0.8),
+                        fontSize: 14,
+                        height: 1.7,
+                      ),
+                    ),
+                  ),
+                ),
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 24),
+                  child: Divider(
+                    color: fgColor.withValues(alpha: 0.05),
+                    height: 1,
+                  ),
+                ),
+              ),
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+                  child: Text(
+                    '评论',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: textColor,
+                    ),
+                  ),
+                ),
+              ),
+              if (_commentsLoading && _charComments.isEmpty)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.all(40),
+                    child: Center(child: CircularProgressIndicator.adaptive()),
+                  ),
+                )
+              else if (_charComments.isEmpty)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.all(40),
+                    child: Center(
+                      child: Text(
+                        '暂无评论',
+                        style: TextStyle(
+                          color: textColor.withValues(alpha: 0.4),
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  ),
+                )
+              else
+                SliverList(
+                  delegate: SliverChildBuilderDelegate(
+                    (context, index) =>
+                        _CharCommentItem(comment: _charComments[index]),
+                    childCount: math.min(_charComments.length, 50),
+                  ),
+                ),
+              const SliverToBoxAdapter(child: SizedBox(height: 32)),
+            ],
+          ),
         );
       },
     );
@@ -410,15 +457,20 @@ class _CharHeader extends StatelessWidget {
     final name = info['name']?.toString() ?? info['nameCN']?.toString() ?? '未知';
     final nameCN = info['nameCN']?.toString() ?? '';
     final role = info['role_name']?.toString();
-    final voiceActor = (info['actors'] as List?)
+    final voiceActor =
+        (info['actors'] as List?)
             ?.map((actor) => (actor as Map)['name']?.toString())
             .where((v) => v != null && v.isNotEmpty)
             .join(' / ') ??
         '';
-    final collects = info['collects'] as int? ?? info['collects_count'] as int? ?? 0;
-    final commentCount = info['comment'] as int? ?? info['comment_count'] as int? ?? 0;
-    final infoStr = info['info']?.toString().replaceAll('\r\n', '\n').trim() ?? '';
-    final imageUrl = (info['images'] as Map?)?['large']?.toString() ??
+    final collects =
+        info['collects'] as int? ?? info['collects_count'] as int? ?? 0;
+    final commentCount =
+        info['comment'] as int? ?? info['comment_count'] as int? ?? 0;
+    final infoStr =
+        info['info']?.toString().replaceAll('\r\n', '\n').trim() ?? '';
+    final imageUrl =
+        (info['images'] as Map?)?['large']?.toString() ??
         (info['images'] as Map?)?['grid']?.toString() ??
         '';
 
@@ -453,27 +505,41 @@ class _CharHeader extends StatelessWidget {
               children: [
                 Text(
                   name,
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: textColor, height: 1.1),
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    color: textColor,
+                    height: 1.1,
+                  ),
                 ),
                 if (nameCN.isNotEmpty && nameCN != name) ...[
                   const SizedBox(height: 4),
                   Text(
                     nameCN,
-                    style: TextStyle(fontSize: 13, color: textColor.withValues(alpha: 0.6)),
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: textColor.withValues(alpha: 0.6),
+                    ),
                   ),
                 ],
                 if (role != null && role.isNotEmpty) ...[
                   const SizedBox(height: 6),
                   Text(
                     '定位：$role',
-                    style: TextStyle(fontSize: 12, color: textColor.withValues(alpha: 0.6)),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: textColor.withValues(alpha: 0.6),
+                    ),
                   ),
                 ],
                 if (voiceActor.isNotEmpty) ...[
                   const SizedBox(height: 2),
                   Text(
                     'CV：$voiceActor',
-                    style: TextStyle(fontSize: 12, color: textColor.withValues(alpha: 0.6)),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: textColor.withValues(alpha: 0.6),
+                    ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -482,7 +548,11 @@ class _CharHeader extends StatelessWidget {
                   const SizedBox(height: 10),
                   Text(
                     infoStr,
-                    style: TextStyle(fontSize: 12, color: textColor.withValues(alpha: 0.4), height: 1.35),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: textColor.withValues(alpha: 0.4),
+                      height: 1.35,
+                    ),
                     maxLines: 3,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -494,9 +564,17 @@ class _CharHeader extends StatelessWidget {
                     runSpacing: 8,
                     children: [
                       if (collects > 0)
-                        _badge(Icons.favorite_rounded, '$collects', const Color(0xFFE57373)),
+                        _badge(
+                          Icons.favorite_rounded,
+                          '$collects',
+                          const Color(0xFFE57373),
+                        ),
                       if (commentCount > 0)
-                        _badge(Icons.chat_bubble_rounded, '$commentCount', const Color(0xFF64B5F6)),
+                        _badge(
+                          Icons.chat_bubble_rounded,
+                          '$commentCount',
+                          const Color(0xFF64B5F6),
+                        ),
                     ],
                   ),
                 ],
@@ -520,7 +598,14 @@ class _CharHeader extends StatelessWidget {
         children: [
           Icon(icon, size: 13, color: color),
           const SizedBox(width: 4),
-          Text(label, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600)),
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
         ],
       ),
     );
@@ -542,7 +627,9 @@ class _CharCommentItem extends StatelessWidget {
     final content = comment['content']?.toString() ?? '';
     final createdAt = comment['createdAt'] as int? ?? 0;
     final replies = (comment['replies'] as List?) ?? const [];
-    final timeStr = createdAt > 0 ? DateTime.fromMillisecondsSinceEpoch(createdAt * 1000).toRelativeTime() : '';
+    final timeStr = createdAt > 0
+        ? DateTime.fromMillisecondsSinceEpoch(createdAt * 1000).toRelativeTime()
+        : '';
     final displayReplies = math.min(replies.length, 3);
 
     return Padding(
@@ -564,9 +651,22 @@ class _CharCommentItem extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(nickname, style: TextStyle(color: textColor, fontSize: 13, fontWeight: FontWeight.w600)),
+                    Text(
+                      nickname,
+                      style: TextStyle(
+                        color: textColor,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                     if (timeStr.isNotEmpty)
-                      Text(timeStr, style: TextStyle(color: textColor.withValues(alpha: 0.4), fontSize: 11)),
+                      Text(
+                        timeStr,
+                        style: TextStyle(
+                          color: textColor.withValues(alpha: 0.4),
+                          fontSize: 11,
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -577,7 +677,11 @@ class _CharCommentItem extends StatelessWidget {
               padding: const EdgeInsets.only(left: 44, top: 8),
               child: Text(
                 BgmUtils.cleanBbCode(content).trim(),
-                style: TextStyle(color: textColor.withValues(alpha: 0.85), fontSize: 13, height: 1.5),
+                style: TextStyle(
+                  color: textColor.withValues(alpha: 0.85),
+                  fontSize: 13,
+                  height: 1.5,
+                ),
               ),
             ),
           if (replies.isNotEmpty)
@@ -594,7 +698,9 @@ class _CharCommentItem extends StatelessWidget {
                   children: [
                     for (int i = 0; i < displayReplies; i++)
                       Padding(
-                        padding: EdgeInsets.only(bottom: i < displayReplies - 1 ? 8 : 0),
+                        padding: EdgeInsets.only(
+                          bottom: i < displayReplies - 1 ? 8 : 0,
+                        ),
                         child: _replyRichText(replies[i] as Map, textColor),
                       ),
                     if (replies.length > 3)
@@ -602,7 +708,11 @@ class _CharCommentItem extends StatelessWidget {
                         padding: const EdgeInsets.only(top: 8),
                         child: Text(
                           '还有 ${replies.length - 3} 条回复',
-                          style: const TextStyle(color: Color(0xFF64B5F6), fontSize: 11, fontWeight: FontWeight.w500),
+                          style: const TextStyle(
+                            color: Color(0xFF64B5F6),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                          ),
                         ),
                       ),
                   ],
@@ -622,11 +732,19 @@ class _CharCommentItem extends StatelessWidget {
         children: [
           TextSpan(
             text: '$rNick  ',
-            style: TextStyle(color: textColor, fontSize: 12, fontWeight: FontWeight.w600),
+            style: TextStyle(
+              color: textColor,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
           ),
           TextSpan(
             text: BgmUtils.cleanBbCode(rContent).trim(),
-            style: TextStyle(color: textColor.withValues(alpha: 0.6), fontSize: 12, height: 1.4),
+            style: TextStyle(
+              color: textColor.withValues(alpha: 0.6),
+              fontSize: 12,
+              height: 1.4,
+            ),
           ),
         ],
       ),

@@ -11,9 +11,17 @@ class PlaybackEpisode {
 
   int get lineCount => lines.length;
 
+  Iterable<int> get availableLineIndexes sync* {
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].isNotEmpty) yield i + 1;
+    }
+  }
+
   String? lineAt(int oneBasedIndex) {
     final index = oneBasedIndex - 1;
-    return index >= 0 && index < lines.length ? lines[index] : null;
+    return index >= 0 && index < lines.length && lines[index].isNotEmpty
+        ? lines[index]
+        : null;
   }
 
   String serialize() =>
@@ -29,11 +37,10 @@ class PlaybackEpisode {
     }
 
     final title = trimmed.substring(0, titleEnd).trim();
-    final parts = trimmed.substring(titleEnd + 1).split(separator);
-    final lines = parts
-        .map((p) => p.trim())
-        .where((p) => p.isNotEmpty)
-        .toList(growable: false);
+    final lines = trimmed.substring(titleEnd + 1).split(separator);
+    for (var i = 0; i < lines.length; i++) {
+      lines[i] = lines[i].trim();
+    }
 
     return PlaybackEpisode(title: title, lines: lines);
   }
@@ -49,42 +56,16 @@ class PlaybackEpisodeCatalog {
   }) {
     final rawList = data['videoList'];
     if (rawList is List<PlaybackEpisode>) return rawList;
-    return parse(
-      rawEpisodesOf(data),
-      mergeDuplicateTitles: mergeDuplicateTitles,
-    );
-  }
-
-  /// 提取未解析的序列化剧集字符串列表。
-  static List<String> rawEpisodesOf(Map data) {
-    final rawList = data['videoList'];
     if (rawList is List) {
-      final out = <String>[];
-      for (final item in rawList) {
-        if (item is PlaybackEpisode) {
-          out.add(item.serialize());
-        } else if (item is String && item.trim().isNotEmpty) {
-          out.add(item.trim());
-        }
-      }
-      if (out.isNotEmpty) return out;
+      final episodes = parse(
+        rawList,
+        mergeDuplicateTitles: mergeDuplicateTitles,
+      );
+      if (episodes.isNotEmpty) return episodes;
     }
-
     final raw = data['videos'];
     if (raw is! String || raw.isEmpty) return const [];
-    return raw
-        .split('\n')
-        .map((line) => line.trim())
-        .where((line) => line.isNotEmpty)
-        .toList(growable: false);
-  }
-
-  /// 获取指定下标的剧集。
-  static PlaybackEpisode? episodeAt(Map data, int index) {
-    if (index < 0) return null;
-    final raw = rawEpisodesOf(data);
-    if (index >= raw.length) return null;
-    return PlaybackEpisode.parse(raw[index]);
+    return parse(raw.split('\n'), mergeDuplicateTitles: mergeDuplicateTitles);
   }
 
   /// 计算剧集总数。
@@ -94,7 +75,8 @@ class PlaybackEpisodeCatalog {
       if (rawList is List<PlaybackEpisode>) return rawList.length;
       var count = 0;
       for (final item in rawList) {
-        if (item is PlaybackEpisode || (item is String && item.trim().isNotEmpty)) {
+        if (item is PlaybackEpisode ||
+            (item is String && item.trim().isNotEmpty)) {
           count++;
         }
       }
@@ -110,24 +92,24 @@ class PlaybackEpisodeCatalog {
 
   /// 解析序列化字符串集合为 [PlaybackEpisode] 列表。
   static List<PlaybackEpisode> parse(
-    Iterable<String> values, {
+    Iterable<Object?> values, {
     bool mergeDuplicateTitles = false,
   }) {
-    if (!mergeDuplicateTitles) {
-      final episodes = <PlaybackEpisode>[];
-      for (final value in values) {
-        final episode = PlaybackEpisode.parse(value);
-        if (episode != null) episodes.add(episode);
-      }
-      return episodes;
-    }
-
-    final slotOf = <String, int>{};
+    final slotOf = mergeDuplicateTitles ? <String, int>{} : null;
     final episodes = <PlaybackEpisode>[];
+    final mergedLines = <int, List<String>>{};
 
     for (final value in values) {
-      final episode = PlaybackEpisode.parse(value);
+      final episode = switch (value) {
+        PlaybackEpisode() => value,
+        String() => PlaybackEpisode.parse(value),
+        _ => null,
+      };
       if (episode == null) continue;
+      if (slotOf == null) {
+        episodes.add(episode);
+        continue;
+      }
 
       final key = _mergeKey(episode.title);
       final slot = slotOf[key];
@@ -136,11 +118,17 @@ class PlaybackEpisodeCatalog {
         episodes.add(episode);
       } else {
         final existing = episodes[slot];
-        episodes[slot] = PlaybackEpisode(
-          title: existing.title,
-          lines: [...existing.lines, ...episode.lines],
-        );
+        (mergedLines[slot] ??= List<String>.of(
+          existing.lines,
+        )).addAll(episode.lines);
       }
+    }
+
+    for (final entry in mergedLines.entries) {
+      episodes[entry.key] = PlaybackEpisode(
+        title: episodes[entry.key].title,
+        lines: entry.value,
+      );
     }
 
     return episodes;
@@ -148,9 +136,11 @@ class PlaybackEpisodeCatalog {
 
   static String _mergeKey(String title) {
     final trimmed = title.trim();
-    final normalized = trimmed.replaceFirst(RegExp(r'^\d+[\s.、:：]*'), '').trim();
+    final normalized = trimmed.replaceFirst(_titlePrefix, '').trim();
     return normalized.isEmpty ? trimmed : normalized;
   }
+
+  static final _titlePrefix = RegExp(r'^\d+[\s.、:：]*');
 
   /// 按搜索词和正倒序过滤剧集下标。
   static List<int> filterIndexes(

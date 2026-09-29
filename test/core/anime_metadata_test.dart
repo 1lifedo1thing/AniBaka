@@ -1,4 +1,5 @@
 import 'package:baka/models/anime_detail_view_data.dart';
+import 'package:baka/models/bgm.dart';
 import 'package:baka/utils/bgm_utils.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -130,26 +131,6 @@ void main() {
       );
     });
 
-    test('pickAvatarUrl prefers medium then large then small', () {
-      expect(
-        BgmUtils.pickAvatarUrl({
-          'small': 'https://example.test/s.jpg',
-          'medium': 'https://example.test/m.jpg',
-          'large': 'https://example.test/l.jpg',
-        }),
-        'https://example.test/m.jpg',
-      );
-      expect(
-        BgmUtils.pickAvatarUrl({'small': 'https://example.test/s.jpg'}),
-        'https://example.test/s.jpg',
-      );
-      expect(
-        BgmUtils.pickAvatarUrl('https://example.test/a.jpg'),
-        'https://example.test/a.jpg',
-      );
-      expect(BgmUtils.pickAvatarUrl(null), '');
-    });
-
     group('pickAniBakaTmdbBackdrop', () {
       test(
         'prefers the Chinese TMDB backdrop over BGM and other languages',
@@ -177,7 +158,7 @@ void main() {
           };
 
           expect(
-            BgmUtils.pickAniBakaTmdbBackdrop(detail),
+            AnimeDetailViewData.pickTmdbBackdrop(detail),
             'https://example.test/tmdb-zh.jpg',
           );
         },
@@ -197,7 +178,7 @@ void main() {
         };
 
         expect(
-          BgmUtils.pickAniBakaTmdbBackdrop(detail),
+          AnimeDetailViewData.pickTmdbBackdrop(detail),
           'https://example.test/tmdb-ja-thumb.jpg',
         );
       });
@@ -211,7 +192,7 @@ void main() {
           },
         };
 
-        expect(BgmUtils.pickAniBakaTmdbBackdrop(detail), isNull);
+        expect(AnimeDetailViewData.pickTmdbBackdrop(detail), isNull);
       });
 
       test('ignores posters when picking the backdrop', () {
@@ -231,7 +212,7 @@ void main() {
         };
 
         expect(
-          BgmUtils.pickAniBakaTmdbBackdrop(detail),
+          AnimeDetailViewData.pickTmdbBackdrop(detail),
           'https://example.test/tmdb-backdrop.jpg',
         );
       });

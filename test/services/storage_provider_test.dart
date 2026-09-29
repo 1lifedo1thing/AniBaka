@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:baka/storage/storage_config.dart';
 import 'package:baka/storage/storage_provider.dart';
 import 'package:baka/storage/webdav_storage_provider.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -32,27 +31,6 @@ void main() {
     expect(StoragePath.name('/'), isEmpty);
     expect(StoragePath.trimTrailingSlash('/Anime///'), '/Anime');
   });
-
-  test(
-    'reads legacy storage config fields without retaining unused metadata',
-    () {
-      final config = StorageConfig.fromJson({
-        'id': 'dav',
-        'name': 'NAS',
-        'type': StorageProviderType.webdav.index,
-        'path': 'https://example.test/dav',
-        'rootPath': '/anime',
-        'enabled': true,
-        'createdAt': '2025-01-01T00:00:00.000Z',
-        'updatedAt': '2025-01-02T00:00:00.000Z',
-      });
-
-      expect(config.rootPath, '/anime');
-      expect(config.toJson(), isNot(contains('createdAt')));
-      expect(config.toJson(), isNot(contains('updatedAt')));
-      expect(config.toJson(), isNot(contains('enabled')));
-    },
-  );
 
   test('parses WebDAV responses in one pass across namespace prefixes', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);

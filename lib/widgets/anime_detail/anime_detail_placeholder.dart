@@ -1,3 +1,5 @@
+import 'package:baka/models/bgm.dart';
+import 'package:baka/utils/json_values.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -7,7 +9,6 @@ import 'package:baka/api/anibaka_api.dart';
 import 'package:baka/models/anime_detail_view_data.dart';
 import 'package:baka/models/collection.dart';
 import 'package:baka/services/collection/collection_repository.dart';
-import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:baka/widgets/anime/post_card.dart';
 import 'package:baka/app/navigation.dart';
@@ -74,8 +75,8 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
   }
 
   void _rebuildDetail() {
-    _bgmInfo = BgmUtils.readFromData(widget.data);
-    _detailData = BgmUtils.asMap(widget.data['bgmDetailData']) ?? _detailData;
+    _bgmInfo = BgmInfo.fromData(widget.data);
+    _detailData = asMap(widget.data['bgmDetailData']) ?? _detailData;
     _detail = AnimeDetailViewData.from(
       source: widget.data,
       bgmInfo: _bgmInfo,
@@ -87,19 +88,18 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
   @override
   void initState() {
     super.initState();
-    _postId = BgmUtils.toInt(widget.data['id']);
-    _initialComments = BgmUtils.asMapList(widget.data['bgmComments']);
+    _postId = toInt(widget.data['id']);
+    _initialComments = asMapList(widget.data['bgmComments']);
     _initialCommentTotal =
-        BgmUtils.toInt(widget.data['bgmCommentTotal']) ??
-        _initialComments.length;
+        toInt(widget.data['bgmCommentTotal']) ?? _initialComments.length;
     // Hydrate from the API-owned cache before constructing the first frame.
     // A warm request still returns a Future; queuing its .then callback behind
     // the transition would incorrectly animate default content for 320 ms.
-    final subjectId = BgmUtils.readFromData(widget.data).subjectId;
+    final subjectId = BgmInfo.fromData(widget.data).subjectId;
     if (subjectId != null) {
       _anibakaData = AniBakaApi.peekAnimeDetail(subjectId);
-      _detailData = BgmUtils.asMap(widget.data['bgmDetailData']) ??
-          peekBgmSubject(subjectId);
+      _detailData =
+          asMap(widget.data['bgmDetailData']) ?? peekBgmSubject(subjectId);
     }
     _rebuildDetail();
 
@@ -157,12 +157,21 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
   }
 
   Future<void> _loadInitialData() async {
+    var resolved = _bgmInfo;
     // Phase 1: 解析 bgmId（若未知）
     if (_subjectId == null) {
       try {
-        await resolveBgmFromData(widget.data);
+        resolved = await resolveBgmFromData(widget.data);
+        if (!mounted) return;
+        if (resolved.subjectId != null) {
+          widget.data['bgmId'] = resolved.subjectId;
+        }
+        if (resolved.score != null) widget.data['score'] = resolved.score;
+        if (resolved.imageUrl != null) {
+          widget.data['bgmImageUrl'] = resolved.imageUrl;
+        }
         _updateInitialState(() {
-          _bgmInfo = BgmUtils.readFromData(widget.data);
+          _bgmInfo = resolved;
           _rebuildDetail();
         });
       } catch (e) {
@@ -173,7 +182,7 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
     // Subject resolution is available to requests even while its UI update is
     // queued until the transition settles.
     if (!mounted) return;
-    final bgmId = BgmUtils.readFromData(widget.data).subjectId;
+    final bgmId = resolved.subjectId;
     if (bgmId == null) {
       _updateInitialState(() => _isCollectionLoading = false);
       return;
@@ -186,7 +195,7 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
       AniBakaApi.getAnimeDetail(bgmId)
           .then((data) {
             _updateInitialState(() {
-              _anibakaData = BgmUtils.asMap(data);
+              _anibakaData = asMap(data);
               _rebuildDetail();
             });
           })
@@ -345,7 +354,8 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
   Widget _buildContent() {
     final isWide = MediaQuery.of(context).size.width > 800;
     final platform = Theme.of(context).platform;
-    final useBackdrop = isWide &&
+    final useBackdrop =
+        isWide &&
         (platform == TargetPlatform.windows ||
             platform == TargetPlatform.macOS ||
             platform == TargetPlatform.linux);
@@ -364,7 +374,9 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
             children: [
               AnimeDetailBackground(
                 coverUrl: _detail.coverUrl,
-                backgroundUrl: useBackdrop ? _detail.backgroundUrl : _detail.coverUrl,
+                backgroundUrl: useBackdrop
+                    ? _detail.backgroundUrl
+                    : _detail.coverUrl,
                 loadBackground: useBackdrop && _initialRouteTransitionFinished,
                 cacheWidth: isWide ? 1280 : 720,
               ),

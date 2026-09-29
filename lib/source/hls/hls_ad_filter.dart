@@ -1,3 +1,4 @@
+import 'package:baka/source/runtime/source_operation.dart';
 import 'dart:async';
 
 import 'package:baka/source/hls/mpeg_ts_fingerprint.dart';
@@ -108,7 +109,7 @@ class HlsPlaylist {
   /// 都不算在内，删除分片时它们会原样留下。
   static bool _startsSegmentBlock(String line) {
     return line.startsWith('#EXTINF') ||
-        line.startsWith('#EXT-X-DISCONTINUITY') ||
+        line == '#EXT-X-DISCONTINUITY' ||
         line.startsWith('#EXT-X-BYTERANGE') ||
         line.startsWith('#EXT-X-PROGRAM-DATE-TIME') ||
         line.startsWith('#EXT-X-DATERANGE') ||
@@ -169,6 +170,18 @@ abstract final class HlsAdFilter {
     required HlsSegmentFingerprintProbe probe,
     int concurrency = 6,
   }) async {
+    SourceOperation.check();
+    if (RegExp(
+      r'^[ \t]*#EXT-X-(KEY|MAP|BYTERANGE):',
+      multiLine: true,
+    ).hasMatch(manifest)) {
+      return HlsAdFilterOutcome(
+        manifest: manifest,
+        removedSegments: 0,
+        removedSeconds: 0,
+        detail: '加密、初始化段或字节范围清单保持原样',
+      );
+    }
     final playlist = HlsPlaylist.parse(manifest, manifestUri);
     final segments = playlist.segments;
     final groups = playlist.groups();
@@ -298,9 +311,26 @@ abstract final class HlsAdFilter {
         droppedLines.add(line);
       }
     }
+    // Move the group's boundary onto its first retained segment when its head
+    // was removed. Never treat the playlist-level sequence tag as a segment.
+    final movedBoundaries = <int>{};
+    for (final group in groups) {
+      if (!segments[group.first].discontinuityBefore ||
+          !drop.contains(group.first)) {
+        continue;
+      }
+      for (final index in group.indices) {
+        if (!drop.contains(index)) {
+          movedBoundaries.add(segments[index].firstLine);
+          break;
+        }
+      }
+    }
     final filtered = [
-      for (var i = 0; i < playlist.lines.length; i++)
+      for (var i = 0; i < playlist.lines.length; i++) ...[
+        if (movedBoundaries.contains(i)) '#EXT-X-DISCONTINUITY',
         if (!droppedLines.contains(i)) playlist.lines[i],
+      ],
     ].join('\n');
 
     return HlsAdFilterOutcome(
@@ -319,8 +349,12 @@ abstract final class HlsAdFilter {
     Uri uri,
   ) async {
     try {
-      return await probe(uri);
+      SourceOperation.check();
+      final result = await probe(uri);
+      SourceOperation.check();
+      return result;
     } catch (_) {
+      SourceOperation.check();
       return null;
     }
   }

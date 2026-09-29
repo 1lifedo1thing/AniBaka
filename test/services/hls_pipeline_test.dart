@@ -1,9 +1,14 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
 
+import 'package:baka/core/app_storage.dart';
+import 'package:baka/models/download_task.dart';
+import 'package:baka/services/download/download_manager.dart';
 import 'package:baka/source/models/source_rule.dart';
 import 'package:baka/source/pipeline_source_adapter.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hive/hive.dart';
 
 import '../support/ts_prefix_fixtures.dart';
 
@@ -182,6 +187,141 @@ Future<({int status, List<int> bytes})> _get(String url) async {
 String _decode(List<int> bytes) => utf8.decode(bytes);
 
 void main() {
+  group('offline download lifecycle', () {
+    late Directory directory;
+    late HttpServer server;
+    late DownloadService service;
+    late Map<int, int> requests;
+    late Completer<void> blocked;
+    Completer<void>? release;
+    var active = 0, maximum = 0;
+    setUp(() async {
+      directory = await Directory.systemTemp.createTemp('hls-download-');
+      Hive.init(directory.path);
+      await Hive.openBox<List>(AppStorage.downloadTasksBoxName);
+      service = DownloadService();
+      await service.init();
+      requests = {};
+      blocked = Completer<void>();
+      release = null;
+      active = maximum = 0;
+      server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((request) async {
+        final response = request.response;
+        if (request.uri.path == '/index.m3u8') {
+          response.write(
+            '#EXTM3U\n#EXT-X-TARGETDURATION:4\n'
+            '${List.generate(12, (i) => '#EXTINF:4,\n$i.ts\n').join()}'
+            '#EXT-X-ENDLIST\n',
+          );
+          await response.close();
+          return;
+        }
+        final index = int.parse(request.uri.path.substring(1).split('.').first);
+        requests.update(index, (count) => count + 1, ifAbsent: () => 1);
+        active++;
+        if (active > maximum) maximum = active;
+        if (index == 4 && !blocked.isCompleted) blocked.complete();
+        try {
+          if (index > 0 && release != null) await release!.future;
+          response.contentLength = 8 * 4096;
+          for (var chunk = 0; chunk < 8; chunk++) {
+            response.add(List.filled(4096, index));
+            await response.flush();
+            // Simulate a streaming origin; this delay belongs only to the fixture.
+            await Future<void>.delayed(const Duration(milliseconds: 5));
+          }
+          await response.close();
+        } catch (_) {
+          // Pausing and deleting deliberately close these responses early.
+        } finally {
+          active--;
+        }
+      });
+    });
+    tearDown(() async {
+      if (release != null && !release!.isCompleted) release!.complete();
+      await service.dispose();
+      await server.close(force: true);
+      await Hive.close();
+      await directory.delete(recursive: true);
+    });
+    DownloadTask task() => DownloadTask(
+      id: 'fixture',
+      url: 'http://127.0.0.1:${server.port}/index.m3u8',
+      filename: 'fixture.m3u8',
+      title: 'Fixture',
+      filePath: '${directory.path}/fixture.hls/index.m3u8',
+    );
+
+    test(
+      'four workers preserve manifest order and throttle chunk notifications',
+      () async {
+        final download = task();
+        final completed = Completer<void>();
+        service.onCompleted = (_) => completed.complete();
+        var notifications = 0;
+        download.progressNotifier.addListener(() => notifications++);
+        final elapsed = Stopwatch()..start();
+        service.addTasks([download]);
+        await completed.future.timeout(const Duration(seconds: 5));
+        expect(maximum, inInclusiveRange(2, 4));
+        expect(requests.values, everyElement(1));
+        expect(requests, hasLength(12));
+        expect(download.progress, 1);
+        expect(
+          notifications,
+          lessThanOrEqualTo(elapsed.elapsedMilliseconds ~/ 150 + 5),
+        );
+        expect(await File(download.filePath!).readAsBytes(), [
+          for (var i = 0; i < 12; i++) ...List.filled(8 * 4096, i),
+        ]);
+      },
+    );
+
+    test(
+      'pause drains requests, restart reuses completed segments, delete drains before removal',
+      () async {
+        release = Completer<void>();
+        final download = task();
+        service.addTasks([download]);
+        await blocked.future.timeout(const Duration(seconds: 5));
+        service.pause(download);
+        await service.dispose().timeout(const Duration(seconds: 3));
+        expect(download.status, DownloadStatus.paused);
+        release!.complete();
+        service = DownloadService();
+        await service.init();
+        final restored = service.tasks.single;
+        final completed = Completer<void>();
+        service.onCompleted = (_) => completed.complete();
+        service.resume(restored);
+        await completed.future.timeout(const Duration(seconds: 5));
+        expect(requests[0], 1, reason: 'Completed segment survives restart');
+        expect(await File(restored.filePath!).length(), 12 * 8 * 4096);
+
+        // A different active download is deleted while responses are blocked.
+        release = Completer<void>();
+        blocked = Completer<void>();
+        final deleting = DownloadTask(
+          id: 'delete',
+          url: download.url,
+          filename: 'delete.m3u8',
+          title: 'Delete',
+          filePath: '${directory.path}/delete.hls/index.m3u8',
+        );
+        service.addTasks([deleting]);
+        await blocked.future.timeout(const Duration(seconds: 5));
+        service.delete(deleting);
+        await service.dispose().timeout(const Duration(seconds: 3));
+        expect(
+          await Directory('${directory.path}/delete.hls').exists(),
+          isFalse,
+        );
+      },
+    );
+  });
+
   test('开启 filterHlsAds：主清单落到变体，丢掉整组广告后再物化', () async {
     final cdn = await _FakeCdn.start();
     final adapter = PipelineSourceAdapter(

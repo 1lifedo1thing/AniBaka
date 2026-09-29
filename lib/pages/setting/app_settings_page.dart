@@ -23,7 +23,7 @@ import 'package:baka/pages/source/source_management_page.dart';
 import 'package:baka/services/account/bangumi_session.dart';
 import 'package:baka/services/account/login_service.dart';
 import 'package:baka/theme.dart';
-import 'package:baka/utils/app_logger.dart';
+import 'package:baka/core/app_logger.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:baka/widgets/dialog/input_dialog.dart';
 import 'package:baka/widgets/platform/tv/tv_log_export_dialog.dart';
@@ -104,7 +104,12 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
         );
       }
     } catch (e, st) {
-      AppLogger.instance.error('Export logs failed', tag: 'Settings', error: e, stackTrace: st);
+      AppLogger.instance.error(
+        'Export logs failed',
+        tag: 'Settings',
+        error: e,
+        stackTrace: st,
+      );
       if (mounted) showSnackBar('导出日志失败：$e', isError: true);
     } finally {
       if (mounted) setState(() => _isExportingLogs = false);
@@ -125,7 +130,12 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
         ShareResultStatus.unavailable => '已打开系统分享',
       });
     } catch (e, st) {
-      AppLogger.instance.error('Share logs failed', tag: 'Settings', error: e, stackTrace: st);
+      AppLogger.instance.error(
+        'Share logs failed',
+        tag: 'Settings',
+        error: e,
+        stackTrace: st,
+      );
       if (mounted) showSnackBar('分享日志失败：$e', isError: true);
     } finally {
       if (mounted) setState(() => _isSharingLogs = false);
@@ -153,7 +163,8 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
     final ok = await showAppConfirmDialog(
       context,
       title: '退出 AniBaka',
-      content: '退出后，播放历史将不再保存到 AniBaka 云端，也不能回复 AniBaka 评论。已连接的 Bangumi 账号不会被退出，其收藏与集数同步仍可继续使用。',
+      content:
+          '退出后，播放历史将不再保存到 AniBaka 云端，也不能回复 AniBaka 评论。已连接的 Bangumi 账号不会被退出，其收藏与集数同步仍可继续使用。',
       confirmText: '退出',
       isDestructive: true,
     );
@@ -177,7 +188,10 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
                 children: [
                   Text(AppState.themeModeLabels[i]),
                   if (_appState.themeMode == i)
-                    Icon(Icons.check_rounded, color: Theme.of(context).colorScheme.primary),
+                    Icon(
+                      Icons.check_rounded,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
                 ],
               ),
             ),
@@ -237,8 +251,10 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
       final bgmLabel = !bangumiSession.isConnected
           ? '未关联'
           : (bgm?.nickname.isNotEmpty == true
-              ? bgm!.nickname
-              : (bgm?.username.isNotEmpty == true ? '@${bgm!.username}' : '已关联'));
+                ? bgm!.nickname
+                : (bgm?.username.isNotEmpty == true
+                      ? '@${bgm!.username}'
+                      : '已关联'));
 
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,

@@ -51,8 +51,13 @@ class SiteProbeService {
     r'token|auth|sign|key|password|cookie',
     caseSensitive: false,
   );
-  static final RegExp _exceptionPrefixPattern = RegExp(r'^\w+(?:Exception)?:\s*');
-  static final RegExp _bearerPattern = RegExp(r'Bearer\s+\S+', caseSensitive: false);
+  static final RegExp _exceptionPrefixPattern = RegExp(
+    r'^\w+(?:Exception)?:\s*',
+  );
+  static final RegExp _bearerPattern = RegExp(
+    r'Bearer\s+\S+',
+    caseSensitive: false,
+  );
   static final RegExp _urlPattern = RegExp(r'https?://[^\s]+');
 
   static const _sensitiveHeaders = {
@@ -70,10 +75,12 @@ class SiteProbeService {
   final Map<String, List<Cookie>> _cookies = {};
   bool _cancelled = false;
 
-  void cancel() {
+  void dispose() {
+    if (_cancelled) return;
     _cancelled = true;
     _webViewScope.cancel();
     _client.close(force: true);
+    _cookies.clear();
   }
 
   Future<Map<String, dynamic>> execute(SiteProbeRequest request) async {
@@ -89,6 +96,7 @@ class SiteProbeService {
     if (request.render) {
       if (method != 'GET') throw const FormatException('WebView 探测只允许 GET');
       await validatePublicUri(uri);
+      _throwIfCancelled();
       final (html, _) = await WebViewAdapter.getPageContentWithCookies(
         uri.toString(),
         timeout: const Duration(seconds: 30),
@@ -112,65 +120,77 @@ class SiteProbeService {
 
     for (var redirect = 0; redirect <= 3; redirect++) {
       await validatePublicUri(uri);
-      final req = await _client
-          .openUrl(method, uri)
-          .timeout(const Duration(seconds: 10));
-      req.followRedirects = false;
-      req.headers.set(HttpHeaders.userAgentHeader, 'AniBaka-AI-Rule-Probe/1.0');
-      req.headers.set(HttpHeaders.acceptHeader, '*/*');
-      for (final entry in request.headers.entries) {
-        if (_sensitiveHeaders.contains(entry.key.toLowerCase())) continue;
-        req.headers.set(entry.key, entry.value);
-      }
-      final cookies = _cookies[uri.host];
-      if (cookies != null && cookies.isNotEmpty) req.cookies.addAll(cookies);
-      if (method == 'POST' && request.body != null) {
-        final bytes = utf8.encode(request.body!);
-        if (bytes.length > maxRequestBodyBytes) {
-          throw const FormatException('探测请求体过大');
+      _throwIfCancelled();
+      final req = await _client.openUrl(method, uri);
+      final timer = Timer(
+        const Duration(seconds: 12),
+        () => req.abort(TimeoutException('Site probe timed out')),
+      );
+      try {
+        req.followRedirects = false;
+        req.headers.set(
+          HttpHeaders.userAgentHeader,
+          'AniBaka-AI-Rule-Probe/1.0',
+        );
+        req.headers.set(HttpHeaders.acceptHeader, '*/*');
+        for (final entry in request.headers.entries) {
+          if (_sensitiveHeaders.contains(entry.key.toLowerCase())) continue;
+          req.headers.set(entry.key, entry.value);
         }
-        req.add(bytes);
-      }
-
-      final response = await req.close().timeout(const Duration(seconds: 12));
-      if (response.cookies.isNotEmpty) {
-        _cookies[uri.host] = response.cookies;
-      }
-      if (response.isRedirect && response.headers.value('location') != null) {
-        if (redirect == 3) throw StateError('探测重定向次数过多');
-        uri = uri.resolve(response.headers.value('location')!);
-        await response.drain<void>();
-        continue;
-      }
-
-      final builder = BytesBuilder(copy: false);
-      var currentLen = 0;
-      var truncated = false;
-      await for (final chunk in response) {
-        if (currentLen + chunk.length <= maxResponseBytes) {
-          builder.add(chunk);
-          currentLen += chunk.length;
-        } else {
-          final remaining = maxResponseBytes - currentLen;
-          if (remaining > 0) builder.add(chunk.sublist(0, remaining));
-          truncated = true;
-          break;
+        final cookies = _cookies[uri.host];
+        if (cookies != null && cookies.isNotEmpty) req.cookies.addAll(cookies);
+        if (method == 'POST' && request.body != null) {
+          final bytes = utf8.encode(request.body!);
+          if (bytes.length > maxRequestBodyBytes) {
+            throw const FormatException('探测请求体过大');
+          }
+          req.add(bytes);
         }
-      }
 
-      return {
-        'request': {'method': method, 'url': safeUrl(uri)},
-        'status': response.statusCode,
-        'finalUrl': safeUrl(uri),
-        'contentType': response.headers.contentType?.toString() ?? '',
-        'headers': {
-          for (final name in const ['content-type', 'location', 'server'])
-            if (response.headers.value(name) != null)
-              name: response.headers.value(name),
-        },
-        'body': utf8.decode(builder.takeBytes(), allowMalformed: true),
-        'truncated': truncated,
-      };
+        final response = await req.close();
+        if (response.cookies.isNotEmpty) {
+          _cookies[uri.host] = response.cookies;
+        }
+        if (response.isRedirect && response.headers.value('location') != null) {
+          if (redirect == 3) throw StateError('探测重定向次数过多');
+          uri = uri.resolve(response.headers.value('location')!);
+          await response.drain<void>();
+          continue;
+        }
+
+        final builder = BytesBuilder(copy: false);
+        var currentLen = 0;
+        var truncated = false;
+        await for (final chunk in response) {
+          if (currentLen + chunk.length <= maxResponseBytes) {
+            builder.add(chunk);
+            currentLen += chunk.length;
+          } else {
+            final remaining = maxResponseBytes - currentLen;
+            if (remaining > 0) builder.add(chunk.sublist(0, remaining));
+            truncated = true;
+            break;
+          }
+        }
+
+        return {
+          'request': {'method': method, 'url': safeUrl(uri)},
+          'status': response.statusCode,
+          'finalUrl': safeUrl(uri),
+          'contentType': response.headers.contentType?.toString() ?? '',
+          'headers': {
+            for (final name in const ['content-type', 'location', 'server'])
+              if (response.headers.value(name) != null)
+                name: response.headers.value(name),
+          },
+          'body': utf8.decode(builder.takeBytes(), allowMalformed: true),
+          'truncated': truncated,
+        };
+      } finally {
+        timer.cancel();
+        req.done.ignore();
+        req.abort();
+      }
     }
     throw StateError('探测失败');
   }
@@ -246,8 +266,9 @@ class SiteProbeService {
     }
     final query = <String, String>{};
     for (final entry in uri.queryParameters.entries) {
-      query[entry.key] =
-          _sensitivePattern.hasMatch(entry.key) ? '<redacted>' : entry.value;
+      query[entry.key] = _sensitivePattern.hasMatch(entry.key)
+          ? '<redacted>'
+          : entry.value;
     }
     return uri
         .replace(userInfo: '', fragment: '', queryParameters: query)
@@ -265,4 +286,3 @@ class SiteProbeService {
     return text.length <= maxLength ? text : '${text.substring(0, maxLength)}…';
   }
 }
-

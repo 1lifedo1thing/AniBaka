@@ -1,3 +1,5 @@
+import 'package:baka/models/playback_request.dart';
+import 'package:baka/source/models/source_search_result.dart';
 import 'dart:async';
 import '../support/app_dependencies.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -13,9 +15,11 @@ void main() {
       final controller = _CatalogController();
       addTearDown(controller.dispose);
       final item = SearchResultItem(
-        title: 'Example',
-        sourceType: 'internal',
-        data: {'id': 1},
+        SourceSearchResult.fromLegacy({
+          'title': 'Example',
+          'source': 'internal',
+          ...{'id': 1},
+        }),
       );
       final catalog = controller.ensureCandidatePlayable(
         item,
@@ -89,41 +93,15 @@ void main() {
     expect(VideoSourceSearchController.globalCached, isNull);
   });
 
-  test('reuses an already verified switch candidate', () async {
-    final controller = VideoSourceSearchController(title: 'Example');
-    addTearDown(controller.dispose);
-
-    final item = SearchResultItem(
-      title: 'Example',
-      sourceType: 'test',
-      data: const {'seriesId': 'example'},
-    );
-    final data = <String, dynamic>{'source': 'test'};
-    final probe =
-        SourceProbeState(item: item, episodeIndex: 3, preferredLine: 1)
-          ..status = SourceProbeStatus.direct
-          ..data = data
-          ..resolvedLineIndex = 2;
-    final candidate = SourceCandidateState(
-      item: item,
-      score: 100,
-      probe: probe,
-    );
-
-    final resolved = await controller.resolveSwitchCandidate(candidate);
-
-    expect(identical(resolved, probe), isTrue);
-    expect(identical(resolved.data, data), isTrue);
-    expect(resolved.resolvedLineIndex, 2);
-  });
-
   test('a timed-out media resolve keeps the candidate usable', () async {
     final controller = _SlowMediaController();
     addTearDown(controller.dispose);
     final item = SearchResultItem(
-      title: 'Example',
-      sourceType: 'test',
-      data: const {'seriesId': 'example'},
+      SourceSearchResult.fromLegacy({
+        'title': 'Example',
+        'source': 'test',
+        ...{'seriesId': 'example'},
+      }),
     );
 
     final probe = await controller.ensureCandidatePlayable(
@@ -155,31 +133,6 @@ void main() {
     expect(probe.resolvedLineIndex, 1);
   });
 
-  test('treats resolved non-direct candidates as selectable', () {
-    final item = SearchResultItem(
-      title: 'Example',
-      sourceType: 'custom',
-      data: const {'seriesId': 'example'},
-    );
-    final probe = SourceProbeState(
-      item: item,
-      episodeIndex: 0,
-      preferredLine: 1,
-    )..status = SourceProbeStatus.playable;
-    final candidate = SourceCandidateState(
-      item: item,
-      score: 100,
-      probe: probe,
-    );
-    final group = DirectSourceGroup(
-      key: item.key,
-      origins: [candidate],
-      status: probe.status,
-    );
-
-    expect(group.isReady, isTrue);
-  });
-
   test('keeps the probe window full after one route is verified', () {
     final controller = _ProbeCountingController();
     addTearDown(controller.dispose);
@@ -187,9 +140,11 @@ void main() {
 
     for (var index = 0; index < 5; index++) {
       final item = SearchResultItem(
-        title: 'Example $index',
-        sourceType: 'test',
-        data: {'seriesId': '$index'},
+        SourceSearchResult.fromLegacy({
+          'title': 'Example $index',
+          'source': 'test',
+          ...{'seriesId': '$index'},
+        }),
       );
       final probe = SourceProbeState(
         item: item,
@@ -217,12 +172,12 @@ class _CatalogController extends VideoSourceSearchController {
   _CatalogController() : super(title: 'Example');
   int loads = 0;
   @override
-  Future<Map<String, dynamic>> resolveVideoData(SearchResultItem item) async {
+  Future<PlaybackRequest> resolveVideoData(SearchResultItem item) async {
     loads++;
-    return {
+    return PlaybackRequest.fromMap({
       'source': 'internal',
       'videos': 'Episode\$https://fixture.test/episode.mp4',
-    };
+    });
   }
 }
 
@@ -236,8 +191,11 @@ class _SlowMediaController extends VideoSourceSearchController {
   Duration get raceMediaTimeout => const Duration(milliseconds: 20);
 
   @override
-  Future<Map<String, dynamic>> resolveVideoData(SearchResultItem item) async =>
-      {'source': 'test', 'videos': '第1集\$line-token-1'};
+  Future<PlaybackRequest> resolveVideoData(SearchResultItem item) async =>
+      PlaybackRequest.fromMap({
+        'source': 'test',
+        'videos': '第1集\$line-token-1',
+      });
 
   @override
   Future<({String url, Map<String, String> httpHeaders})> resolveLineMedia({

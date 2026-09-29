@@ -38,16 +38,3 @@ extension DateTimeFormatting on DateTime {
     return '$year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')}';
   }
 }
-
-extension DurationFormatting on Duration {
-  /// "03:25" 或 "01:03:25"（有小时时自动带上）
-  String toTimeString() {
-    String twoDigits(int n) => n.toString().padLeft(2, '0');
-    final h = inHours;
-    final m = inMinutes.remainder(60);
-    final s = inSeconds.remainder(60);
-    return h > 0
-        ? '${twoDigits(h)}:${twoDigits(m)}:${twoDigits(s)}'
-        : '${twoDigits(m)}:${twoDigits(s)}';
-  }
-}

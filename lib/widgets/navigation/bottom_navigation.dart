@@ -41,8 +41,10 @@ class _AppBottomNavigationState extends State<AppBottomNavigation> {
     final usableWidth = width - padding * 2;
     final dx = (pos.dx - padding).clamp(0.0, usableWidth);
     final itemWidth = usableWidth / widget.items.length;
-    final clampedIndex = ((dx - itemWidth / 2) / itemWidth)
-        .clamp(0.0, (widget.items.length - 1).toDouble());
+    final clampedIndex = ((dx - itemWidth / 2) / itemWidth).clamp(
+      0.0,
+      (widget.items.length - 1).toDouble(),
+    );
 
     final hover = clampedIndex.round();
     if (_lastHapticIndex != hover) {
@@ -73,14 +75,16 @@ class _AppBottomNavigationState extends State<AppBottomNavigation> {
     final isDark = colors.brightness == Brightness.dark;
 
     final activeIndex = _dragIndex ?? widget.currentIndex.toDouble();
-    final highlightedIndex =
-        activeIndex.round().clamp(0, widget.items.length - 1);
+    final highlightedIndex = activeIndex.round().clamp(
+      0,
+      widget.items.length - 1,
+    );
 
     final bgDecoration = BoxDecoration(
       color: isDark
           ? (colors.surface.computeLuminance() < 0.05
-              ? const Color(0xFF1C1C1E).withValues(alpha: 0.85)
-              : colors.surfaceContainer.withValues(alpha: 0.85))
+                ? const Color(0xFF1C1C1E).withValues(alpha: 0.85)
+                : colors.surfaceContainer.withValues(alpha: 0.85))
           : colors.surface.withValues(alpha: 0.85),
       borderRadius: BorderRadius.circular(32),
       border: Border.all(
@@ -103,127 +107,132 @@ class _AppBottomNavigationState extends State<AppBottomNavigation> {
       child: Center(
         heightFactor: 1,
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 500),
-          child: SizedBox(
-            height: 64,
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(32),
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  DecoratedBox(decoration: bgDecoration),
-                  LayoutBuilder(
-                    builder: (context, constraints) {
-                      return GestureDetector(
-                        behavior: HitTestBehavior.translucent,
-                        onHorizontalDragStart: (d) =>
-                            _onDragUpdate(d.localPosition, constraints.maxWidth),
-                        onHorizontalDragUpdate: (d) =>
-                            _onDragUpdate(d.localPosition, constraints.maxWidth),
-                        onHorizontalDragEnd: (_) => _onDragEnd(),
-                        onHorizontalDragCancel: _onDragEnd,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 6,
-                          ),
-                          child: Stack(
-                            children: [
-                              AnimatedAlign(
-                                duration: reduceMotion || _dragIndex != null
-                                    ? Duration.zero
-                                    : const Duration(milliseconds: 250),
-                                curve: Curves.easeOutCubic,
-                                alignment: widget.items.length > 1
-                                    ? AlignmentDirectional(
-                                        -1 +
-                                            2 *
-                                                activeIndex /
-                                                (widget.items.length - 1),
-                                        0,
-                                      )
-                                    : Alignment.center,
-                                child: FractionallySizedBox(
-                                  widthFactor: 1 / widget.items.length,
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 4,
-                                    ),
-                                    child: Container(
-                                      height: 52,
-                                      decoration: BoxDecoration(
-                                        borderRadius: BorderRadius.circular(26),
-                                        color: isDark
-                                            ? colors.primary.withValues(alpha: 0.28)
-                                            : colors.primary.withValues(alpha: 0.12),
-                                      ),
-                                    ),
+          constraints: const BoxConstraints(
+            maxWidth: 500,
+            minHeight: 64,
+            maxHeight: 64,
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(32),
+            child: DecoratedBox(
+              decoration: bgDecoration,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  return GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onHorizontalDragStart: (d) =>
+                        _onDragUpdate(d.localPosition, constraints.maxWidth),
+                    onHorizontalDragUpdate: (d) =>
+                        _onDragUpdate(d.localPosition, constraints.maxWidth),
+                    onHorizontalDragEnd: (_) => _onDragEnd(),
+                    onHorizontalDragCancel: _onDragEnd,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 6,
+                      ),
+                      child: Stack(
+                        children: [
+                          AnimatedAlign(
+                            duration: reduceMotion || _dragIndex != null
+                                ? Duration.zero
+                                : const Duration(milliseconds: 250),
+                            curve: Curves.easeOutCubic,
+                            alignment: widget.items.length > 1
+                                ? AlignmentDirectional(
+                                    -1 +
+                                        2 *
+                                            activeIndex /
+                                            (widget.items.length - 1),
+                                    0,
+                                  )
+                                : Alignment.center,
+                            child: FractionallySizedBox(
+                              widthFactor: 1 / widget.items.length,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 4,
+                                ),
+                                child: Container(
+                                  height: 52,
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(26),
+                                    color: isDark
+                                        ? colors.primary.withValues(alpha: 0.28)
+                                        : colors.primary.withValues(
+                                            alpha: 0.12,
+                                          ),
                                   ),
                                 ),
                               ),
-                              Row(
-                                children: List.generate(widget.items.length, (i) {
-                                  final selected = highlightedIndex == i;
-                                  final item = widget.items[i];
-                                  final primaryColor = isDark
-                                      ? Color.lerp(colors.primary, Colors.white, 0.25)!
-                                      : colors.primary;
-                                  final unselectedColor = isDark
-                                      ? colors.onSurface.withValues(alpha: 0.45)
-                                      : colors.onSurfaceVariant.withValues(alpha: 0.65);
-                                  final itemColor = selected
-                                      ? primaryColor
-                                      : unselectedColor;
-
-                                  return Expanded(
-                                    child: GestureDetector(
-                                      behavior: HitTestBehavior.opaque,
-                                      onTap: () {
-                                        if (widget.currentIndex == i) return;
-                                        HapticFeedback.lightImpact();
-                                        widget.onTap(i);
-                                      },
-                                      child: Column(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.center,
-                                        children: [
-                                          _NavItemIcon(
-                                            item: item,
-                                            selected: selected,
-                                            color: itemColor,
-                                          ),
-                                          const SizedBox(height: 2),
-                                          AnimatedDefaultTextStyle(
-                                            duration: const Duration(
-                                              milliseconds: 180,
-                                            ),
-                                            style: TextStyle(
-                                              fontSize: 11,
-                                              height: 1.2,
-                                              fontWeight: selected
-                                                  ? FontWeight.w600
-                                                  : FontWeight.w500,
-                                              color: itemColor,
-                                            ),
-                                            child: Text(
-                                              item.label,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  );
-                                }),
-                              ),
-                            ],
+                            ),
                           ),
-                        ),
-                      );
-                    },
-                  ),
-                ],
+                          Row(
+                            children: List.generate(widget.items.length, (i) {
+                              final selected = highlightedIndex == i;
+                              final item = widget.items[i];
+                              final primaryColor = isDark
+                                  ? Color.lerp(
+                                      colors.primary,
+                                      Colors.white,
+                                      0.25,
+                                    )!
+                                  : colors.primary;
+                              final unselectedColor = isDark
+                                  ? colors.onSurface.withValues(alpha: 0.45)
+                                  : colors.onSurfaceVariant.withValues(
+                                      alpha: 0.65,
+                                    );
+                              final itemColor = selected
+                                  ? primaryColor
+                                  : unselectedColor;
+
+                              return Expanded(
+                                child: GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: () {
+                                    if (widget.currentIndex == i) return;
+                                    HapticFeedback.lightImpact();
+                                    widget.onTap(i);
+                                  },
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      _NavItemIcon(
+                                        item: item,
+                                        selected: selected,
+                                        color: itemColor,
+                                      ),
+                                      const SizedBox(height: 2),
+                                      AnimatedDefaultTextStyle(
+                                        duration: const Duration(
+                                          milliseconds: 180,
+                                        ),
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          height: 1.2,
+                                          fontWeight: selected
+                                              ? FontWeight.w600
+                                              : FontWeight.w500,
+                                          color: itemColor,
+                                        ),
+                                        child: Text(
+                                          item.label,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            }),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
               ),
             ),
           ),

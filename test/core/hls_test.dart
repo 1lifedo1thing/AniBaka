@@ -246,25 +246,10 @@ void main() {
       expect(outcome.manifest, contains('ad_11.ts'));
       expect(outcome.manifest, isNot(contains('ad_10.ts')));
       expect(outcome.manifest, isNot(contains('ad_12.ts')));
-    });
-
-    test('组首片与主体一致时不再深入该组（已知局限）', () async {
-      // 广告只占组内后两片，组首仍是正片：本实现只看组首，不会发现。
-      final manifest = _build([
-        _contentBlock(),
-        _contentBlock(),
-        const ['content', 'content', 'content', 'ad', 'ad'],
-        _contentBlock(),
-      ]);
-
-      final outcome = await HlsAdFilter.apply(
-        manifest: manifest,
-        manifestUri: _manifestUri,
-        probe: _probe(),
+      expect(
+        outcome.manifest,
+        contains('#EXT-X-DISCONTINUITY\n#EXTINF:4.000,\nad_11.ts'),
       );
-
-      expect(outcome.changed, isFalse);
-      expect(outcome.manifest, manifest);
     });
 
     test('分片太少时不做任何探测', () async {
@@ -284,7 +269,7 @@ void main() {
       expect(outcome.changed, isFalse);
     });
 
-    test('清单级标签与 #EXT-X-KEY 不会被连带删除', () async {
+    test('加密清单原文保留，不做不安全的分片删除', () async {
       final manifest =
           _build([
             _adBlock(3),
@@ -305,11 +290,65 @@ void main() {
         probe: _probe(),
       );
 
-      expect(outcome.changed, isTrue);
+      expect(outcome.changed, isFalse);
+      expect(outcome.manifest, manifest);
       expect(outcome.manifest, contains('#EXT-X-KEY:METHOD=AES-128'));
       expect(outcome.manifest, contains('#EXT-X-TARGETDURATION:8'));
-      expect(outcome.manifest, isNot(contains('ad_')));
+      expect(outcome.manifest, contains('ad_'));
     });
+  });
+
+  for (final tag in [
+    '#EXT-X-KEY:METHOD=AES-128,URI="key.bin"',
+    '#EXT-X-KEY:METHOD=AES-128,URI="key.bin",IV=0x01',
+    '#EXT-X-MAP:URI="init.mp4"',
+    '#EXT-X-BYTERANGE:100',
+    '#EXT-X-BYTERANGE:100@200',
+  ]) {
+    for (final afterBoundary in [false, true]) {
+      test(
+        'complex HLS is unchanged with zero probes: $tag after=$afterBoundary',
+        () async {
+          final original = _build([
+            _contentBlock(),
+            _adBlock(1),
+            _contentBlock(),
+          ]);
+          final manifest = original.replaceFirst(
+            '#EXT-X-DISCONTINUITY',
+            afterBoundary
+                ? '#EXT-X-DISCONTINUITY\n$tag'
+                : '$tag\n#EXT-X-DISCONTINUITY',
+          );
+          var probes = 0;
+          final outcome = await HlsAdFilter.apply(
+            manifest: manifest,
+            manifestUri: _manifestUri,
+            probe: (_) async {
+              probes++;
+              return _content;
+            },
+          );
+          expect(outcome.manifest, manifest);
+          expect(probes, 0);
+        },
+      );
+    }
+  }
+  test('DISCONTINUITY-SEQUENCE survives removing the first group', () async {
+    final manifest = _build([
+      _adBlock(1),
+      _contentBlock(),
+      _contentBlock(),
+      _contentBlock(),
+    ]).replaceFirst('#EXTM3U', '#EXTM3U\n#EXT-X-DISCONTINUITY-SEQUENCE:8');
+    final outcome = await HlsAdFilter.apply(
+      manifest: manifest,
+      manifestUri: _manifestUri,
+      probe: _probe(),
+    );
+    expect(outcome.changed, isTrue);
+    expect(outcome.manifest, contains('#EXT-X-DISCONTINUITY-SEQUENCE:8'));
   });
 
   group('master playlists', () {

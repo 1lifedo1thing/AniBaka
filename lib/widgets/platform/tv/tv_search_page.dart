@@ -1,3 +1,5 @@
+import 'package:baka/source/models/source_search_result.dart';
+import 'package:baka/services/source/source_repository.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -22,6 +24,10 @@ class _TvSearchPageState extends State<TvSearchPage> {
   final _searchController = TextEditingController();
   final _searchBoxFocusNode = FocusNode();
   final _textFieldFocusNode = FocusNode();
+  late final _resultChanges = Listenable.merge([
+    _svc.isLoadingNotifier,
+    _svc.resultsNotifier,
+  ]);
   (String, int, int)? _pendingQuery;
 
   @override
@@ -94,9 +100,11 @@ class _TvSearchPageState extends State<TvSearchPage> {
 
   void _openSeries(Map<String, dynamic> item) async {
     try {
-      final playerData = await _svc.buildPlayerData(item);
+      final playerData = await sourceRepository.buildPlaybackRequest(
+        SourceSearchResult.fromLegacy(item),
+      );
       if (playerData != null && mounted) {
-        NavigationService.toPlayer(context, playerData, autoMatch: false);
+        NavigationService.toPlayback(context, playerData, autoMatch: false);
       }
     } catch (e) {
       debugPrint('打开剧集错误: $e');
@@ -379,10 +387,12 @@ class _TvSearchPageState extends State<TvSearchPage> {
   }
 
   Widget _buildResultsArea() {
-    return ValueListenableBuilder<bool>(
-      valueListenable: _svc.isLoadingNotifier,
-      builder: (_, isLoading, _) {
-        if (isLoading) {
+    return ListenableBuilder(
+      listenable: _resultChanges,
+      builder: (context, _) {
+        final isLoading = _svc.isLoadingNotifier.value;
+        final results = _svc.resultsNotifier.value;
+        if (isLoading && results.isEmpty) {
           return AppSkeletonizer(
             enabled: true,
             child: GridView.builder(
@@ -404,74 +414,69 @@ class _TvSearchPageState extends State<TvSearchPage> {
           );
         }
 
-        return ValueListenableBuilder<List<Map<String, dynamic>>>(
-          valueListenable: _svc.resultsNotifier,
-          builder: (_, results, _) {
-            if (results.isEmpty) {
-              return Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.search_off_rounded,
-                      color: context.tvTextHintColor,
-                      size: 64,
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      '未找到相关结果',
-                      style: TextStyle(
-                        color: context.tvTextHintColor,
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      '请尝试更换搜索词或选择其他源',
-                      style: TextStyle(
-                        color: context.tvTextHintColor,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            }
-
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+        if (results.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  '搜索结果 (${results.length})',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: context.tvTextColor,
-                  ),
+                Icon(
+                  Icons.search_off_rounded,
+                  color: context.tvTextHintColor,
+                  size: 64,
                 ),
                 const SizedBox(height: 16),
-                Expanded(
-                  child: FocusTraversalGroup(
-                    policy: ReadingOrderTraversalPolicy(),
-                    child: GridView.builder(
-                      physics: const BouncingScrollPhysics(),
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 4,
-                            childAspectRatio: 0.55,
-                            crossAxisSpacing: 16,
-                            mainAxisSpacing: 24,
-                          ),
-                      itemCount: results.length,
-                      itemBuilder: (context, index) =>
-                          _buildResultCard(results[index]),
-                    ),
+                Text(
+                  '未找到相关结果',
+                  style: TextStyle(
+                    color: context.tvTextHintColor,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '请尝试更换搜索词或选择其他源',
+                  style: TextStyle(
+                    color: context.tvTextHintColor,
+                    fontSize: 13,
                   ),
                 ),
               ],
-            );
-          },
+            ),
+          );
+        }
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (isLoading) const LinearProgressIndicator(),
+            Text(
+              '搜索结果 (${results.length})',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: context.tvTextColor,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Expanded(
+              child: FocusTraversalGroup(
+                policy: ReadingOrderTraversalPolicy(),
+                child: GridView.builder(
+                  physics: const BouncingScrollPhysics(),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 4,
+                    childAspectRatio: 0.55,
+                    crossAxisSpacing: 16,
+                    mainAxisSpacing: 24,
+                  ),
+                  itemCount: results.length,
+                  itemBuilder: (context, index) =>
+                      _buildResultCard(results[index]),
+                ),
+              ),
+            ),
+          ],
         );
       },
     );

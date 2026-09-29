@@ -1,12 +1,29 @@
-import 'package:baka/core/account_session.dart';
-import 'package:cached_network_image/cached_network_image.dart';
-import 'package:baka/instance.dart';
-import 'package:baka/pages/home/miniapp_page.dart';
-import 'package:baka/pages/mine/mine_profile.dart';
+import 'dart:io';
+
 import 'package:baka/app/navigation.dart';
-import 'package:flutter/material.dart';
+import 'package:baka/app_state.dart';
+import 'package:baka/core/account_session.dart';
+import 'package:baka/instance.dart';
+import 'package:baka/pages/mine/mine_profile.dart';
 import 'package:baka/widgets/common/platform_tooltip.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart' hide ContextExtensionss;
+
+const double _expandedWidth = 240;
+const double _collapsedWidth = 72;
+
+// 图标左侧留白 = 条目外边距 + 图标内边距，折叠与展开时图标位置一致。
+const double _itemMargin = 12;
+const double _iconInset = 14;
+const double _itemHeight = 40;
+
+const _themeIcons = <IconData>[
+  Icons.brightness_auto_rounded,
+  Icons.light_mode_rounded,
+  Icons.dark_mode_rounded,
+];
 
 class WindowsSidebar extends StatefulWidget {
   final int currentPageIndex;
@@ -23,249 +40,317 @@ class WindowsSidebar extends StatefulWidget {
 }
 
 class _WindowsSidebarState extends State<WindowsSidebar> {
-  late bool _isSidebarCollapsed =
-      Instances.sp.getBool('sidebarCollapsed') ?? false;
+  late bool _collapsed = Instances.sp.getBool('sidebarCollapsed') ?? false;
+  ModalRoute<Object?>? _route;
 
-  void _toggleSidebar() {
-    setState(() => _isSidebarCollapsed = !_isSidebarCollapsed);
-    Instances.sp.setBool('sidebarCollapsed', _isSidebarCollapsed);
+  @override
+  void initState() {
+    super.initState();
+    HardwareKeyboard.instance.addHandler(_handleKey);
   }
 
-  void _openLoginPage() {
-    Navigator.pushNamed(context, 'Baka://login');
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _route = ModalRoute.of(context);
+  }
+
+  @override
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleKey);
+    super.dispose();
+  }
+
+  // 主界面不在最上层时不响应搜索快捷键。
+  bool _handleKey(KeyEvent event) {
+    if (event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.keyK ||
+        !mounted ||
+        _route?.isCurrent == false) {
+      return false;
+    }
+    final keyboard = HardwareKeyboard.instance;
+    final modifier = Platform.isMacOS
+        ? keyboard.isMetaPressed
+        : keyboard.isControlPressed;
+    if (!modifier) return false;
+    NavigationService.toSearch(context);
+    return true;
+  }
+
+  void _toggleCollapsed() {
+    setState(() => _collapsed = !_collapsed);
+    Instances.sp.setBool('sidebarCollapsed', _collapsed);
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final width = _isSidebarCollapsed ? 68.0 : 220.0;
-    final dividerColor = isDark
-        ? Colors.white.withValues(alpha: 0.08)
-        : Colors.black.withValues(alpha: 0.06);
-
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 240),
-      curve: Curves.easeOutCubic,
-      width: width,
+    final colors = theme.colorScheme;
+    final showLabels = !_collapsed;
+    return Container(
+      width: _collapsed ? _collapsedWidth : _expandedWidth,
       decoration: BoxDecoration(
         color: theme.scaffoldBackgroundColor,
-        border: Border(right: BorderSide(color: dividerColor, width: 1)),
+        border: Border(
+          right: BorderSide(
+            color: colors.outlineVariant.withValues(alpha: 0.5),
+          ),
+        ),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const SizedBox(height: 24),
-          _buildUserInfo(theme),
-          const SizedBox(height: 20),
+          const SizedBox(height: 8),
+          _Brand(collapsed: _collapsed, onToggle: _toggleCollapsed),
+          const SizedBox(height: 12),
+          _SearchEntry(
+            showLabels: showLabels,
+            onTap: () => NavigationService.toSearch(context),
+          ),
+          const SizedBox(height: 8),
           Expanded(
             child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              children: _buildNavItems(theme),
+              padding: const EdgeInsets.only(bottom: 12),
+              children: _buildNavigation(showLabels),
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-            child: _buildCollapseButton(theme),
-          ),
+          _AccountCard(showLabels: showLabels),
+          const SizedBox(height: 12),
         ],
       ),
     );
   }
 
-  Widget _buildAvatar(double size) {
-    final avatarUrl = Get.find<AccountSession>().avatarUrl;
-    if (avatarUrl.isEmpty) {
-      return _buildAvatarFallback(size);
-    }
-    return ClipOval(
-      child: CachedNetworkImage(
-        memCacheWidth: 80,
-        imageUrl: avatarUrl,
-        width: size,
-        height: size,
-        fit: BoxFit.cover,
-        fadeInDuration: const Duration(milliseconds: 150),
-        fadeOutDuration: const Duration(milliseconds: 150),
-        errorWidget: (_, _, _) => _buildAvatarFallback(size),
-      ),
+  List<Widget> _buildNavigation(bool showLabels) {
+    final current = widget.currentPageIndex;
+    _NavItem page(
+      int index,
+      IconData icon,
+      IconData selectedIcon,
+      String label,
+    ) => _NavItem(
+      icon: icon,
+      selectedIcon: selectedIcon,
+      label: label,
+      selected: current == index,
+      showLabel: showLabels,
+      onTap: () => widget.onPageChange(index),
     );
+    return [
+      _SectionLabel('浏览', showLabel: showLabels),
+      page(0, Icons.explore_outlined, Icons.explore_rounded, '番组'),
+      page(1, Icons.forum_outlined, Icons.forum_rounded, 'C 岛'),
+      _SectionLabel('我的', showLabel: showLabels),
+      page(2, Icons.person_outline_rounded, Icons.person_rounded, '个人中心'),
+      page(3, Icons.favorite_border_rounded, Icons.favorite_rounded, '我的追番'),
+      page(4, Icons.history_rounded, Icons.history_rounded, '观看历史'),
+      page(5, Icons.download_outlined, Icons.download_rounded, '下载管理'),
+    ];
   }
+}
 
-  Widget _buildAvatarFallback(double size) {
+WidgetStateProperty<Color?> _itemOverlay(ColorScheme colors) =>
+    WidgetStateProperty.resolveWith((states) {
+      if (states.contains(WidgetState.pressed)) {
+        return colors.onSurface.withValues(alpha: 0.08);
+      }
+      if (states.contains(WidgetState.hovered)) {
+        return colors.onSurface.withValues(alpha: 0.05);
+      }
+      return null;
+    });
+
+class _Brand extends StatelessWidget {
+  final bool collapsed;
+  final VoidCallback onToggle;
+
+  const _Brand({required this.collapsed, required this.onToggle});
+
+  @override
+  Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        color: colors.surfaceContainerHighest,
-        shape: BoxShape.circle,
-      ),
-      alignment: Alignment.center,
-      child: Icon(
-        Icons.person_outline_rounded,
-        size: size * 0.55,
-        color: colors.onSurfaceVariant,
-      ),
-    );
-  }
-
-  Widget _buildUserInfo(ThemeData theme) {
-    if (_isSidebarCollapsed) {
-      return Center(
-        child: PlatformTooltip(
-          message: Get.find<AccountSession>().isLoggedIn ? '账号与 Bangumi' : '登录',
-          child: InkResponse(
-            onTap: _openLoginPage,
-            radius: 24,
-            child: SizedBox(width: 38, height: 38, child: _buildAvatar(38)),
+    return SizedBox(
+      height: 44,
+      child: Row(
+        children: [
+          const SizedBox(width: 16),
+          PlatformTooltip(
+            message: collapsed ? '展开侧边栏' : '收起侧边栏',
+            child: IconButton(
+              onPressed: onToggle,
+              style: ButtonStyle(
+                overlayColor: _itemOverlay(colors),
+                shape: const WidgetStatePropertyAll(
+                  RoundedRectangleBorder(
+                    borderRadius: BorderRadius.all(Radius.circular(8)),
+                  ),
+                ),
+                fixedSize: const WidgetStatePropertyAll(Size(40, 36)),
+              ),
+              icon: Icon(
+                Icons.menu_rounded,
+                size: 20,
+                color: colors.onSurfaceVariant,
+              ),
+            ),
           ),
-        ),
-      );
-    }
-
-    return InkWell(
-      onTap: _openLoginPage,
-      borderRadius: BorderRadius.circular(10),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-        child: Row(
-          children: [
-            SizedBox(width: 40, height: 40, child: _buildAvatar(40)),
-            const SizedBox(width: 12),
+          if (!collapsed) ...[
+            const SizedBox(width: 8),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(7),
+              child: Image.asset(
+                'assets/ic_launcher.png',
+                width: 26,
+                height: 26,
+                cacheWidth: 78,
+                filterQuality: FilterQuality.medium,
+              ),
+            ),
+            const SizedBox(width: 10),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    Get.find<AccountSession>().hasIdentity
-                        ? Get.find<AccountSession>().displayName
-                        : '点击登录',
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    Get.find<AccountSession>().isBangumiLogin &&
-                            !Get.find<AccountSession>().isLoggedIn
-                        ? 'Bangumi 登录'
-                        : Get.find<AccountSession>().isLoggedIn
-                        ? '已登录'
-                        : '打开登录',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: theme.textTheme.bodySmall?.color?.withValues(
-                        alpha: 0.6,
-                      ),
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
+              child: Text(
+                'Baka',
+                maxLines: 1,
+                overflow: TextOverflow.clip,
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.3,
+                  color: colors.onSurface,
+                ),
               ),
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+class _SearchEntry extends StatelessWidget {
+  final bool showLabels;
+  final VoidCallback onTap;
+
+  const _SearchEntry({required this.showLabels, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final shortcut = Platform.isMacOS ? '⌘ K' : 'Ctrl K';
+    final entry = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: _itemMargin),
+      child: Material(
+        color: colors.onSurface.withValues(alpha: 0.05),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: BorderSide(color: colors.outlineVariant.withValues(alpha: 0.4)),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          splashFactory: NoSplash.splashFactory,
+          overlayColor: _itemOverlay(colors),
+          child: SizedBox(
+            height: 38,
+            child: Row(
+              children: [
+                const SizedBox(width: _iconInset),
+                Icon(
+                  Icons.search_rounded,
+                  size: 20,
+                  color: colors.onSurfaceVariant,
+                ),
+                const SizedBox(width: 10),
+                if (showLabels) ...[
+                  Expanded(
+                    child: Text(
+                      '搜索番剧',
+                      maxLines: 1,
+                      overflow: TextOverflow.clip,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: colors.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  _KeyHint(shortcut),
+                  const SizedBox(width: 8),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (showLabels) return entry;
+    return PlatformTooltip(message: '搜索（$shortcut）', child: entry);
+  }
+}
+
+class _KeyHint extends StatelessWidget {
+  final String text;
+
+  const _KeyHint(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(5),
+        border: Border.all(color: colors.outlineVariant.withValues(alpha: 0.6)),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 10.5,
+          fontWeight: FontWeight.w600,
+          height: 1.2,
+          color: colors.onSurfaceVariant,
         ),
       ),
     );
   }
+}
 
-  List<Widget> _buildNavItems(ThemeData theme) {
-    final currentIndex = widget.currentPageIndex;
-    return [
-      _NavItem(
-        icon: Icons.explore_rounded,
-        label: '番组',
-        isSelected: currentIndex == 0,
-        isCollapsed: _isSidebarCollapsed,
-        onTap: () => widget.onPageChange(0),
-      ),
-      const SizedBox(height: 4),
-      _NavItem(
-        icon: Icons.forum_rounded,
-        label: 'C 岛',
-        isSelected: currentIndex == 1,
-        isCollapsed: _isSidebarCollapsed,
-        onTap: () => widget.onPageChange(1),
-      ),
-      const SizedBox(height: 4),
-      _NavItem(
-        icon: Icons.person_rounded,
-        label: '我的',
-        isSelected: currentIndex == 2,
-        isCollapsed: _isSidebarCollapsed,
-        onTap: () => widget.onPageChange(2),
-      ),
-      const Padding(
-        padding: EdgeInsets.symmetric(vertical: 10, horizontal: 4),
-        child: Divider(height: 1, thickness: 0.8),
-      ),
-      _NavItem(
-        icon: Icons.search_rounded,
-        label: '搜索',
-        isSelected: false,
-        isCollapsed: _isSidebarCollapsed,
-        onTap: () => NavigationService.toSearch(context),
-      ),
-      const SizedBox(height: 4),
-      _NavItem(
-        icon: Icons.public_rounded,
-        label: '里世界',
-        isSelected: false,
-        isCollapsed: _isSidebarCollapsed,
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) =>
-                const WebViewPage(url: 'https://www.acgzone.cc', title: '里世界'),
-          ),
+class _SectionLabel extends StatelessWidget {
+  final String text;
+  final bool showLabel;
+
+  const _SectionLabel(this.text, {required this.showLabel});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    if (!showLabel) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 24),
+        child: Divider(
+          height: 1,
+          thickness: 1,
+          color: colors.outlineVariant.withValues(alpha: 0.5),
         ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        _itemMargin + _iconInset,
+        18,
+        _itemMargin,
+        6,
       ),
-    ];
-  }
-
-  Widget _buildCollapseButton(ThemeData theme) {
-    final isDark = theme.brightness == Brightness.dark;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: _toggleSidebar,
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: isDark ? Colors.white12 : Colors.black12,
-              width: 0.8,
-            ),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                _isSidebarCollapsed
-                    ? Icons.keyboard_double_arrow_right_rounded
-                    : Icons.keyboard_double_arrow_left_rounded,
-                size: 18,
-                color: theme.hintColor,
-              ),
-              if (!_isSidebarCollapsed) ...[
-                const SizedBox(width: 8),
-                Text(
-                  '收起侧边栏',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: theme.hintColor,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
-            ],
-          ),
+      child: Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.clip,
+        style: TextStyle(
+          fontSize: 11.5,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 0.6,
+          color: colors.onSurfaceVariant.withValues(alpha: 0.75),
         ),
       ),
     );
@@ -274,80 +359,256 @@ class _WindowsSidebarState extends State<WindowsSidebar> {
 
 class _NavItem extends StatelessWidget {
   final IconData icon;
+  final IconData selectedIcon;
   final String label;
-  final bool isSelected;
-  final bool isCollapsed;
+  final bool selected;
+  final bool showLabel;
   final VoidCallback onTap;
 
   const _NavItem({
     required this.icon,
+    required this.selectedIcon,
     required this.label,
-    required this.isSelected,
-    required this.isCollapsed,
+    required this.selected,
+    required this.showLabel,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final primary = theme.colorScheme.primary;
-    final baseTextColor = theme.textTheme.bodyMedium?.color;
+    final colors = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
+    final duration = context.reduceMotion
+        ? Duration.zero
+        : const Duration(milliseconds: 180);
 
-    final fgColor = isSelected
-        ? primary
-        : baseTextColor?.withValues(alpha: 0.75);
-    final bgColor = isSelected
-        ? primary.withValues(alpha: 0.12)
-        : Colors.transparent;
-
-    return Material(
-      color: Colors.transparent,
-      borderRadius: BorderRadius.circular(8),
-      child: InkWell(
-        onTap: onTap,
+    final item = Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: _itemMargin,
+        vertical: 2,
+      ),
+      child: Material(
+        color: selected
+            ? colors.primary.withValues(alpha: isDark ? 0.18 : 0.1)
+            : Colors.transparent,
         borderRadius: BorderRadius.circular(8),
-        hoverColor: isSelected ? null : theme.hoverColor,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOutCubic,
-          height: 42,
-          padding: EdgeInsets.symmetric(horizontal: isCollapsed ? 0 : 12),
-          decoration: BoxDecoration(
-            color: bgColor,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          alignment: Alignment.center,
-          child: isCollapsed
-              ? Icon(icon, color: fgColor, size: 22)
-              : Row(
-                  children: [
-                    Icon(icon, color: fgColor, size: 20),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        label,
-                        style: TextStyle(
-                          color: fgColor,
-                          fontWeight: isSelected
-                              ? FontWeight.w600
-                              : FontWeight.w400,
-                          fontSize: 13.5,
-                        ),
-                        overflow: TextOverflow.ellipsis,
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          splashFactory: NoSplash.splashFactory,
+          overlayColor: _itemOverlay(colors),
+          child: SizedBox(
+            height: _itemHeight,
+            child: Stack(
+              alignment: Alignment.centerLeft,
+              children: [
+                Positioned(
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  child: Center(
+                    child: AnimatedContainer(
+                      duration: duration,
+                      curve: Curves.easeOutCubic,
+                      width: 3,
+                      height: selected ? 16 : 0,
+                      decoration: BoxDecoration(
+                        color: colors.primary,
+                        borderRadius: BorderRadius.circular(2),
                       ),
                     ),
-                    if (isSelected)
-                      Container(
-                        width: 5,
-                        height: 5,
-                        decoration: BoxDecoration(
-                          color: primary,
-                          shape: BoxShape.circle,
+                  ),
+                ),
+                Row(
+                  children: [
+                    const SizedBox(width: _iconInset),
+                    Icon(
+                      selected ? selectedIcon : icon,
+                      size: 20,
+                      color: selected
+                          ? colors.primary
+                          : colors.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 12),
+                    if (showLabel)
+                      Expanded(
+                        child: Text(
+                          label,
+                          maxLines: 1,
+                          overflow: TextOverflow.clip,
+                          style: TextStyle(
+                            fontSize: 13.5,
+                            fontWeight: selected
+                                ? FontWeight.w600
+                                : FontWeight.w500,
+                            color: selected
+                                ? colors.onSurface
+                                : colors.onSurface.withValues(alpha: 0.82),
+                          ),
                         ),
                       ),
                   ],
                 ),
+              ],
+            ),
+          ),
         ),
+      ),
+    );
+
+    if (showLabel) return item;
+    return PlatformTooltip(message: label, child: item);
+  }
+}
+
+/// 底部账号卡片：头像进入登录与账号管理，右侧按钮循环切换主题模式。
+class _AccountCard extends StatelessWidget {
+  final bool showLabels;
+
+  const _AccountCard({required this.showLabels});
+
+  void _openLogin(BuildContext context) {
+    Navigator.pushNamed(context, 'Baka://login');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final session = Get.find<AccountSession>();
+    final appState = Get.find<AppState>();
+    final status = session.isLoggedIn
+        ? '已登录'
+        : session.isBangumiLogin
+        ? 'Bangumi 登录'
+        : '登录后同步追番与历史';
+
+    final avatar = _Avatar(url: session.avatarUrl, size: 32);
+    if (!showLabels) {
+      return Center(
+        child: PlatformTooltip(
+          message: session.isLoggedIn ? '账号与 Bangumi' : '登录',
+          child: InkResponse(
+            onTap: () => _openLogin(context),
+            radius: 22,
+            child: avatar,
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: _itemMargin),
+      child: Material(
+        color: colors.onSurface.withValues(alpha: 0.04),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: colors.outlineVariant.withValues(alpha: 0.4)),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () => _openLogin(context),
+          splashFactory: NoSplash.splashFactory,
+          overlayColor: _itemOverlay(colors),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 8, 4, 8),
+            child: Row(
+              children: [
+                avatar,
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        session.hasIdentity ? session.displayName : '点击登录',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: colors.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 1),
+                      Text(
+                        status,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: colors.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // “跟随系统”与当前系统主题相同时 Theme 不会变化，需要单独订阅。
+                Obx(
+                  () => PlatformTooltip(
+                    message: '主题：${appState.themeModeLabel}',
+                    child: IconButton(
+                      onPressed: () =>
+                          appState.setThemeMode((appState.themeMode + 1) % 3),
+                      style: ButtonStyle(overlayColor: _itemOverlay(colors)),
+                      iconSize: 18,
+                      visualDensity: VisualDensity.compact,
+                      icon: Icon(
+                        _themeIcons[appState.themeMode.clamp(0, 2)],
+                        color: colors.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _Avatar extends StatelessWidget {
+  final String url;
+  final double size;
+
+  const _Avatar({required this.url, required this.size});
+
+  @override
+  Widget build(BuildContext context) {
+    final fallback = _fallback(context);
+    if (url.isEmpty) return fallback;
+    return ClipOval(
+      child: CachedNetworkImage(
+        memCacheWidth: 96,
+        imageUrl: url,
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        fadeInDuration: const Duration(milliseconds: 150),
+        fadeOutDuration: const Duration(milliseconds: 150),
+        placeholder: (_, _) => fallback,
+        errorWidget: (_, _, _) => fallback,
+      ),
+    );
+  }
+
+  Widget _fallback(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: colors.primary.withValues(alpha: 0.12),
+        shape: BoxShape.circle,
+      ),
+      alignment: Alignment.center,
+      child: Icon(
+        Icons.person_outline_rounded,
+        size: size * 0.55,
+        color: colors.primary,
       ),
     );
   }

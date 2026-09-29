@@ -15,6 +15,7 @@ import 'package:baka/widgets/comment/comment_widget.dart';
 import 'package:baka/widgets/platform/windows/windows_episode_list.dart';
 import 'package:baka/widgets/platform/windows/windows_player_layout.dart';
 import 'package:baka/widgets/player/player_tab.dart';
+import 'package:baka/widgets/episode/episode_widgets.dart';
 // ignore: depend_on_referenced_packages
 import 'package:bitsdojo_window_platform_interface/bitsdojo_window_platform_interface.dart';
 import 'package:flutter/material.dart';
@@ -53,6 +54,44 @@ class _Player extends PlaybackController {
 Widget _host(Widget child) => MaterialApp(home: Material(child: child));
 
 void main() {
+  testWidgets(
+    'wide episode grid stays lazy and reversed selection uses original index',
+    (tester) async {
+      final episodes = List.generate(
+        1000,
+        (i) => PlaybackEpisode(title: '第${i + 1}集', lines: const ['url']),
+      );
+      var selected = -1;
+      Widget grid(bool ascending) => _host(
+        Builder(
+          builder: (context) => CustomScrollView(
+            slivers: [
+              buildWindowsEpisodeList(
+                context: context,
+                videoList: episodes,
+                ascending: ascending,
+                currPlayIndex: 0,
+                onEpisodeChanged: (i) => selected = i,
+              ),
+            ],
+          ),
+        ),
+      );
+      await tester.pumpWidget(grid(true));
+      expect(find.byType(EpisodeItem).evaluate().length, lessThan(40));
+      expect(
+        tester.widget<EpisodeItem>(find.byType(EpisodeItem).first).index,
+        0,
+      );
+      await tester.pumpWidget(grid(false));
+      await tester.tap(find.byType(EpisodeItem).first);
+      expect(selected, 999);
+      await tester.drag(find.byType(CustomScrollView), const Offset(0, -1500));
+      await tester.pumpAndSettle();
+      expect(find.byType(EpisodeItem).evaluate().length, lessThan(45));
+    },
+  );
+
   group('seek', () {
     testWidgets('progress bar drag seeks to the finger position', (
       tester,
@@ -112,9 +151,10 @@ void main() {
         session: AccountSession(Instances.sp, refreshTokens: (_) async => null),
         client: MockClient((request) async {
           if (request.url.path == '/comments') commentRequests++;
-          return http.Response('{"data":[]}', 200);
+          return http.Response('{"code":200,"data":[]}', 200);
         }),
         version: 'test',
+        credentialOrigin: () => Uri.parse('https://www.anibaka.com'),
       );
       addTearDown(apiTransport.close);
       tester.view.physicalSize = const Size(1200, 900);
@@ -172,8 +212,6 @@ void main() {
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 300));
       }
-      // Fixed workload: four visits, no network latency or native playback.
-      debugPrint('Four comment visits: $commentRequests requests');
       expect(commentRequests, 1);
       expect(tester.state(find.byType(WindowsEpisodeList)), same(episodeState));
       expect(find.text('第1集').evaluate().length, greaterThan(0));

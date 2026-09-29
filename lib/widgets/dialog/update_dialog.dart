@@ -10,7 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
-import 'package:baka/utils/version_util.dart';
+import 'package:baka/models/update_info.dart';
 
 Widget _buildRichText(BuildContext context, String text) {
   if (text.isEmpty) return const SizedBox.shrink();

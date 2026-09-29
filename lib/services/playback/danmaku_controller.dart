@@ -1,12 +1,14 @@
+import 'dart:io';
+import 'package:http/http.dart' as http;
+import 'package:baka/api/playback.dart';
+import 'package:baka/utils/json_values.dart';
 import 'dart:collection';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-import 'package:baka/api/post.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/theme.dart';
-import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/utils/substring_matcher.dart';
 
 /// 弹幕控制器：负责整集弹幕数据获取、高效解码、缓存管理、配置持久化与视图驱动。
@@ -20,9 +22,14 @@ class DanmakuController extends ChangeNotifier {
   static final LinkedHashMap<String, List<DanmakuItem>> _cache =
       LinkedHashMap<String, List<DanmakuItem>>();
 
-  static DanmakuOption _readOption() => _parseOption(
-    BgmUtils.parseJsonMap(Instances.sp.getString(_settingsKey)) ?? const {},
-  );
+  static DanmakuOption _readOption() {
+    final raw = Instances.sp.getString(_settingsKey);
+    return _parseOption(
+      raw == null || raw.isEmpty
+          ? const {}
+          : jsonDecode(raw) as Map<String, dynamic>,
+    );
+  }
 
   static String getSavedFontFamily() => _readOption().fontFamily;
 
@@ -46,17 +53,15 @@ class DanmakuController extends ChangeNotifier {
       _ => AppFonts.defaultFont,
     };
     return DanmakuOption(
-      fontSize:
-          BgmUtils.toDouble(settings['fontSize']) ??
-          DanmakuOption.defaultFontSize,
+      fontSize: toDouble(settings['fontSize']) ?? DanmakuOption.defaultFontSize,
       fontFamily: fontFamily,
-      area: BgmUtils.toDouble(settings['area']) ?? 1.0,
-      opacity: BgmUtils.toDouble(settings['opacity']) ?? 1.0,
-      duration: BgmUtils.toDouble(settings['duration']) ?? 8.0,
+      area: toDouble(settings['area']) ?? 1.0,
+      opacity: toDouble(settings['opacity']) ?? 1.0,
+      duration: toDouble(settings['duration']) ?? 8.0,
       hideTop: settings['hideTop'] == true,
       hideBottom: settings['hideBottom'] == true,
       hideScroll: settings['hideScroll'] == true,
-      strokeWidth: BgmUtils.toDouble(settings['strokeWidth']) ?? 2.0,
+      strokeWidth: toDouble(settings['strokeWidth']) ?? 2.0,
     );
   }
 
@@ -86,12 +91,33 @@ class DanmakuController extends ChangeNotifier {
   static void loadSettings(DanmakuController controller) {
     final preferences = Instances.sp;
     final option = _readOption();
-    controller.blockWords = BgmUtils.parseJsonList(
-      preferences.getString(_blockWordsKey),
-    ).map((value) => value.toString()).toList();
+    final raw = preferences.getString(_blockWordsKey);
+    controller.blockWords = raw == null || raw.isEmpty
+        ? <String>[]
+        : (jsonDecode(raw) as List).map((value) => value.toString()).toList();
     controller.blockRepeat = preferences.getBool(_blockRepeatKey) ?? false;
     controller.blockColor = preferences.getBool(_blockColorKey) ?? false;
     controller.updateOption(option);
+  }
+
+  static Future<List<DanmakuItem>> loadLocal(
+    String? path, {
+    String? danmakuPath,
+  }) async {
+    if (path == null) return const [];
+    final videoFile = File(path);
+    final candidates = [
+      ?danmakuPath,
+      if (!path.startsWith('http://') && !path.startsWith('https://'))
+        '${videoFile.parent.path}${Platform.pathSeparator}${videoFile.uri.pathSegments.last}_danmaku.json',
+    ];
+    for (final path in candidates) {
+      final file = File(path);
+      if (await file.exists()) {
+        return decodeDanmaku(await file.readAsString());
+      }
+    }
+    return const [];
   }
 
   /// 获取弹幕数据，内置 LRU 内存缓存
@@ -99,6 +125,7 @@ class DanmakuController extends ChangeNotifier {
     required int subjectId,
     required int episodeIndex,
     required Iterable<String> titles,
+    Future<void>? abortTrigger,
   }) async {
     final cacheKey = '$subjectId-$episodeIndex';
     final cached = _cache.remove(cacheKey);
@@ -110,14 +137,21 @@ class DanmakuController extends ChangeNotifier {
     for (final title in titles) {
       if (title.isEmpty) continue;
       try {
-        final raw = await getDanmu(subjectId, episodeIndex, title);
+        final raw = await getDanmu(
+          subjectId,
+          episodeIndex,
+          title,
+          abortTrigger: abortTrigger,
+        );
         if (raw.isNotEmpty) {
-          final items = decodeDanmaku(raw);
+          final items = _decodeItems(raw);
           if (items.isNotEmpty) {
             cacheItems(cacheKey, items);
             return items;
           }
         }
+      } on http.RequestAbortedException {
+        rethrow;
       } catch (e) {
         debugPrint('获取弹幕失败 ($title): $e');
       }
@@ -133,57 +167,68 @@ class DanmakuController extends ChangeNotifier {
       final rawItems = decoded is List
           ? decoded
           : (decoded is Map ? decoded['data'] as List? ?? const [] : const []);
-      if (rawItems.isEmpty) return const [];
-
-      final items = <DanmakuItem>[];
-      var previousTime = -1;
-      var isSorted = true;
-
-      for (var i = 0; i < rawItems.length; i++) {
-        final item = rawItems[i];
-        if (item is! Map) continue;
-        final text = item['m']?.toString();
-        if (text == null || text.isEmpty) continue;
-
-        final params = item['p'];
-        if (params is! String) continue;
-
-        final parts = params.split(',');
-        if (parts.length < 2) continue;
-        final seconds = double.tryParse(parts[0]);
-        if (seconds == null || !seconds.isFinite) continue;
-        final timeMs = (seconds * 1000).round();
-        final type = int.tryParse(parts[1]) ?? 1;
-        if (type != 1 && type != 4 && type != 5) continue;
-
-        int colorVal = 0xFFFFFF;
-        if (parts.length == 3) {
-          colorVal = int.tryParse(parts[2]) ?? 0xFFFFFF;
-        } else if (parts.length >= 4) {
-          colorVal = int.tryParse(parts[3]) ?? 0xFFFFFF;
-        }
-
-        if (timeMs < previousTime) isSorted = false;
-        previousTime = timeMs;
-
-        items.add(
-          DanmakuItem(
-            text,
-            time: timeMs,
-            color: Color(0xFF000000 | (colorVal & 0xFFFFFF)),
-            type: type,
-          ),
-        );
-      }
-
-      if (!isSorted) {
-        items.sort((a, b) => a.time.compareTo(b.time));
-      }
-      return items;
+      return _decodeItems(rawItems);
     } catch (e) {
       debugPrint('解析弹幕异常: $e');
       return const [];
     }
+  }
+
+  static List<DanmakuItem> _decodeItems(List rawItems) {
+    final items = <DanmakuItem>[];
+    var previousTime = -1;
+    var isSorted = true;
+
+    for (var i = 0; i < rawItems.length; i++) {
+      final item = rawItems[i];
+      if (item is! Map) continue;
+      final text = item['m']?.toString();
+      if (text == null || text.isEmpty) continue;
+
+      final params = item['p'];
+      if (params is! String) continue;
+
+      final first = params.indexOf(',');
+      if (first < 0) continue;
+      final second = params.indexOf(',', first + 1);
+      final seconds = double.tryParse(params.substring(0, first));
+      if (seconds == null || !seconds.isFinite) continue;
+      final timeMs = (seconds * 1000).round();
+      final type =
+          int.tryParse(
+            params.substring(first + 1, second < 0 ? null : second),
+          ) ??
+          1;
+      if (type != 1 && type != 4 && type != 5) continue;
+
+      int colorVal = 0xFFFFFF;
+      if (second >= 0) {
+        // Local files use time,type,color; online records add size before color.
+        final third = params.indexOf(',', second + 1);
+        final start = third < 0 ? second + 1 : third + 1;
+        final end = params.indexOf(',', start);
+        colorVal =
+            int.tryParse(params.substring(start, end < 0 ? null : end)) ??
+            0xFFFFFF;
+      }
+
+      if (timeMs < previousTime) isSorted = false;
+      previousTime = timeMs;
+
+      items.add(
+        DanmakuItem(
+          text,
+          time: timeMs,
+          color: Color(0xFF000000 | (colorVal & 0xFFFFFF)),
+          type: type,
+        ),
+      );
+    }
+
+    if (!isSorted) {
+      items.sort((a, b) => a.time.compareTo(b.time));
+    }
+    return items;
   }
 
   /// 序列化弹幕列表为 JSON 字符串
@@ -210,12 +255,7 @@ class DanmakuController extends ChangeNotifier {
   static const int maxCachedEpisodes = _maxCachedEpisodes;
   static const int maxCachedItems = 50000;
 
-  static Future<List<DanmakuItem>> decode(String raw) async =>
-      decodeDanmaku(raw);
-  static String encode(List<DanmakuItem> items) => encodeDanmaku(items);
-
   static void clearCache() => _cache.clear();
-  static void clearDanmakuCache() => clearCache();
 
   static void cacheItems(String key, List<DanmakuItem> items) {
     if (items.length > maxCachedItems) return;

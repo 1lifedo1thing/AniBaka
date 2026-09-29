@@ -22,7 +22,10 @@ import 'package:baka/widgets/common/scale_button.dart';
 import 'package:baka/widgets/dialog/input_dialog.dart';
 
 class MinePage extends StatefulWidget {
-  const MinePage({super.key});
+  final ValueChanged<int>? onOpenLibrary;
+  final VoidCallback? onOpenDownloads;
+
+  const MinePage({super.key, this.onOpenLibrary, this.onOpenDownloads});
 
   @override
   State<StatefulWidget> createState() => _MinePageState();
@@ -308,19 +311,23 @@ class _MinePageState extends State<MinePage> {
         '历史',
         Icons.history,
         Colors.blueAccent,
-        () => _navTo(const LibraryPage(initialIndex: 0)),
+        () => widget.onOpenLibrary != null
+            ? widget.onOpenLibrary!(0)
+            : _navTo(const LibraryPage(initialIndex: 0)),
       ),
       _DashItem(
         '追番',
         Icons.favorite_border,
         Colors.pinkAccent,
-        () => _navTo(const LibraryPage(initialIndex: 1)),
+        () => widget.onOpenLibrary != null
+            ? widget.onOpenLibrary!(1)
+            : _navTo(const LibraryPage(initialIndex: 1)),
       ),
       _DashItem(
         '下载',
         Icons.download_outlined,
         Colors.greenAccent,
-        () => DownloadManagerPage.show(context),
+        widget.onOpenDownloads ?? () => DownloadManagerPage.show(context),
       ),
       _DashItem(
         '社区',

@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -15,8 +15,22 @@ class TrackerClient {
     utf8.encode(_generatePeerId()),
   );
 
-  static final HttpClient _httpClient = HttpClient()
+  final HttpClient _httpClient = HttpClient()
     ..connectionTimeout = const Duration(seconds: 10);
+
+  bool _disposed = false;
+  final _closed = Completer<void>();
+  final Set<RawDatagramSocket> _sockets = {};
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _closed.complete();
+    _httpClient.close(force: true);
+    for (final socket in _sockets) {
+      socket.close();
+    }
+    _sockets.clear();
+  }
 
   static const int defaultListenPort = 6881;
 
@@ -34,7 +48,7 @@ class TrackerClient {
   }
 
   /// Announces in parallel and keeps the interval returned by trackers.
-  static Future<TrackerAnnounceResult> announce({
+  Future<TrackerAnnounceResult> announce({
     required Uint8List infoHash,
     required Iterable<String> trackers,
     int totalSize = 0,
@@ -44,19 +58,31 @@ class TrackerClient {
     String? event,
   }) async {
     final urls = normalizeTrackers(trackers);
-    final results = await Future.wait(
-      urls.map(
-        (url) => _announceOne(
-          url: url,
-          infoHash: infoHash,
-          totalSize: totalSize,
-          downloaded: downloaded,
-          uploaded: uploaded,
-          port: port,
-          event: event,
-        ).catchError((_) => const TrackerAnnounceResult()),
-      ),
-    );
+    final results = <TrackerAnnounceResult>[];
+    var next = 0;
+    Future<void> worker() async {
+      while (!_disposed && next < urls.length) {
+        final url = urls[next++];
+        results.add(
+          await _announceOne(
+            url: url,
+            infoHash: infoHash,
+            totalSize: totalSize,
+            downloaded: downloaded,
+            uploaded: uploaded,
+            port: port,
+            event: event,
+          ),
+        );
+      }
+    }
+
+    await Future.any([
+      Future.wait([
+        for (var i = 0; i < 4 && i < urls.length; i++) worker(),
+      ]).then<void>((_) {}),
+      _closed.future,
+    ]);
     Duration? interval;
     final peers = <PeerAddress>{};
     for (final result in results) {
@@ -74,7 +100,7 @@ class TrackerClient {
     );
   }
 
-  static Future<TrackerAnnounceResult> announceMetadata({
+  Future<TrackerAnnounceResult> announceMetadata({
     required TorrentMetadata metadata,
     int downloaded = 0,
     int uploaded = 0,
@@ -92,7 +118,7 @@ class TrackerClient {
     );
   }
 
-  static Future<TrackerAnnounceResult> announceFromMagnet({
+  Future<TrackerAnnounceResult> announceFromMagnet({
     required MagnetLink magnet,
     int port = defaultListenPort,
   }) {
@@ -123,7 +149,7 @@ class TrackerClient {
     return result;
   }
 
-  static Future<TrackerAnnounceResult> _announceOne({
+  Future<TrackerAnnounceResult> _announceOne({
     required String url,
     required Uint8List infoHash,
     required int totalSize,
@@ -153,7 +179,7 @@ class TrackerClient {
           );
   }
 
-  static Future<TrackerAnnounceResult> _announceHttp({
+  Future<TrackerAnnounceResult> _announceHttp({
     required String url,
     required Uint8List infoHash,
     required int totalSize,
@@ -178,13 +204,20 @@ class TrackerClient {
     final separator = url.contains('?') ? '&' : '?';
     final requestUrl = '$url$separator$query';
 
+    Timer? timer;
     try {
+      if (_disposed) return const TrackerAnnounceResult();
       final request = await _httpClient.getUrl(Uri.parse(requestUrl));
-      request.headers.set('User-Agent', 'Baka/1.0');
-      final response = await request.close().timeout(
+      timer = Timer(
         const Duration(seconds: 15),
+        () => request.abort(TimeoutException('Tracker HTTP timed out')),
       );
-      if (response.statusCode != 200) return const TrackerAnnounceResult();
+      request.headers.set('User-Agent', 'Baka/1.0');
+      final response = await request.close();
+      if (response.statusCode != 200) {
+        request.abort();
+        return const TrackerAnnounceResult();
+      }
 
       final body = await _collectBytes(response);
       final decoded = Bencode.decode(body);
@@ -201,12 +234,14 @@ class TrackerClient {
         interval: seconds > 0 ? Duration(seconds: seconds) : null,
       );
     } catch (e) {
-      debugPrint('[Tracker] $url 请求失败: $e');
+      if (!_disposed) debugPrint('[Tracker] $url 请求失败: $e');
       return const TrackerAnnounceResult();
+    } finally {
+      timer?.cancel();
     }
   }
 
-  static Future<TrackerAnnounceResult> _announceUdp({
+  Future<TrackerAnnounceResult> _announceUdp({
     required String url,
     required Uint8List infoHash,
     required int totalSize,
@@ -223,12 +258,17 @@ class TrackerClient {
         uri.host,
         type: InternetAddressType.IPv4,
       ).timeout(const Duration(seconds: 8));
-      if (addresses.isEmpty) return const TrackerAnnounceResult();
+      if (_disposed || addresses.isEmpty) return const TrackerAnnounceResult();
 
       final address = addresses.first;
       final port = uri.hasPort ? uri.port : 80;
       final rng = Random();
       socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+      if (_disposed) {
+        socket.close();
+        return const TrackerAnnounceResult();
+      }
+      _sockets.add(socket);
       events = StreamIterator<RawSocketEvent>(socket);
 
       final connectTx = rng.nextInt(0x7fffffff);
@@ -292,8 +332,9 @@ class TrackerClient {
       debugPrint('[Tracker] $url UDP 请求失败: $e');
       return const TrackerAnnounceResult();
     } finally {
-      await events?.cancel();
       socket?.close();
+      _sockets.remove(socket);
+      await events?.cancel();
     }
   }
 

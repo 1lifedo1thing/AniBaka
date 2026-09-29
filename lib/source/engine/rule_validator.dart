@@ -159,9 +159,8 @@ class RuleValidator {
     }
   }
 
-  static final RegExp _templatePlaceholderPattern = RegExp(
-    r'\{[a-zA-Z0-9_]+(?::raw)?\}',
-  );
+  static final RegExp _templatePlaceholderPattern =
+      RuleLanguageSpec.templatePlaceholder;
 
   static String _regexValidationPattern(String pattern) {
     return pattern.replaceAllMapped(_templatePlaceholderPattern, (_) => '0');

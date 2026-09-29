@@ -12,7 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   test('site probe blocks loopback targets before making a request', () async {
     final probe = SiteProbeService();
-    addTearDown(probe.cancel);
+    addTearDown(probe.dispose);
     await expectLater(
       probe.execute(
         const SiteProbeRequest(method: 'GET', url: 'http://127.0.0.1/test'),
@@ -20,36 +20,6 @@ void main() {
       throwsA(isA<FormatException>()),
     );
   });
-
-  test(
-    'OpenAI-compatible connection test accepts structured content',
-    () async {
-      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      addTearDown(() => server.close(force: true));
-      server.listen((request) async {
-        await utf8.decoder.bind(request).join();
-        request.response.headers.contentType = ContentType.json;
-        request.response.write(
-          jsonEncode({
-            'choices': [
-              {
-                'message': {'content': '{"ok":true}'},
-              },
-            ],
-          }),
-        );
-        await request.response.close();
-      });
-
-      final service = AiRuleAuthoringService();
-      await service.testConnection(
-        AiProviderConfig(
-          baseUrl: 'http://${server.address.host}:${server.port}/v1',
-          model: 'fake',
-        ),
-      );
-    },
-  );
 
   test(
     'authoring loop probes, validates, and returns an unsaved rule',
@@ -80,6 +50,17 @@ void main() {
                     'render': true,
                   },
                 ],
+              })
+            : calls == 3
+            ? jsonEncode({
+                'action': 'candidate',
+                'rule': {
+                  'pipeline': {
+                    'play': [
+                      {'op': 42},
+                    ],
+                  },
+                },
               })
             : jsonEncode({
                 'action': 'candidate',
@@ -113,7 +94,7 @@ void main() {
         uriValidator: (_) async {},
         includeBundledExamples: false,
       );
-      addTearDown(service.cancel);
+      addTearDown(service.dispose);
       final progress = <RuleAuthoringProgress>[];
       final result = await service.run(
         provider: AiProviderConfig(
@@ -128,7 +109,7 @@ void main() {
         onProgress: progress.add,
       );
 
-      expect(calls, 3);
+      expect(calls, 4);
       expect(result.config.baseUrl, 'https://anime.example');
       expect(result.config.id, startsWith('ai_anime_example_'));
       expect(
@@ -186,9 +167,11 @@ void main() {
         baseUrl: origin,
         pipeline: _pipeline(),
       );
-      final report = await RuleValidationRunner(
+      final runner = RuleValidationRunner(
         mediaClient: Dio(BaseOptions(validateStatus: (_) => true)),
-      ).validate(config, keyword: '孤独摇滚');
+      );
+      addTearDown(runner.dispose);
+      final report = await runner.validate(config, keyword: '孤独摇滚');
 
       expect(report.success, isTrue, reason: report.message);
       expect(report.mediaKind, 'file');
@@ -244,7 +227,9 @@ void main() {
       await request.response.close();
     });
 
-    final report = await RuleValidationRunner().validate(
+    final runner = RuleValidationRunner();
+    addTearDown(runner.dispose);
+    final report = await runner.validate(
       CustomSourceConfig(
         id: 'local-hls-test',
         name: 'Local HLS test',

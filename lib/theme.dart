@@ -260,4 +260,12 @@ extension ThemeX on BuildContext {
   ColorScheme get colorScheme => theme.colorScheme;
   Color get primaryColor => colorScheme.primary;
   Color get cardColor => theme.cardColor;
+
+  TextStyle withAppFont(TextStyle style) {
+    final ambient = DefaultTextStyle.of(this).style;
+    return style.copyWith(
+      fontFamily: ambient.fontFamily,
+      fontFamilyFallback: ambient.fontFamilyFallback,
+    );
+  }
 }

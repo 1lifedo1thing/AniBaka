@@ -89,8 +89,6 @@ class AccountSession {
       _expiresAt = next.expiresAt;
       await _persist();
       return revision == generation;
-    } catch (_) {
-      return false;
     } finally {
       if (revision == generation) _refresh = null;
     }

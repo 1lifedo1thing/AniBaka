@@ -8,16 +8,59 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
-const _swiperHiddenUntilKey = 'swiper_hidden_until';
+/// 首页横幅的隐藏偏好。隐藏 14 天后自动恢复，移动端与桌面端共用。
+abstract final class BannerVisibility {
+  static const _hiddenUntilKey = 'swiper_hidden_until';
 
-DateTime? _swiperHiddenUntil() =>
-    DateTime.tryParse(Instances.sp.getString(_swiperHiddenUntilKey) ?? '');
+  static DateTime? get _hiddenUntil =>
+      DateTime.tryParse(Instances.sp.getString(_hiddenUntilKey) ?? '');
 
-bool _isSwiperHidden() {
-  final hiddenUntil = _swiperHiddenUntil();
-  if (hiddenUntil != null && hiddenUntil.isAfter(DateTime.now())) return true;
-  Instances.sp.remove(_swiperHiddenUntilKey);
-  return false;
+  static bool get isHidden {
+    final hiddenUntil = _hiddenUntil;
+    if (hiddenUntil != null && hiddenUntil.isAfter(DateTime.now())) {
+      return true;
+    }
+    Instances.sp.remove(_hiddenUntilKey);
+    return false;
+  }
+
+  static void setHidden(bool hidden) {
+    if (!hidden) {
+      Instances.sp.remove(_hiddenUntilKey);
+      return;
+    }
+    Instances.sp.setString(
+      _hiddenUntilKey,
+      DateTime.now().add(const Duration(days: 14)).toIso8601String(),
+    );
+  }
+
+  /// 询问是否切换横幅的显示状态，用户确认时返回 true。
+  static Future<bool> confirmToggle(
+    BuildContext context, {
+    required bool hidden,
+  }) {
+    HapticFeedback.mediumImpact();
+    final remainingDays = _hiddenUntil?.difference(DateTime.now()).inDays ?? 0;
+    return showAppConfirmDialog(
+      context,
+      title: 'Banner 设置',
+      content: hidden ? '已隐藏，还剩 ${remainingDays + 1} 天。' : '隐藏此横幅 14 天以专注于内容？',
+      confirmText: hidden ? '显示横幅' : '隐藏横幅',
+      cancelText: '取消',
+    );
+  }
+}
+
+/// 打开横幅条目：外部链接交给系统浏览器，其余进入番剧详情。
+void openBannerItem(BuildContext context, Map data) {
+  HapticFeedback.lightImpact();
+  final link = data['videos']?.toString() ?? '';
+  if (link.isNotEmpty && !link.contains(r'$')) {
+    unawaited(launchUrlString(link, mode: LaunchMode.externalApplication));
+    return;
+  }
+  NavigationService.toDetail(context, data);
 }
 
 class SwiperBanner extends StatefulWidget {
@@ -33,7 +76,7 @@ class _SwiperBannerState extends State<SwiperBanner> {
   late final CarouselController _carouselController = CarouselController();
   final ValueNotifier<int> _currentIndexNotifier = ValueNotifier<int>(0);
   Timer? _timer;
-  bool _showSwiper = !_isSwiperHidden();
+  bool _showSwiper = !BannerVisibility.isHidden;
   bool _isInteracting = false;
   bool _reduceVisualEffects = false;
   bool _tickerEnabled = true;
@@ -110,43 +153,20 @@ class _SwiperBannerState extends State<SwiperBanner> {
 
   void _toggleSwiper() {
     setState(() => _showSwiper = !_showSwiper);
-    if (_showSwiper) {
-      Instances.sp.remove(_swiperHiddenUntilKey);
-    } else {
-      Instances.sp.setString(
-        _swiperHiddenUntilKey,
-        DateTime.now().add(const Duration(days: 14)).toIso8601String(),
-      );
-    }
+    BannerVisibility.setHidden(!_showSwiper);
     _restartAutoPlay();
   }
 
   Future<void> _showSettingsDialog() async {
-    HapticFeedback.mediumImpact();
-    final remainingDays =
-        _swiperHiddenUntil()?.difference(DateTime.now()).inDays ?? 0;
-    final confirmed = await showAppConfirmDialog(
+    final confirmed = await BannerVisibility.confirmToggle(
       context,
-      title: 'Banner 设置',
-      content: _showSwiper
-          ? '隐藏此横幅 14 天以专注于内容？'
-          : '已隐藏，还剩 ${remainingDays + 1} 天。',
-      confirmText: _showSwiper ? '隐藏横幅' : '显示横幅',
-      cancelText: '取消',
+      hidden: !_showSwiper,
     );
     if (confirmed && mounted) _toggleSwiper();
   }
 
-  void _openItem(int index) {
-    HapticFeedback.lightImpact();
-    final data = widget.swiperData[index];
-    final link = data['videos']?.toString() ?? '';
-    if (link.isNotEmpty && !link.contains(r'$')) {
-      unawaited(launchUrlString(link, mode: LaunchMode.externalApplication));
-      return;
-    }
-    NavigationService.toDetail(context, data);
-  }
+  void _openItem(int index) =>
+      openBannerItem(context, widget.swiperData[index]);
 
   @override
   Widget build(BuildContext context) {

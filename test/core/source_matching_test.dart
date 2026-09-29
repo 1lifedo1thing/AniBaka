@@ -1,3 +1,4 @@
+import 'package:baka/source/models/source_search_result.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
@@ -27,14 +28,7 @@ void main() {
         key: key,
         title: title,
         sourceType: source,
-        data: {
-          'title': title,
-          'videoList': List<String>.generate(
-            episodes,
-            (index) => '${index + 1}#episode-${index + 1}',
-            growable: false,
-          ),
-        },
+        episodeCount: episodes,
       );
     }
 
@@ -129,11 +123,10 @@ void main() {
     );
 
     test('counts video rows without allocating split substrings', () {
-      final item = SourceMatchCandidate(
-        key: 'videos',
-        title: 'Example',
-        sourceType: 'source',
-        data: const {'videos': '  \r\n第1集\$ep-1\r\n\t\n第2集\$ep-2\n第3集\$ep-3'},
+      final item = SourceMatchCandidate.fromResult(
+        SourceSearchResult.internal({
+          'videos': '  \r\n第1集\$ep-1\r\n\t\n第2集\$ep-2\n第3集\$ep-3',
+        }),
       );
 
       expect(item.episodeCount, 3);
@@ -192,13 +185,7 @@ void main() {
       key: key,
       title: title,
       sourceType: 'source',
-      data: {
-        'videoList': List<String>.generate(
-          episodes,
-          (index) => '${index + 1}#episode-${index + 1}',
-          growable: false,
-        ),
-      },
+      episodeCount: episodes,
     );
 
     test('admits an exact match into the probe queue', () {

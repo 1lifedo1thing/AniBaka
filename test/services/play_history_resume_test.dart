@@ -37,22 +37,24 @@ void main() {
 
   test('remembers the latest episode across playback sources', () async {
     await historyRepository.rememberEpisode(
-      videoData: {
+      request: PlaybackRequest.fromMap({
         'id': 'source-a-series',
         'bgmId': 123,
         'title': 'Test Anime',
         'source': 'custom_a',
-      },
+      }),
       episodeIndex: 6,
       urlIndex: 2,
     );
 
-    final resume = historyRepository.getResumeSelection({
-      'id': 'source-b-series',
-      'bgmId': 123,
-      'title': 'Different Source Title',
-      'source': 'custom_b',
-    });
+    final resume = historyRepository.getResumeSelection(
+      PlaybackRequest.fromMap({
+        'id': 'source-b-series',
+        'bgmId': 123,
+        'title': 'Different Source Title',
+        'source': 'custom_b',
+      }),
+    );
 
     expect(resume?.episodeIndex, 6);
     expect(resume?.lineIndex, 1);
@@ -74,10 +76,9 @@ void main() {
       },
     ]);
 
-    final resume = historyRepository.getResumeSelection({
-      'id': 'another-id',
-      'title': 'Legacy Anime',
-    });
+    final resume = historyRepository.getResumeSelection(
+      PlaybackRequest.fromMap({'id': 'another-id', 'title': 'Legacy Anime'}),
+    );
 
     expect(resume?.episodeIndex, 4);
   });
@@ -92,7 +93,7 @@ void main() {
         'source': 'internal',
       };
       await historyRepository.rememberEpisode(
-        videoData: identity,
+        request: PlaybackRequest.fromMap(identity),
         episodeIndex: 2,
         urlIndex: 1,
       );

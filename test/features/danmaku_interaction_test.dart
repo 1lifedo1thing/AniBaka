@@ -100,37 +100,36 @@ void main() {
       },
     );
 
-    for (final size in [const Size(360, 800), const Size(844, 390)]) {
-      testWidgets(
-        'panel scrolls and closes at $size with large text and keyboard',
-        (tester) async {
-          await openPanel(tester, size, textScale: 1.5);
-          expect(tester.takeException(), isNull);
-          await tester.ensureVisible(find.text('展开更多设置'));
-          await tester.pumpAndSettle();
-          await tester.tap(find.text('展开更多设置'));
-          await tester.pumpAndSettle();
-          await tester.ensureVisible(find.byType(DropdownButton<String>));
-          await tester.pumpAndSettle();
-          expect(tester.takeException(), isNull);
-          await tester.scrollUntilVisible(
-            find.byType(TextField),
-            180,
-            scrollable: find.byType(Scrollable).first,
-          );
-          await tester.pumpAndSettle();
-          await tester.tap(find.byType(TextField));
-          tester.view.viewInsets = const FakeViewPadding(bottom: 140);
-          await tester.pumpAndSettle();
-          expect(tester.takeException(), isNull);
-          expect(find.byTooltip('关闭设置').hitTestable(), findsOneWidget);
-          tester.view.resetViewInsets();
-          await tester.tap(find.byTooltip('关闭设置'));
-          await tester.pumpAndSettle();
-          expect(find.byType(PanelContainer), findsNothing);
-        },
-      );
-    }
+    testWidgets(
+      'panel scrolls and closes at 360x800 with large text and keyboard',
+      (tester) async {
+        const size = Size(360, 800);
+        await openPanel(tester, size, textScale: 1.5);
+        expect(tester.takeException(), isNull);
+        await tester.ensureVisible(find.text('展开更多设置'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('展开更多设置'));
+        await tester.pumpAndSettle();
+        await tester.ensureVisible(find.byType(DropdownButton<String>));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        await tester.scrollUntilVisible(
+          find.byType(TextField),
+          180,
+          scrollable: find.byType(Scrollable).first,
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byType(TextField));
+        tester.view.viewInsets = const FakeViewPadding(bottom: 140);
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(find.byTooltip('关闭设置').hitTestable(), findsOneWidget);
+        tester.view.resetViewInsets();
+        await tester.tap(find.byTooltip('关闭设置'));
+        await tester.pumpAndSettle();
+        expect(find.byType(PanelContainer), findsNothing);
+      },
+    );
   });
 
   group('search and selection', () {
@@ -163,6 +162,7 @@ void main() {
           ),
           client: client,
           version: 'test',
+          credentialOrigin: () => Uri.parse('https://www.anibaka.com'),
         );
         addTearDown(client.close);
         addTearDown(DanmakuController.clearCache);

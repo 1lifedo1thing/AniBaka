@@ -1,8 +1,8 @@
+import 'package:baka/models/bgm.dart';
 import 'package:baka/source/source_registry.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/app/navigation.dart';
-import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/utils/reg_utils.dart';
 import 'package:baka/widgets/platform/windows/windows_post_card.dart';
 import 'package:flutter/material.dart';
@@ -138,8 +138,7 @@ Widget buildCachedImage(
   double height, {
   BoxFit fit = BoxFit.cover,
 }) {
-  final resolvedUrl =
-      BgmUtils.resolveCoverImage(data) ?? getSuo(data['content']);
+  final resolvedUrl = resolveCoverImage(data) ?? getSuo(data['content']);
   return buildNetworkImage(resolvedUrl, width, height, fit: fit);
 }
 
@@ -218,19 +217,11 @@ class PostCard extends StatelessWidget {
               heroTag: coverHeroTag(data),
               image: buildCachedImage(data, double.infinity, double.infinity),
             )
-          : _MobileCard(data: data, meta: meta),
+          : _buildMobileCard(context, meta),
     );
   }
-}
 
-class _MobileCard extends StatelessWidget {
-  final Map data;
-  final PostCardMeta meta;
-
-  const _MobileCard({required this.data, required this.meta});
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildMobileCard(BuildContext context, PostCardMeta meta) {
     final label = meta.tagText.isNotEmpty
         ? (meta.scoreText == null
               ? meta.tagText

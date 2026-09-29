@@ -4,7 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
-import 'package:baka/utils/app_logger.dart';
+import 'package:baka/core/app_logger.dart';
 
 class TvLogExportSession {
   TvLogExportSession({

@@ -1,3 +1,4 @@
+import 'package:baka/utils/json_values.dart';
 import 'package:flutter/material.dart';
 
 import 'package:baka/api/bgm.dart';
@@ -42,17 +43,14 @@ class _AnimeDetailRelatedSectionState extends State<AnimeDetailRelatedSection>
     final ids = <int>{};
 
     for (final raw in response) {
-      if (BgmUtils.toInt(raw['type']) != 2) continue;
-      final id = BgmUtils.toInt(raw['id']);
-      final title =
-          BgmUtils.trimmed(raw['name_cn']) ?? BgmUtils.trimmed(raw['name']);
+      if (toInt(raw['type']) != 2) continue;
+      final id = toInt(raw['id']);
+      final title = trimmed(raw['name_cn']) ?? trimmed(raw['name']);
       if (id == null || title == null || !ids.add(id)) continue;
 
       final image =
-          BgmUtils.pickImageUrl(raw['images']) ??
-          BgmUtils.trimmed(raw['image']) ??
-          '';
-      final relation = BgmUtils.trimmed(raw['relation']) ?? '相关';
+          BgmUtils.pickImageUrl(raw['images']) ?? trimmed(raw['image']) ?? '';
+      final relation = trimmed(raw['relation']) ?? '相关';
       items.add({
         'id': id,
         'bgmId': id,

@@ -6,7 +6,6 @@ const kDefaultImage =
     'https://image.planet.youku.com/img/100/12/59443/i_1716805259443_ca83ed260c207767fc7f5b695e4fd0ad_b_w400h400.jpg';
 
 final _suoRe = RegExp(r'suo.. ?([^)]+)\)');
-final _pureDigitsRe = RegExp(r'^[0-9]+$');
 
 /// 从帖子内容提取图片 URL：直链原样返回，`suo(...)` 格式解码返回，否则返回默认占位图。
 String getSuo(String? content) {
@@ -19,7 +18,7 @@ String getSuo(String? content) {
 }
 
 String getAvatar({String avatar = ''}) {
-  if (_pureDigitsRe.hasMatch(avatar)) {
+  if (_isDigits(avatar)) {
     return 'https://q1.qlogo.cn/g?b=qq&nk=$avatar&s=640';
   }
   final cached = _avatarUrlCache[avatar];
@@ -34,6 +33,15 @@ String getAvatar({String avatar = ''}) {
 
 const _avatarCacheLimit = 64;
 final _avatarUrlCache = <String, String>{};
+
+bool _isDigits(String text) {
+  if (text.isEmpty) return false;
+  for (var i = 0; i < text.length; i++) {
+    final unit = text.codeUnitAt(i);
+    if (unit < 0x30 || unit > 0x39) return false;
+  }
+  return true;
+}
 
 class RegUtils {
   /// 标题尾部的季/篇/部标识（第X季、Season X、上篇、剧场版……）

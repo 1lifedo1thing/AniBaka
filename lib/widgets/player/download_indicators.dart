@@ -18,7 +18,6 @@ class ActiveDownloadIndicator extends StatefulWidget {
 }
 
 class _ActiveDownloadIndicatorState extends State<ActiveDownloadIndicator> {
-  late final VoidCallback _listener;
   DownloadTask? _currentTask;
   int _activeTaskCount = 0;
 
@@ -26,15 +25,20 @@ class _ActiveDownloadIndicatorState extends State<ActiveDownloadIndicator> {
   void initState() {
     super.initState();
     downloads.init();
-    _listener = _refresh;
-    downloads.tasksListenable.addListener(_listener);
+    downloads.tasksListenable.addListener(_refresh);
     _refresh();
   }
 
   @override
   void dispose() {
-    downloads.tasksListenable.removeListener(_listener);
+    downloads.tasksListenable.removeListener(_refresh);
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant ActiveDownloadIndicator oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.taskIdPrefix != widget.taskIdPrefix) _refresh();
   }
 
   void _refresh() {
@@ -50,9 +54,10 @@ class _ActiveDownloadIndicatorState extends State<ActiveDownloadIndicator> {
       if (task.status == DownloadStatus.downloading) downloading ??= task;
       count++;
     }
-    if (mounted) {
+    final current = downloading ?? first;
+    if (current != _currentTask || count != _activeTaskCount) {
       setState(() {
-        _currentTask = downloading ?? first;
+        _currentTask = current;
         _activeTaskCount = count;
       });
     }
@@ -199,9 +204,14 @@ class _ActiveDownloadIndicatorState extends State<ActiveDownloadIndicator> {
   }
 }
 
-class MobileBtProgressIndicator extends StatelessWidget {
-  const MobileBtProgressIndicator({required this.torrent, super.key});
+class BtProgressIndicator extends StatelessWidget {
+  const BtProgressIndicator({
+    required this.torrent,
+    this.padding = const EdgeInsets.fromLTRB(16, 0, 16, 12),
+    super.key,
+  });
   final TorrentService torrent;
+  final EdgeInsetsGeometry padding;
 
   @override
   Widget build(BuildContext context) {
@@ -223,28 +233,22 @@ class MobileBtProgressIndicator extends StatelessWidget {
     const readyColor = Color(0xFF34C759);
 
     final String stateText;
-    final IconData stateIcon;
     final Color stateColor;
     switch (stats.state) {
       case TorrentState.resolving:
         stateText = '解析中';
-        stateIcon = Icons.manage_search_rounded;
         stateColor = theme.colorScheme.secondary;
       case TorrentState.connecting:
         stateText = '连接 Peers';
-        stateIcon = Icons.sync_rounded;
         stateColor = theme.colorScheme.secondary;
       case TorrentState.downloading:
         stateText = '${(stats.progress * 100).toStringAsFixed(1)}%';
-        stateIcon = Icons.downloading_rounded;
         stateColor = primary;
       case TorrentState.seeding:
         stateText = '做种中';
-        stateIcon = Icons.check_circle_outline_rounded;
         stateColor = readyColor;
       case TorrentState.error:
         stateText = stats.errorMessage ?? '错误';
-        stateIcon = Icons.error_outline_rounded;
         stateColor = theme.colorScheme.error;
       default:
         return const SizedBox.shrink();
@@ -261,7 +265,7 @@ class MobileBtProgressIndicator extends StatelessWidget {
     final remaining = (required - contiguous).clamp(0, required);
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      padding: padding,
       child: Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
@@ -272,10 +276,11 @@ class MobileBtProgressIndicator extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                Icon(stateIcon, size: 14, color: stateColor),
-                const SizedBox(width: 6),
                 Text(
                   'BT $stateText',
                   style: TextStyle(
@@ -285,30 +290,16 @@ class MobileBtProgressIndicator extends StatelessWidget {
                   ),
                 ),
                 if (speed > 0 || uploadSpeed > 0) ...[
-                  const SizedBox(width: 8),
-                  Icon(
-                    Icons.arrow_downward_rounded,
-                    size: 11,
-                    color: primary.withValues(alpha: 0.7),
-                  ),
-                  const SizedBox(width: 2),
                   Text(
-                    formatBytesPerSecond(speed),
+                    '↓ ${formatBytesPerSecond(speed)}',
                     style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
                       color: primary,
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  Icon(
-                    Icons.arrow_upward_rounded,
-                    size: 11,
-                    color: Colors.orange.withValues(alpha: 0.7),
-                  ),
-                  const SizedBox(width: 2),
                   Text(
-                    formatBytesPerSecond(uploadSpeed),
+                    '↑ ${formatBytesPerSecond(uploadSpeed)}',
                     style: const TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
@@ -316,31 +307,30 @@ class MobileBtProgressIndicator extends StatelessWidget {
                     ),
                   ),
                 ],
-                const Spacer(),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: readyToPlay
-                        ? readyColor.withValues(alpha: 0.1)
-                        : bodyColor?.withValues(alpha: 0.05),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(
-                    readyToPlay ? '可播放' : '缓冲中',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
+                if (stats.state != TorrentState.error)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
                       color: readyToPlay
-                          ? readyColor
-                          : bodyColor?.withValues(alpha: 0.5),
+                          ? readyColor.withValues(alpha: 0.1)
+                          : bodyColor?.withValues(alpha: 0.05),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      readyToPlay ? '可播放' : '缓冲中',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: readyToPlay
+                            ? readyColor
+                            : bodyColor?.withValues(alpha: 0.5),
+                      ),
                     ),
                   ),
-                ),
                 if (peers > 0) ...[
-                  const SizedBox(width: 8),
                   Text(
                     '$peers peers',
                     style: TextStyle(
@@ -350,7 +340,6 @@ class MobileBtProgressIndicator extends StatelessWidget {
                   ),
                 ],
                 if (uploadedBytes > 0) ...[
-                  const SizedBox(width: 8),
                   Text(
                     '↑${formatBytes(uploadedBytes)}',
                     style: TextStyle(
@@ -365,25 +354,31 @@ class MobileBtProgressIndicator extends StatelessWidget {
             ClipRRect(
               borderRadius: BorderRadius.circular(3),
               child: LinearProgressIndicator(
-                value: stats.progress.clamp(0.0, 1.0),
+                value:
+                    stats.state == TorrentState.resolving ||
+                        stats.state == TorrentState.connecting
+                    ? null
+                    : stats.progress.clamp(0.0, 1.0),
                 minHeight: 3,
                 backgroundColor: stateColor.withValues(alpha: 0.1),
                 valueColor: AlwaysStoppedAnimation<Color>(stateColor),
               ),
             ),
             const SizedBox(height: 6),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            Wrap(
+              spacing: 12,
+              runSpacing: 4,
               children: [
-                Text(
-                  readyToPlay
-                      ? '缓冲 ${formatBytes(contiguous)}/${formatBytes(required)}'
-                      : '待缓冲 ${formatBytes(remaining)}',
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: bodyColor?.withValues(alpha: 0.45),
+                if (stats.state != TorrentState.error)
+                  Text(
+                    readyToPlay
+                        ? '缓冲 ${formatBytes(contiguous)}/${formatBytes(required)}'
+                        : '待缓冲 ${formatBytes(remaining)}',
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: bodyColor?.withValues(alpha: 0.45),
+                    ),
                   ),
-                ),
                 if (total > 0)
                   Text(
                     '${formatBytes(stats.downloadedBytes)} / ${formatBytes(total)}',

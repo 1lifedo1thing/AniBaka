@@ -4,6 +4,10 @@ import 'package:baka/source/models/source_rule.dart';
 class RuleLanguageSpec {
   RuleLanguageSpec._();
 
+  static final templatePlaceholder = RegExp(
+    r'\{([a-zA-Z_][a-zA-Z0-9_]*)(:raw)?\}',
+  );
+
   static const Map<String, String> operations = {
     'template': 'Render a string template with variables.',
     'setVar': 'Store a rendered value in a named variable.',

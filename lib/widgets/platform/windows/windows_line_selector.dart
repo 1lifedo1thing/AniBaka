@@ -9,6 +9,7 @@ class WindowsLineSelector extends StatelessWidget {
     this.title,
     this.sourceNames,
     this.isInline = false,
+    this.availableLineIndexes,
   });
 
   final int lineCount;
@@ -17,12 +18,15 @@ class WindowsLineSelector extends StatelessWidget {
   final String? title;
   final List<String>? sourceNames;
   final bool isInline;
+  final List<int>? availableLineIndexes;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final indexes =
+        availableLineIndexes ?? List.generate(lineCount, (index) => index + 1);
 
-    if (lineCount <= 1) {
+    if (indexes.length <= 1) {
       if (isInline) return const SizedBox.shrink();
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -61,9 +65,9 @@ class WindowsLineSelector extends StatelessWidget {
           scrollDirection: Axis.horizontal,
           child: Row(
             children: List.generate(
-              lineCount,
+              indexes.length,
               (index) => _WindowsLineSelectorItem(
-                lineIndex: index + 1,
+                lineIndex: indexes[index],
                 currUrl: currUrl,
                 onTap: onUrlChanged,
                 sourceNames: sourceNames,
@@ -98,16 +102,20 @@ class _WindowsLineSelectorItem extends StatelessWidget {
     final names = sourceNames;
     final lineName =
         (names != null && lineIndex > 0 && lineIndex <= names.length)
-            ? names[lineIndex - 1]
-            : '线路 $lineIndex';
+        ? names[lineIndex - 1]
+        : '线路 $lineIndex';
 
     final bgColor = isSelected
         ? primaryColor
-        : (isDark ? const Color(0xFF2C2C33) : Colors.black.withValues(alpha: 0.08));
+        : (isDark
+              ? const Color(0xFF2C2C33)
+              : Colors.black.withValues(alpha: 0.08));
 
     final borderColor = isSelected
         ? primaryColor
-        : (isDark ? Colors.white.withValues(alpha: 0.2) : Colors.black.withValues(alpha: 0.15));
+        : (isDark
+              ? Colors.white.withValues(alpha: 0.2)
+              : Colors.black.withValues(alpha: 0.15));
 
     return Padding(
       padding: const EdgeInsets.only(right: 8),
@@ -131,7 +139,11 @@ class _WindowsLineSelectorItem extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 if (isSelected) ...[
-                  const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 14),
+                  const Icon(
+                    Icons.play_arrow_rounded,
+                    color: Colors.white,
+                    size: 14,
+                  ),
                   const SizedBox(width: 3),
                 ],
                 Text(

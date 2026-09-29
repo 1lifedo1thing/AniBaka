@@ -21,9 +21,6 @@ class LoginService {
         '${ApiConfig.host}/user/login',
         {'name': name.trim(), 'pwd': pwd, 'platform': 'app'},
       );
-      if (res == null) {
-        return (success: false, message: '登录失败，请检查网络');
-      }
       if (res['code'] != 200) {
         return (
           success: false,
@@ -54,9 +51,6 @@ class LoginService {
         '${ApiConfig.host}/user/register',
         {'name': name.trim(), 'pwd': pwd, 'qq': qq.trim()},
       );
-      if (res == null) {
-        return (success: false, message: '注册失败，请检查网络');
-      }
       final bool ok = res['code'] == 200;
       final String msg = res['msg']?.toString() ?? (ok ? '注册成功' : '注册失败');
 
@@ -82,9 +76,6 @@ class LoginService {
             'level': current.level,
             'pwd': field == 'pwd' ? value : '',
           });
-      if (result == null) {
-        return (success: false, message: '更新失败，请检查网络', user: null);
-      }
       if (result['code'] != 200) {
         return (
           success: false,

@@ -1,8 +1,8 @@
+import 'package:baka/models/bgm.dart';
 import 'package:flutter/material.dart';
 import 'package:baka/widgets/common/platform_tooltip.dart';
 
 import 'package:baka/pages/player/bgm_detail_page.dart';
-import 'package:baka/utils/bgm_utils.dart';
 
 class BgmFollowPill extends StatelessWidget {
   final String title;

@@ -1,29 +1,104 @@
 import 'package:baka/models/playback_episode.dart';
 
 /// Shared handoff between matching, navigation and a playback session.
-/// Legacy metadata is retained by reference; episode catalogs are decoded once.
+/// Each consumer owns its selection; immutable catalogs are shared. Legacy
+/// fields are decoded only at the old page boundary, never written back.
 class PlaybackRequest {
-  PlaybackRequest.fromMap(Map data)
-    : metadata = data.cast<String, dynamic>(),
-      episodes = PlaybackEpisodeCatalog.episodesOf(
-        data,
-        mergeDuplicateTitles: true,
-      ),
-      episodeIndex = int.tryParse('${data['currPlayIndex']}') ?? 0,
-      lineIndex = int.tryParse('${data['currUrl']}') ?? 1,
-      sourceNames = (data['sourceNames'] as List?)?.cast<String>(),
-      prefetched = data['_prefetchedPlayback'] as PrefetchedMedia?;
+  PlaybackRequest({
+    required this.source,
+    this.episodes = const [],
+    this.sourceNames,
+    this.episodeIndex,
+    this.lineIndex,
+    this.prefetched,
+    this.httpHeaders,
+    Map<String, dynamic> metadata = const {},
+  }) : metadata = Map.unmodifiable(metadata);
+
+  factory PlaybackRequest.fromMap(Map data) => PlaybackRequest(
+    source: data['source'] as String? ?? '',
+    episodes: PlaybackEpisodeCatalog.episodesOf(
+      data,
+      mergeDuplicateTitles: true,
+    ),
+    episodeIndex: int.tryParse('${data['currPlayIndex']}'),
+    lineIndex: int.tryParse('${data['currUrl']}'),
+    sourceNames: (data['sourceNames'] as List?)?.cast<String>(),
+    prefetched: data['_prefetchedPlayback'] as PrefetchedMedia?,
+    httpHeaders: (data['httpHeaders'] as Map?)?.cast<String, String>(),
+    metadata: {
+      for (final key in data.keys.cast<String>())
+        if (!_typedKeys.contains(key)) key: data[key],
+    },
+  );
+
+  static const _typedKeys = {
+    'source',
+    'videos',
+    'videoList',
+    'sourceNames',
+    'currPlayIndex',
+    'currUrl',
+    '_prefetchedPlayback',
+    'httpHeaders',
+  };
 
   final Map<String, dynamic> metadata;
   final List<PlaybackEpisode> episodes;
   final List<String>? sourceNames;
-  final int episodeIndex;
-  final int lineIndex;
+  int? episodeIndex;
+  int? lineIndex;
   PrefetchedMedia? prefetched;
-  String get source => metadata['source'] as String? ?? '';
+  final String source;
+  final Map<String, String>? httpHeaders;
   Object? get contentId => metadata['seriesId'] ?? metadata['id'];
-  Map<String, String>? get httpHeaders =>
-      (metadata['httpHeaders'] as Map?)?.cast<String, String>();
+  String get title => metadata['title'] as String? ?? '';
+
+  PlaybackRequest copyWith({
+    List<PlaybackEpisode>? episodes,
+    List<String>? sourceNames,
+    int? episodeIndex,
+    int? lineIndex,
+    Map<String, dynamic>? metadata,
+  }) => PlaybackRequest._(
+    source,
+    episodes ?? this.episodes,
+    sourceNames ?? this.sourceNames,
+    episodeIndex ?? this.episodeIndex,
+    lineIndex ?? this.lineIndex,
+    prefetched,
+    httpHeaders,
+    metadata == null ? this.metadata : Map.unmodifiable(metadata),
+  );
+
+  PlaybackRequest._(
+    this.source,
+    this.episodes,
+    this.sourceNames,
+    this.episodeIndex,
+    this.lineIndex,
+    this.prefetched,
+    this.httpHeaders,
+    this.metadata,
+  );
+
+  void storePrefetched({
+    required int episodeIndex,
+    required int lineIndex,
+    required String episodeId,
+    required String url,
+    required Map<String, String> httpHeaders,
+  }) {
+    prefetched = PrefetchedMedia(
+      source: source,
+      episodeIndex: episodeIndex,
+      lineIndex: lineIndex,
+      episodeId: episodeId,
+      url: url,
+      httpHeaders: httpHeaders,
+      resolvedAt: DateTime.now().millisecondsSinceEpoch,
+    );
+  }
 }
 
 class PrefetchedMedia {

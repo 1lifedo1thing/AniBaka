@@ -6,6 +6,7 @@ import 'package:baka/api/request_cache.dart';
 import 'package:baka/core/account_session.dart';
 import 'package:baka/services/account/bangumi_session.dart';
 import 'package:baka/models/collection.dart';
+import 'package:baka/models/page.dart';
 
 /// 登录 AniBaka 时使用云端收藏；未登录时使用设备本地收藏。
 late CollectionRepository collections;
@@ -28,7 +29,7 @@ class CollectionRepository {
           int? status,
           int? bgmId,
         }),
-        CollectionListResponse?
+        PageData<AnimeCollection>?
       >();
   final _statsRequests =
       RequestDeduplicator<(int account, int bangumi), CollectionStats?>();
@@ -59,7 +60,7 @@ class CollectionRepository {
     return collection;
   }
 
-  Future<CollectionListResponse?> getList({
+  Future<PageData<AnimeCollection>?> getList({
     int page = 1,
     int pageSize = 20,
     int? status,
@@ -77,7 +78,7 @@ class CollectionRepository {
         _getList(page: page, pageSize: pageSize, status: status, bgmId: bgmId),
   );
 
-  Future<CollectionListResponse?> _getList({
+  Future<PageData<AnimeCollection>?> _getList({
     required int page,
     required int pageSize,
     required int? status,
@@ -103,7 +104,7 @@ class CollectionRepository {
       if (total >= start && list.length < safePageSize) list.add(item);
       total++;
     }
-    return CollectionListResponse(
+    return (
       list: list,
       total: total,
       page: safePage,

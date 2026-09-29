@@ -1,3 +1,4 @@
+import 'package:baka/source/runtime/source_operation.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
@@ -45,10 +46,9 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
   Timer? _playbackKeepAliveTimer;
   int _playbackKeepAliveGeneration = 0;
   int? _playbackKeepAliveInFlightGeneration;
-  HttpServer? _hlsProxyServer;
-  StreamSubscription<HttpRequest>? _hlsProxySubscription;
-  List<Uri> _hlsProxyTargets = const [];
-  Map<String, String> _hlsProxyHeaders = const {};
+  _HlsSession? _hlsSession;
+  SourceOperation? _hlsPreparation;
+  int _hlsGeneration = 0;
   late final _playFeatures = _inspectPlayFeatures(rule.play);
   // 同一页面 HTML 常被连续多个 select/searchList/episodes 步骤解析；
   // 按 identity 缓存最近一次的 DOM，避免重复全量解析（消费方均只读）。
@@ -135,7 +135,10 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
   }
 
   @override
-  Future<List<Series>> search(
+  Future<List<Series>> search(String query, {bool enhanceWithBgm = true}) =>
+      runOperation(() => _search(query, enhanceWithBgm: enhanceWithBgm));
+
+  Future<List<Series>> _search(
     String query, {
     bool enhanceWithBgm = true,
   }) async {
@@ -150,12 +153,15 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
               final item = series[next++];
               try {
                 final subject = await resolveBgmSubject(title: item.name);
+                SourceOperation.check();
                 item.image = subject?.imageUrl ?? item.image;
                 item.description =
                     subject?.summary ?? item.description ?? '暂无简介';
                 item.bgmId = subject?.subjectId ?? item.bgmId;
                 item.score = subject?.score ?? item.score;
-              } catch (_) {}
+              } catch (_) {
+                SourceOperation.check();
+              }
             }
           }),
         );
@@ -167,13 +173,18 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
   }
 
   @override
-  Future<PlaybackCatalog> getPlaybackCatalog(String seriesId) => _interpreter
-      .runDetail(rule, this, seriesId)
-      .then(PlaybackCatalog.fromSources)
-      .whenComplete(_dropParseCache);
+  Future<PlaybackCatalog> getPlaybackCatalog(String seriesId) => runOperation(
+    () => _interpreter
+        .runDetail(rule, this, seriesId)
+        .then(PlaybackCatalog.fromSources)
+        .whenComplete(_dropParseCache),
+  );
 
   @override
-  Future<String> getDownloadUrl(String episodeId) {
+  Future<String> getDownloadUrl(String episodeId) =>
+      runOperation(() => _getDownloadUrl(episodeId));
+
+  Future<String> _getDownloadUrl(String episodeId) {
     final future = !_playFeatures.usesCookies
         ? _interpreter.runPlay(rule, this, episodeId)
         : _withPlayCookieSnapshot(
@@ -184,6 +195,20 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
 
   @override
   Future<({String url, Map<String, String> httpHeaders})> resolvePlaybackMedia(
+    String episodeId, {
+    bool skipValidation = false,
+    int maxAttempts = 2,
+    Duration? reachTimeout,
+  }) => runOperation(
+    () => _resolvePlaybackMedia(
+      episodeId,
+      skipValidation: skipValidation,
+      maxAttempts: maxAttempts,
+      reachTimeout: reachTimeout,
+    ),
+  );
+
+  Future<({String url, Map<String, String> httpHeaders})> _resolvePlaybackMedia(
     String episodeId, {
     bool skipValidation = false,
     int maxAttempts = 2,
@@ -205,7 +230,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
           debugPrint('$name: 播放管线第 ${attempt + 1}/$attempts 次未得到媒体地址');
           if (attempt + 1 < attempts) {
             // 解析为空多半是站点凭证/会话过期，重跑整条 play 管线会重新申请一次。
-            await Future<void>.delayed(_playRetryDelay);
+            await SourceOperation.delay(_playRetryDelay);
           }
           continue;
         }
@@ -231,7 +256,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
         debugPrint('$name: 动态媒体被服务器拒绝，丢弃: ${media.url}');
         if (attempt + 1 < attempts) {
           // 直链被拒也可能是签名过期：重跑一次拿到新直链再验证。
-          await Future<void>.delayed(_playRetryDelay);
+          await SourceOperation.delay(_playRetryDelay);
         }
       }
       return (url: '', httpHeaders: const <String, String>{});
@@ -311,19 +336,31 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
     ({String url, Map<String, String> httpHeaders}) media, {
     bool? filterHlsAds,
     void Function(String message)? onHlsAdFilterStatus,
+  }) => runOperation(
+    () => _preparePlaybackMedia(
+      media,
+      filterHlsAds: filterHlsAds,
+      onHlsAdFilterStatus: onHlsAdFilterStatus,
+    ),
+  );
+
+  Future<({String url, Map<String, String> httpHeaders})> _preparePlaybackMedia(
+    ({String url, Map<String, String> httpHeaders}) media, {
+    bool? filterHlsAds,
+    void Function(String message)? onHlsAdFilterStatus,
   }) async {
+    final generation = ++_hlsGeneration;
+    _hlsPreparation?.cancel();
+    final preparation = SourceOperation.current!;
+    _hlsPreparation = preparation;
     var prepared = media;
     if (_playFeatures.resolvesMediaRedirects) {
-      final resolvedUrl =
+      final resolved =
           await (_mediaRedirectResolver ??= RemoteMediaRedirectResolver(
             useSystemProxy: useSystemProxy,
-          )).resolve(media.url, headers: media.httpHeaders);
-      if (resolvedUrl != media.url) {
-        prepared = (
-          url: resolvedUrl,
-          httpHeaders: _headersForRedirectTarget(media.httpHeaders),
-        );
-      }
+          )).resolveMedia(media.url, headers: media.httpHeaders);
+      SourceOperation.check();
+      prepared = resolved;
     }
 
     final filtersAds =
@@ -337,92 +374,112 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
     final manifestUri = Uri.tryParse(prepared.url);
     if (manifestUri == null || !manifestUri.hasScheme) return prepared;
 
+    final budget = SourceOperation(
+      parent: preparation,
+      timeout: filtersAds ? const Duration(seconds: 15) : null,
+    );
     try {
-      var playlist = await _fetchHlsPlaylist(manifestUri, prepared.httpHeaders);
-      if (!_playlistLooksFetchable(playlist)) {
-        debugPrint(
-          '${rule.id}: unable to materialize complete HLS manifest '
-          '(HTTP ${playlist.status}, ${playlist.body.length} chars)',
+      return await budget.run(() async {
+        var playlist = await _fetchHlsPlaylist(
+          manifestUri,
+          prepared.httpHeaders,
         );
-        if (filtersAds) {
-          onHlsAdFilterStatus?.call(
-            'HLS 去广告未生效：清单读取失败（HTTP ${playlist.status}）',
-          );
-        }
-        return prepared;
-      }
-
-      // 主清单只有码率变体、没有分片，去广告得先落到一个具体变体上。
-      // 这一步固定了码率，所以只在规则显式开启 filterHlsAds 时做。
-      if (HlsMasterPlaylist.isMaster(playlist.body)) {
-        if (!filtersAds) {
-          debugPrint('${rule.id}: HLS 主清单不做物化（未开启 filterHlsAds）');
-          return prepared;
-        }
-        final variant = HlsMasterPlaylist.selectVariant(
-          playlist.body,
-          playlist.uri,
-        );
-        if (variant == null) {
-          debugPrint('${rule.id}: HLS 主清单无法选定单一变体，放弃去广告');
-          onHlsAdFilterStatus?.call('HLS 去广告未生效：不支持此多码率清单');
-          return prepared;
-        }
-        playlist = await _fetchHlsPlaylist(variant.uri, prepared.httpHeaders);
         if (!_playlistLooksFetchable(playlist)) {
           debugPrint(
-            '${rule.id}: unable to materialize HLS variant '
+            '${rule.id}: unable to materialize complete HLS manifest '
             '(HTTP ${playlist.status}, ${playlist.body.length} chars)',
           );
-          onHlsAdFilterStatus?.call(
-            'HLS 去广告未生效：分片清单读取失败（HTTP ${playlist.status}）',
-          );
+          if (filtersAds) {
+            onHlsAdFilterStatus?.call(
+              'HLS 去广告未生效：清单读取失败（HTTP ${playlist.status}）',
+            );
+          }
           return prepared;
         }
-        debugPrint('${rule.id}: HLS 主清单选定变体 ${variant.label}');
-      }
 
-      if (!playlist.body.contains('#EXT-X-ENDLIST')) {
-        debugPrint(
-          '${rule.id}: unable to materialize complete HLS manifest '
-          '(直播清单无 #EXT-X-ENDLIST, ${playlist.body.length} chars)',
-        );
-        if (filtersAds) onHlsAdFilterStatus?.call('HLS 去广告未生效：仅支持完整点播清单');
-        return prepared;
-      }
+        // 主清单只有码率变体、没有分片，去广告得先落到一个具体变体上。
+        // 这一步固定了码率，所以只在规则显式开启 filterHlsAds 时做。
+        if (HlsMasterPlaylist.isMaster(playlist.body)) {
+          if (!filtersAds) {
+            debugPrint('${rule.id}: HLS 主清单不做物化（未开启 filterHlsAds）');
+            return prepared;
+          }
+          final variant = HlsMasterPlaylist.selectVariant(
+            playlist.body,
+            playlist.uri,
+          );
+          if (variant == null) {
+            debugPrint('${rule.id}: HLS 主清单无法选定单一变体，放弃去广告');
+            onHlsAdFilterStatus?.call('HLS 去广告未生效：不支持此多码率清单');
+            return prepared;
+          }
+          playlist = await _fetchHlsPlaylist(variant.uri, prepared.httpHeaders);
+          if (!_playlistLooksFetchable(playlist)) {
+            debugPrint(
+              '${rule.id}: unable to materialize HLS variant '
+              '(HTTP ${playlist.status}, ${playlist.body.length} chars)',
+            );
+            onHlsAdFilterStatus?.call(
+              'HLS 去广告未生效：分片清单读取失败（HTTP ${playlist.status}）',
+            );
+            return prepared;
+          }
+          debugPrint('${rule.id}: HLS 主清单选定变体 ${variant.label}');
+        }
 
-      var body = playlist.body;
-      HlsAdFilterOutcome? filterOutcome;
-      if (filtersAds) {
-        final outcome = await HlsAdFilter.apply(
-          manifest: body,
-          manifestUri: playlist.uri,
-          probe: (segmentUri) =>
-              _readHlsSegmentFingerprint(segmentUri, prepared.httpHeaders),
-        );
-        debugPrint('${rule.id}: HLS 去广告 ${outcome.detail}');
-        body = outcome.manifest;
-        filterOutcome = outcome;
-      }
+        if (!playlist.body.contains('#EXT-X-ENDLIST')) {
+          debugPrint(
+            '${rule.id}: unable to materialize complete HLS manifest '
+            '(直播清单无 #EXT-X-ENDLIST, ${playlist.body.length} chars)',
+          );
+          if (filtersAds) onHlsAdFilterStatus?.call('HLS 去广告未生效：仅支持完整点播清单');
+          return prepared;
+        }
 
-      final proxyUrl = await _startHlsProxy(
-        body,
-        playlist.uri,
-        prepared.httpHeaders,
-      );
-      if (filterOutcome != null) {
-        onHlsAdFilterStatus?.call(
-          filterOutcome.changed
-              ? '已过滤 ${filterOutcome.removedSegments} 个广告分片，'
-                    '共 ${filterOutcome.removedSeconds.toStringAsFixed(1)} 秒'
-              : 'HLS 去广告：${filterOutcome.detail}',
+        var body = playlist.body;
+        HlsAdFilterOutcome? filterOutcome;
+        if (filtersAds) {
+          final outcome = await HlsAdFilter.apply(
+            manifest: body,
+            manifestUri: playlist.uri,
+            probe: (segmentUri) =>
+                _readHlsSegmentFingerprint(segmentUri, prepared.httpHeaders),
+          );
+          debugPrint('${rule.id}: HLS 去广告 ${outcome.detail}');
+          body = outcome.manifest;
+          filterOutcome = outcome;
+        }
+
+        final proxyUrl = await _startHlsProxy(
+          body,
+          playlist.uri,
+          prepared.httpHeaders,
+          generation,
         );
-      }
-      return (url: proxyUrl, httpHeaders: const <String, String>{});
+        if (filterOutcome != null) {
+          onHlsAdFilterStatus?.call(
+            filterOutcome.changed
+                ? '已过滤 ${filterOutcome.removedSegments} 个广告分片，'
+                      '共 ${filterOutcome.removedSeconds.toStringAsFixed(1)} 秒'
+                : 'HLS 去广告：${filterOutcome.detail}',
+          );
+        }
+        return (url: proxyUrl, httpHeaders: const <String, String>{});
+      });
     } catch (error) {
+      preparation.token.throwIfCancelled();
       debugPrint('${rule.id}: HLS manifest materialization failed: $error');
-      if (filtersAds) onHlsAdFilterStatus?.call('HLS 去广告未生效：网络或分片处理失败，已保留原视频');
+      if (filtersAds) {
+        onHlsAdFilterStatus?.call(
+          budget.timedOut
+              ? 'HLS 去广告超过15秒，已保留原视频'
+              : 'HLS 去广告未生效：网络或分片处理失败，已保留原视频',
+        );
+      }
       return prepared;
+    } finally {
+      budget.close();
+      if (identical(_hlsPreparation, preparation)) _hlsPreparation = null;
     }
   }
 
@@ -529,6 +586,9 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
     _playbackKeepAliveGeneration++;
     _playbackKeepAliveTimer?.cancel();
     _playbackKeepAliveTimer = null;
+    _hlsGeneration++;
+    _hlsPreparation?.cancel();
+    _hlsPreparation = null;
     unawaited(_stopHlsProxy());
   }
 
@@ -536,43 +596,71 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
     String body,
     Uri manifestUri,
     Map<String, String> headers,
+    int generation,
   ) async {
-    await _stopHlsProxy();
+    SourceOperation.check();
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    final secret = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
-    final baseUrl = 'http://${server.address.address}:${server.port}/$secret';
-    final targetIds = <Uri, int>{};
+    try {
+      if (generation != _hlsGeneration ||
+          SourceOperation.current!.isCancelled) {
+        await server.close(force: true);
+        throw const RequestCancelledException();
+      }
+      final secret = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+      final baseUrl = 'http://${server.address.address}:${server.port}/$secret';
+      final targetIds = <Uri, int>{};
 
-    String proxyUrlFor(Uri target) {
-      final id = targetIds.putIfAbsent(target, () => targetIds.length);
-      return '$baseUrl/media/${id.toRadixString(36)}';
-    }
+      String proxyUrlFor(Uri target) {
+        final id = targetIds.putIfAbsent(target, () => targetIds.length);
+        return '$baseUrl/media/${id.toRadixString(36)}';
+      }
 
-    final materialized = _materializeHlsManifest(
-      body,
-      manifestUri,
-      proxyUrlFor,
-    );
-    if (!materialized.contains('#EXTM3U') ||
-        !materialized.contains('#EXT-X-ENDLIST')) {
+      final materialized = _materializeHlsManifest(
+        body,
+        manifestUri,
+        proxyUrlFor,
+      );
+      if (!materialized.contains('#EXTM3U') ||
+          !materialized.contains('#EXT-X-ENDLIST')) {
+        await server.close(force: true);
+        throw const FormatException('incomplete VOD manifest');
+      }
+
+      final session = _HlsSession(
+        server,
+        targetIds.keys.toList(growable: false),
+        Map<String, String>.unmodifiable(headers),
+      );
+      final previous = _hlsSession;
+      _hlsSession = session;
+      // Requests inherit the session scope, not the completed preparation budget.
+      session.subscription = server.listen((request) {
+        unawaited(
+          session.operation
+              .run(
+                () => _handleHlsProxyRequest(
+                  request,
+                  secret,
+                  materialized,
+                  session,
+                ),
+              )
+              .catchError((Object _) {}),
+        );
+      });
+      unawaited(previous?.close());
+      return '$baseUrl/manifest.m3u8';
+    } catch (_) {
       await server.close(force: true);
-      throw const FormatException('incomplete VOD manifest');
+      rethrow;
     }
-
-    _hlsProxyServer = server;
-    _hlsProxyTargets = targetIds.keys.toList(growable: false);
-    _hlsProxyHeaders = Map<String, String>.unmodifiable(headers);
-    _hlsProxySubscription = server.listen(
-      (request) =>
-          unawaited(_handleHlsProxyRequest(request, secret, materialized)),
-    );
-    return '$baseUrl/manifest.m3u8';
   }
 
   Future<void> _handleHlsProxyRequest(
     HttpRequest request,
     String secret,
     String manifest,
+    _HlsSession session,
   ) async {
     final response = request.response;
     try {
@@ -599,13 +687,13 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
         return;
       }
       final id = int.tryParse(segments[2], radix: 36);
-      if (id == null || id < 0 || id >= _hlsProxyTargets.length) {
+      if (id == null || id < 0 || id >= session.targets.length) {
         response.statusCode = HttpStatus.notFound;
         await response.close();
         return;
       }
 
-      final headers = Map<String, String>.from(_hlsProxyHeaders);
+      final headers = Map<String, String>.from(session.headers);
       for (final name in const [
         HttpHeaders.rangeHeader,
         HttpHeaders.ifRangeHeader,
@@ -616,8 +704,9 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
         if (value != null && value.isNotEmpty) headers[name] = value;
       }
       final remote = await dio.requestUri<ResponseBody>(
-        _hlsProxyTargets[id],
+        session.targets[id],
         options: Options(
+          extra: const {SchedulerInterceptor.priorityKey: RequestPriority.play},
           method: request.method == 'HEAD' ? 'HEAD' : 'GET',
           headers: headers,
           responseType: ResponseType.stream,
@@ -643,6 +732,9 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
       if (request.method != 'HEAD' && stream != null) {
         await response.addStream(stream);
       }
+      if (stream != null && request.method == 'HEAD') {
+        await stream.listen(null, onError: (Object _) {}).cancel();
+      }
       await response.close();
     } catch (error) {
       try {
@@ -656,18 +748,9 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
   }
 
   Future<void> _stopHlsProxy() async {
-    final subscription = _hlsProxySubscription;
-    final server = _hlsProxyServer;
-    _hlsProxySubscription = null;
-    _hlsProxyServer = null;
-    _hlsProxyTargets = const [];
-    _hlsProxyHeaders = const {};
-    try {
-      await subscription?.cancel();
-    } catch (_) {}
-    try {
-      await server?.close(force: true);
-    } catch (_) {}
+    final session = _hlsSession;
+    _hlsSession = null;
+    await session?.close();
   }
 
   static String _materializeHlsManifest(
@@ -737,14 +820,13 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
   Future<T> _withPlayCookieSnapshot<T>(Future<T> Function() action) async {
     if (!_playFeatures.usesCookies) return action();
     final previous = _playCookieBarrier ?? Future<void>.value();
-    final release = Completer<void>();
-    _playCookieBarrier = release.future;
-    await previous;
-    try {
-      return await action();
-    } finally {
-      release.complete();
-    }
+    final next = previous.then((_) {
+      SourceOperation.check();
+      return action();
+    });
+    // Keep the barrier ordered even if a queued caller stops waiting early.
+    _playCookieBarrier = next.then<void>((_) {}, onError: (Object _) {});
+    return SourceOperation.current?.wait(next) ?? next;
   }
 
   Future<Map<String, String>> _resolveMediaHeaders(
@@ -872,8 +954,24 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
     Object? body,
     String? referer,
     String? contentType,
+    SourceOperation? operation,
     RequestPriority priority = RequestPriority.search,
   }) async {
+    if (operation != null) {
+      return runOperation(
+        () => fetch(
+          url,
+          method: method,
+          headers: headers,
+          body: body,
+          referer: referer,
+          contentType: contentType,
+          priority: priority,
+        ),
+        operation: operation,
+      );
+    }
+    SourceOperation.check();
     try {
       final resp = await dio.request(
         url,
@@ -894,6 +992,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
       );
       return resp.data?.toString() ?? '';
     } on DioException catch (e) {
+      SourceOperation.check();
       debugPrint(
         '$name: fetch 失败 $url: ${e.message ?? e.type.name}, error: ${e.error}, resp: ${e.response?.statusCode}',
       );
@@ -1064,9 +1163,11 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
         userAgent: requestUserAgent,
         taskScope: _webViewTaskScope ??= WebViewTaskScope(),
       );
+      SourceOperation.check();
       if (cookies.isNotEmpty) await _storeWebViewCookies(url, cookies);
       return html;
     } catch (e) {
+      SourceOperation.check();
       debugPrint('$name: WebView 渲染失败: $e');
       return '';
     }
@@ -1145,6 +1246,27 @@ class RemoteMediaRedirectResolver {
   Future<String> resolve(
     String remoteUrl, {
     Map<String, String> headers = const {},
+  }) async => (await resolveMedia(remoteUrl, headers: headers)).url;
+
+  Future<({String url, Map<String, String> httpHeaders})> resolveMedia(
+    String remoteUrl, {
+    Map<String, String> headers = const {},
+  }) async {
+    final url = await _resolve(remoteUrl, headers: headers);
+    final original = Uri.tryParse(remoteUrl);
+    final target = Uri.tryParse(url);
+    return (
+      url: url,
+      httpHeaders:
+          original != null && target != null && _sameAuthority(original, target)
+          ? headers
+          : PipelineSourceAdapter._headersForRedirectTarget(headers),
+    );
+  }
+
+  Future<String> _resolve(
+    String remoteUrl, {
+    Map<String, String> headers = const {},
   }) async {
     final original = Uri.tryParse(remoteUrl);
     if (original == null ||
@@ -1165,37 +1287,46 @@ class RemoteMediaRedirectResolver {
     var current = original;
     try {
       for (var hop = 0; hop <= _maxRedirects; hop++) {
+        SourceOperation.check();
         final request = await _client.headUrl(current).timeout(_requestTimeout);
-        request.followRedirects = false;
-        request.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
+        final detach = SourceOperation.current?.token.onCancel(
+          () => request.abort(),
+        );
+        try {
+          SourceOperation.check();
+          request.followRedirects = false;
+          request.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
 
-        if (safeHeaders != null && _sameAuthority(current, original)) {
-          safeHeaders.forEach(request.headers.set);
-        }
-
-        final response = await request.close().timeout(_requestTimeout);
-        final location = response.headers.value(HttpHeaders.locationHeader);
-        final status = response.statusCode;
-        await response.drain<void>().timeout(_requestTimeout);
-
-        if (location != null &&
-            location.isNotEmpty &&
-            _isRedirectStatus(status)) {
-          current = current.resolve(location);
-          continue;
-        }
-
-        if (status >= 200 && status < 400) {
-          if (current != original) {
-            debugPrint(
-              '[RemoteMediaResolver] ${original.host} -> '
-              '${current.host}:${current.port}',
-            );
+          if (safeHeaders != null && _sameAuthority(current, original)) {
+            safeHeaders.forEach(request.headers.set);
           }
-          return current.toString();
+
+          final response = await request.close().timeout(_requestTimeout);
+          final location = response.headers.value(HttpHeaders.locationHeader);
+          final status = response.statusCode;
+          await response.drain<void>().timeout(_requestTimeout);
+
+          if (location != null &&
+              location.isNotEmpty &&
+              _isRedirectStatus(status)) {
+            current = current.resolve(location);
+            continue;
+          }
+
+          if (status >= 200 && status < 400) {
+            if (current != original) {
+              debugPrint(
+                '[RemoteMediaResolver] ${original.host} -> '
+                '${current.host}:${current.port}',
+              );
+            }
+            return current.toString();
+          }
+          debugPrint('[RemoteMediaResolver] HTTP $status for ${current.host}');
+          return remoteUrl;
+        } finally {
+          detach?.call();
         }
-        debugPrint('[RemoteMediaResolver] HTTP $status for ${current.host}');
-        return remoteUrl;
       }
       debugPrint(
         '[RemoteMediaResolver] too many redirects for ${original.host}',
@@ -1219,4 +1350,21 @@ class RemoteMediaRedirectResolver {
       left.port == right.port;
 
   void close() => _client.close(force: true);
+}
+
+class _HlsSession {
+  _HlsSession(this.server, this.targets, this.headers);
+  final HttpServer server;
+  final List<Uri> targets;
+  final Map<String, String> headers;
+  final SourceOperation operation = SourceOperation();
+  StreamSubscription<HttpRequest>? subscription;
+  Future<void>? _closing;
+  Future<void> close() => _closing ??= _close();
+  Future<void> _close() async {
+    operation.cancel();
+    await subscription?.cancel();
+    await server.close(force: true);
+    operation.close();
+  }
 }

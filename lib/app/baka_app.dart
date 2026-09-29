@@ -7,8 +7,10 @@ import 'dart:ui' show PointerDeviceKind;
 import 'package:baka/app_state.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/pages/home/home_page.dart';
+import 'package:baka/pages/library/library_page.dart';
 import 'package:baka/pages/login/login_page.dart';
 import 'package:baka/pages/mine/mine_page.dart';
+import 'package:baka/pages/player/download_page.dart';
 import 'package:baka/pages/player/player_page.dart';
 import 'package:baka/pages/schedule/update_schedule_page.dart';
 import 'package:baka/pages/thread/thread_page.dart';
@@ -137,7 +139,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _appState = Get.find<AppState>();
 
-    _pages = List<Widget?>.filled(Instances.isDesktopPlatform ? 3 : 4, null);
+    _pages = List<Widget?>.filled(Instances.isDesktopPlatform ? 6 : 4, null);
   }
 
   @override
@@ -173,7 +175,14 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
         ? switch (index) {
             0 => const HomePage(),
             1 => const ThreadPage(),
-            _ => const MinePage(),
+            2 => MinePage(
+              onOpenLibrary: (index) =>
+                  _appState.changePage(index == 1 ? 3 : 4),
+              onOpenDownloads: () => _appState.changePage(5),
+            ),
+            3 => const LibraryPage(initialIndex: 1, embedded: true),
+            4 => const LibraryPage(embedded: true),
+            _ => const DownloadManagerPage(embedded: true),
           }
         : switch (index) {
             0 => const HomePage(),
@@ -181,7 +190,10 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
             2 => const ThreadPage(),
             _ => const MinePage(),
           };
-    return _pages[index] = RepaintBoundary(child: page);
+    final content = RepaintBoundary(child: page);
+    // 片库与下载重新进入时读取最新数据，离开后释放页面监听与列表状态。
+    if (Instances.isDesktopPlatform && index >= 3) return content;
+    return _pages[index] = content;
   }
 
   @override

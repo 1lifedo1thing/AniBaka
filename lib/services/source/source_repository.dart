@@ -1,3 +1,6 @@
+import 'package:baka/source/runtime/source_operation.dart';
+import 'package:baka/models/playback_request.dart';
+import 'package:baka/source/models/source_search_result.dart';
 import 'dart:collection';
 
 import 'package:flutter/foundation.dart';
@@ -32,6 +35,54 @@ class SourceAdapterService {
   final LinkedHashMap<String, ({AdapterBase adapter, DateTime? revision})>
   _adapterCache = LinkedHashMap();
 
+  final Map<Object, AdapterBase> _playbackOwners = {};
+  final Set<AdapterBase> _retired = {};
+  bool _disposed = false;
+
+  void retainPlayback(Object owner, AdapterBase adapter) {
+    if (_disposed) throw StateError('SourceAdapterService is disposed');
+    _playbackOwners[owner] = adapter;
+    _trimAdapters();
+  }
+
+  void releasePlayback(Object owner) {
+    _playbackOwners.remove(owner);
+    _trimAdapters();
+  }
+
+  bool _inUse(AdapterBase adapter) =>
+      adapter.hasActiveOperations || _playbackOwners.containsValue(adapter);
+
+  void _retire(AdapterBase adapter) {
+    if (_inUse(adapter)) {
+      _retired.add(adapter);
+    } else {
+      adapter.onIdle = null;
+      adapter.dispose();
+    }
+  }
+
+  void _trimAdapters({AdapterBase? keep}) {
+    _retired.removeWhere((adapter) {
+      if (_inUse(adapter)) return false;
+      adapter.onIdle = null;
+      adapter.dispose();
+      return true;
+    });
+    while (_adapterCache.length > _maxCachedAdapters) {
+      String? victim;
+      for (final entry in _adapterCache.entries) {
+        if (!identical(entry.value.adapter, keep) &&
+            !_inUse(entry.value.adapter)) {
+          victim = entry.key;
+          break;
+        }
+      }
+      if (victim == null) break;
+      _retire(_adapterCache.remove(victim)!.adapter);
+    }
+  }
+
   Future<void>? _initialization;
   Future<void> init() => _initialization ??=
       Future.wait<void>([
@@ -42,20 +93,41 @@ class SourceAdapterService {
         Error.throwWithStackTrace(error, stack);
       });
 
-  void close() {
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
     _catalog.removeListener(_pruneAdapters);
     for (final entry in _adapterCache.values) {
+      entry.adapter.onIdle = null;
       entry.adapter.dispose();
     }
+    for (final adapter in _retired) {
+      adapter.onIdle = null;
+      adapter.dispose();
+    }
+    _retired.clear();
+    _playbackOwners.clear();
     _adapterCache.clear();
   }
 
-  Future<List<Map<String, dynamic>>> search(
+  Future<List<SourceSearchResult>> search(
     String sourceKey,
     String query, {
+    SourceOperation? operation,
     String fallbackDescription = '',
     bool skipBgmEnhancement = false,
   }) async {
+    if (operation != null) {
+      return operation.run(
+        () => search(
+          sourceKey,
+          query,
+          fallbackDescription: fallbackDescription,
+          skipBgmEnhancement: skipBgmEnhancement,
+        ),
+      );
+    }
+    SourceOperation.check();
     final adapter = adapterFor(sourceKey);
     if (adapter == null) throw StateError('视频源不可用: $sourceKey');
     final displayName = _displayName(sourceKey);
@@ -65,33 +137,30 @@ class SourceAdapterService {
     );
     return [
       for (final series in results)
-        <String, dynamic>{
-          'title': series.name,
-          'seriesId': series.seriesId,
-          'description': series.description ?? fallbackDescription,
-          'subtitle': series.description ?? fallbackDescription,
-          'image': series.image,
-          'content': series.image,
-          'source': sourceKey,
-          'sourceDisplayName': displayName,
-          'tag': displayName,
-          if (series.bgmId != null) 'bgmId': series.bgmId,
-          if (series.score != null) 'score': series.score,
-          if (series.image?.isNotEmpty ?? false) 'bgmImageUrl': series.image,
-        },
+        SourceSearchResult(
+          series,
+          source: sourceKey,
+          displayName: displayName,
+          fallbackDescription: fallbackDescription,
+        ),
     ];
   }
 
-  Future<Map<String, dynamic>?> buildPlayerData(
-    Map<String, dynamic> item,
-  ) async {
-    final sourceKey = item['source']?.toString();
-    if (sourceKey == null || sourceKey.isEmpty) return null;
+  Future<PlaybackRequest?> buildPlaybackRequest(
+    SourceSearchResult item, {
+    SourceOperation? operation,
+  }) async {
+    if (operation != null) {
+      return operation.run(() => buildPlaybackRequest(item));
+    }
+    SourceOperation.check();
+    final sourceKey = item.source;
 
     final adapter = adapterFor(sourceKey);
     if (adapter == null) throw StateError('视频源不可用: $sourceKey');
-    final seriesId = item['seriesId'] as String;
+    final seriesId = item.id;
     final catalog = await adapter.getPlaybackCatalog(seriesId);
+    SourceOperation.check();
     if (catalog.isEmpty) return null;
 
     final descriptor = AdapterRegistry.descriptorFor(sourceKey);
@@ -101,28 +170,38 @@ class SourceAdapterService {
           )
         : null;
     final displayName = descriptor?.displayName ?? custom!.name;
-    item
-      ..['id'] =
-          descriptor?.resolveNumericId(seriesId) ?? stableSourceId(seriesId)
-      ..['seriesUrl'] = seriesId
-      ..['currPlayIndex'] = 0
-      ..['currUrl'] = 1
-      ..['sourceDisplayName'] = displayName
-      ..['sort'] = '番剧'
-      ..['content'] = custom == null || custom.description.isEmpty
-          ? '来源: $displayName'
-          : custom.description
-      ..['tag'] = displayName
-      ..['videoList'] = catalog.episodes
-      ..['sourceNames'] = catalog.sourceNames;
-    return item;
+    return PlaybackRequest(
+      source: sourceKey,
+      episodes: catalog.episodes,
+      sourceNames: catalog.sourceNames,
+      episodeIndex: 0,
+      lineIndex: 1,
+      metadata: {
+        'id':
+            descriptor?.resolveNumericId(seriesId) ?? stableSourceId(seriesId),
+        'seriesId': seriesId,
+        'seriesUrl': seriesId,
+        'title': item.title,
+        'sourceUrl': adapter.baseUrl,
+        'sourceDisplayName': displayName,
+        'sort': '番剧',
+        'tag': displayName,
+        'content': custom == null || custom.description.isEmpty
+            ? '来源: $displayName'
+            : custom.description,
+        if (item.cover.isNotEmpty) 'image': item.cover,
+        if (item.series?.bgmId != null) 'bgmId': item.series!.bgmId,
+        if (item.series?.score != null) 'score': item.series!.score,
+      },
+    );
   }
 
   /// 按 source key 取（或创建）缓存中的适配器实例。
   ///
-  /// 与 [buildPlayerData] 共用同一 LRU 缓存，保证搜索/探针阶段的 Cookie
+  /// 与 [buildPlaybackRequest] 共用同一 LRU 缓存，保证搜索/探针阶段的 Cookie
   /// 与后续 `resolvePlaybackMedia` 一致。
   AdapterBase? adapterFor(String sourceKey) {
+    if (_disposed) throw StateError('SourceAdapterService is disposed');
     if (sourceKey.isEmpty || sourceKey == 'internal') return null;
     final custom = AdapterRegistry.isCustomSource(sourceKey);
     final config = custom
@@ -132,22 +211,21 @@ class SourceAdapterService {
         : _catalog.builtinOverrideById(sourceKey);
     final cached = _adapterCache.remove(sourceKey);
     if (custom && config == null) {
-      cached?.adapter.dispose();
+      if (cached != null) _retire(cached.adapter);
       return null;
     }
     if (cached != null && cached.revision == config?.updatedAt) {
       _adapterCache[sourceKey] = cached;
       return cached.adapter;
     }
-    cached?.adapter.dispose();
+    if (cached != null) _retire(cached.adapter);
     final adapter = config == null
         ? AdapterRegistry.createAdapter(sourceKey)
-        : PipelineSourceAdapter(config.toSourceRule());
+        : PipelineSourceAdapter(config.rule);
     if (adapter == null) return null;
-    while (_adapterCache.length >= _maxCachedAdapters) {
-      _adapterCache.remove(_adapterCache.keys.first)?.adapter.dispose();
-    }
+    adapter.onIdle = _trimAdapters;
     _adapterCache[sourceKey] = (adapter: adapter, revision: config?.updatedAt);
+    _trimAdapters(keep: adapter);
     return adapter;
   }
 
@@ -168,7 +246,7 @@ class SourceAdapterService {
                 ?.updatedAt
           : _catalog.builtinOverrideById(key)?.updatedAt;
       if (revision == entry.revision) return false;
-      entry.adapter.dispose();
+      _retire(entry.adapter);
       return true;
     });
   }
@@ -339,17 +417,21 @@ class SourceCatalog extends ChangeNotifier {
     if (source.id == 'xifanacg') {
       final legacyHost = Uri.tryParse(source.baseUrl)?.host.toLowerCase();
       if (legacyHost != 'anime.xifanacg.com') return false;
-      final installedVersion = preferences.getInt(installedVersionKey(source.id));
+      final installedVersion = preferences.getInt(
+        installedVersionKey(source.id),
+      );
       return installedVersion == null ||
           BundledRuleStore.versionFor(source.id) > installedVersion;
     }
     if (source.id == 'tvtfun') {
-      final installedVersion = preferences.getInt(installedVersionKey(source.id));
+      final installedVersion = preferences.getInt(
+        installedVersionKey(source.id),
+      );
       if (installedVersion == null ||
           BundledRuleStore.versionFor(source.id) > installedVersion) {
         return true;
       }
-      final play = source.toSourceRule().play;
+      final play = source.rule.play;
       final hasDelay = play.any(
         (s) =>
             s.op == 'delay' ||
@@ -422,9 +504,7 @@ class SourceCatalog extends ChangeNotifier {
 
     final rule = BundledRuleStore.ruleFor(key);
     if (rule == null) return null;
-    return _bundledConfigCache[key] = CustomSourceConfig.fromJson(
-      rule.toJson(),
-    );
+    return _bundledConfigCache[key] = CustomSourceConfig.fromRule(rule);
   }
 
   Future<bool> updateBuiltinSource(
@@ -432,7 +512,7 @@ class SourceCatalog extends ChangeNotifier {
     CustomSourceConfig source,
   ) async {
     if (!AdapterRegistry.isBuiltinSource(key) || source.id != key) return false;
-    final validation = RuleValidator.validate(source.toSourceRule());
+    final validation = RuleValidator.validate(source.rule);
     if (!validation.isValid) return false;
     _builtinOverrides[key] = source.copyWith(updatedAt: DateTime.now());
     await _commit();
@@ -532,7 +612,7 @@ class SourceCatalog extends ChangeNotifier {
 
   CustomSourceConfig _sourceFromJson(Map<String, dynamic> json) {
     final config = CustomSourceConfig.fromJson(json);
-    final validation = RuleValidator.validate(config.toSourceRule());
+    final validation = RuleValidator.validate(config.rule);
     if (!validation.isValid) {
       throw FormatException('规则校验失败: ${validation.errors.join('; ')}');
     }

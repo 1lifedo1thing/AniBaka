@@ -25,7 +25,7 @@ import 'package:baka/services/playback/playback_settings.dart';
 import 'package:baka/services/playback/dlss_global_playback.dart';
 import 'package:baka/services/playback/watch_party.dart';
 import 'package:baka/services/source/source_repository.dart';
-import 'package:baka/utils/app_logger.dart';
+import 'package:baka/core/app_logger.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:baka/widgets/baka_player/controller.dart';
 import 'package:flutter/widgets.dart';
@@ -75,6 +75,7 @@ class AppRuntime {
       session: account,
       client: client,
       version: Instances.appVersion,
+      credentialOrigin: () => Uri.parse(ApiConfig.host),
       onError: (_) {
         if (_ready) showSnackBar('网络连接失败，请检查网络和线路＞︿＜', isError: true);
       },
@@ -97,13 +98,14 @@ class AppRuntime {
     _cleanup.addAll([
       account.close,
       bangumiSession.api.close,
+      bangumiSession.cancelOAuthLogin,
       sourceCatalog.dispose,
       ruleRepository.dispose,
-      sourceRepository.close,
+      sourceRepository.dispose,
       mediaSession.close,
-      party.close,
-      downloads.close,
-      DanmakuController.clearDanmakuCache,
+      party.dispose,
+      downloads.dispose,
+      DanmakuController.clearCache,
       links.close,
     ]);
 

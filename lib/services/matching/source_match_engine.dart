@@ -1,5 +1,4 @@
-import 'package:baka/models/playback_episode.dart';
-import 'package:baka/utils/bgm_utils.dart';
+import 'package:baka/source/models/source_search_result.dart';
 
 import 'package:baka/utils/title_matcher.dart';
 
@@ -9,28 +8,27 @@ class SourceMatchCandidate {
     required this.key,
     required this.title,
     required this.sourceType,
-    required this.data,
-  });
+    this.episodeCount,
+  }) : result = null;
 
-  final String key;
-  final String title;
-  final String sourceType;
-  final Map<String, dynamic> data;
+  SourceMatchCandidate.fromResult(SourceSearchResult this.result)
+    : key = result.key,
+      title = result.title,
+      sourceType = result.source,
+      episodeCount = result.episodeCount;
+
+  final SourceSearchResult? result;
+  final String key, title, sourceType;
+  final int? episodeCount;
 
   late final TitleFingerprint fingerprint = TitleFingerprint(title);
-  late final int? season = BgmUtils.extractSeason(title);
-  late final int? episodeCount = _episodeCount(data);
+  late final int? season = extractSeason(title);
   late final bool isMovieLike = _movieRe.hasMatch(title);
 
   static final RegExp _movieRe = RegExp(
     r'剧场版|劇場版|映画|movie|the\s+movie|ova|oad|special',
     caseSensitive: false,
   );
-
-  static int? _episodeCount(Map<String, dynamic> data) {
-    final counted = PlaybackEpisodeCatalog.countFrom(data);
-    return counted > 0 ? counted : null;
-  }
 }
 
 /// 一次匹配会话的查询上下文。
@@ -59,16 +57,25 @@ class SourceMatchContext {
     ...automaticAliases,
   ];
 
-  late final List<TitleFingerprint> queryFingerprints = [
-    for (final title in titles)
-      if (title.trim().isNotEmpty) TitleFingerprint(title),
-  ];
+  late final List<TitleFingerprint> queryFingerprints = _uniqueFingerprints();
+
+  List<TitleFingerprint> _uniqueFingerprints() {
+    final seen = <String>{};
+    final result = <TitleFingerprint>[];
+    for (final title in titles) {
+      final fingerprint = TitleFingerprint(title);
+      if (!fingerprint.isEmpty && seen.add(fingerprint.normalized)) {
+        result.add(fingerprint);
+      }
+    }
+    return result;
+  }
 
   late final int? querySeason = _explicitSeason ?? _seasonFromTitles();
 
   int? _seasonFromTitles() {
     for (final title in titles) {
-      final season = BgmUtils.extractSeason(title);
+      final season = extractSeason(title);
       if (season != null) return season;
     }
     return null;
@@ -77,6 +84,15 @@ class SourceMatchContext {
 
 class SourceMatchScore {
   const SourceMatchScore({
+    required this.candidate,
+    required this.confidence,
+    required this.titleSimilarity,
+    required this.seasonConflict,
+    required this.severeEpisodeConflict,
+  }) : _baseConfidence = confidence;
+
+  const SourceMatchScore._(
+    this._baseConfidence, {
     required this.candidate,
     required this.confidence,
     required this.titleSimilarity,
@@ -91,6 +107,26 @@ class SourceMatchScore {
   final double titleSimilarity;
   final bool seasonConflict;
   final bool severeEpisodeConflict;
+  // Before the current-source bonus and conflict caps. Keeping this value lets
+  // the switching UI reuse title/episode work without changing cap ordering.
+  final double _baseConfidence;
+
+  SourceMatchScore forCurrentSource(String? currentSource) {
+    var value = _baseConfidence;
+    if (candidate.sourceType == currentSource) value += 0.02;
+    if (seasonConflict) value = value.clamp(0.0, 0.28);
+    if (severeEpisodeConflict) value = value.clamp(0.0, 0.32);
+    value = value.clamp(0.0, 1.0);
+    if (value == confidence) return this;
+    return SourceMatchScore._(
+      _baseConfidence,
+      candidate: candidate,
+      confidence: value,
+      titleSimilarity: titleSimilarity,
+      seasonConflict: seasonConflict,
+      severeEpisodeConflict: severeEpisodeConflict,
+    );
+  }
 
   /// 供 UI 展示的整数分。
   int get score => (confidence * 100).round();
@@ -148,6 +184,9 @@ class SourceMatchEngine {
   /// 单个源搜索上限，避免无响应源拖住整轮匹配。
   static const Duration sourceSearchBudget = Duration(seconds: 8);
 
+  /// 自动匹配与聚合搜索共用的源搜索并发上限。
+  static const int autoSearchConcurrency = 10;
+
   /// 自动匹配绝对上限：到时无论是否命中都要给出结论。
   static const Duration hardDeadline = Duration(seconds: 10);
 
@@ -196,12 +235,13 @@ class SourceMatchEngine {
     }
 
     final qSeason = context.querySeason;
-    final cSeason = candidate.season;
+    final cSeason = qSeason == null ? null : candidate.season;
     final seasonConflict =
         qSeason != null && cSeason != null && qSeason != cSeason;
 
     final expected = context.bgmEpisodeCount;
-    final actual = candidate.episodeCount;
+    final hasEpisodeCount = expected != null && expected > 0;
+    final actual = hasEpisodeCount ? candidate.episodeCount : null;
     final severeEpisodeConflict = _severeEpisodeConflict(
       expected: expected,
       actual: actual,
@@ -240,8 +280,8 @@ class SourceMatchEngine {
     }
 
     // 剧场版 vs 长篇 TV
-    if (candidate.isMovieLike) {
-      final eps = expected ?? 0;
+    if (hasEpisodeCount && candidate.isMovieLike) {
+      final eps = expected;
       if (eps >= 6 && (actual ?? 1) <= 2) {
         confidence -= 0.08;
       } else if (eps > 0 && eps <= 2) {
@@ -249,12 +289,13 @@ class SourceMatchEngine {
       }
     }
 
+    final baseConfidence = confidence;
     if (candidate.sourceType == context.currentSource) confidence += 0.02;
-
     if (seasonConflict) confidence = confidence.clamp(0.0, 0.28);
     if (severeEpisodeConflict) confidence = confidence.clamp(0.0, 0.32);
 
-    return SourceMatchScore(
+    return SourceMatchScore._(
+      baseConfidence,
       candidate: candidate,
       confidence: confidence.clamp(0.0, 1.0),
       titleSimilarity: similarity,

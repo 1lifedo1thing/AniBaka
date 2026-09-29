@@ -1,3 +1,4 @@
+import 'package:baka/source/engine/rule_language_spec.dart';
 import 'package:html/dom.dart';
 import 'package:html/parser.dart' as html_parser;
 
@@ -42,7 +43,7 @@ class TorrentRecordParser {
       Expando<_TorrentRecordConfig>('torrent-record-config');
   static final RegExp _whitespacePattern = RegExp(r'\s+');
   static final RegExp _trailingSlashPattern = RegExp(r'/+$');
-  static final RegExp _templatePattern = RegExp(r'\{([a-zA-Z0-9_]+)(:raw)?\}');
+  static final RegExp _templatePattern = RuleLanguageSpec.templatePlaceholder;
   static final RegExp _keyNoisePattern = RegExp(
     r'[^a-z0-9\u3040-\u30ff\u3400-\u9fff]+',
   );
@@ -76,6 +77,7 @@ class TorrentRecordParser {
     final displayNames = <String, String>{};
     for (final record in records) {
       if (record.excluded ||
+          (config.requireEpisodeNumber && record.episode == null) ||
           (config.requireResource && record.resourceId.isEmpty)) {
         continue;
       }
@@ -717,10 +719,8 @@ class _TorrentRecordConfig {
     Map<String, dynamic> params,
     String singular, {
     List<String> fallback = const <String>[],
-  }) => _strings(
-    params['${singular}s'] ?? params[singular],
-    fallback: fallback,
-  );
+  }) =>
+      _strings(params['${singular}s'] ?? params[singular], fallback: fallback);
 
   static List<_RowAccessor> _accessors(List<String> selectors) =>
       selectors.map(_RowAccessor.compile).toList(growable: false);

@@ -4,7 +4,7 @@ import 'dart:math' as math;
 
 import 'package:baka/instance.dart';
 import 'package:baka/theme.dart';
-import 'package:baka/utils/app_logger.dart';
+import 'package:baka/core/app_logger.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:google_fonts/google_fonts.dart';

@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:baka/models/download_task.dart';
 import 'package:baka/api/bgm.dart';
 import 'package:baka/services/download/download_manager.dart';
-import 'package:baka/services/playback/playback_content.dart';
+import 'package:baka/services/playback/history_repository.dart';
 import 'package:baka/models/playback_episode.dart';
 import 'package:baka/widgets/episode/episode_widgets.dart';
 
@@ -164,7 +164,7 @@ class _EpisodeListDialogState extends State<EpisodeListDialog> {
   int get _lineCount {
     final i = widget.currentIndex;
     if (i < 0 || i >= widget.videoList.length) return 0;
-    return widget.videoList[i].lineCount;
+    return widget.videoList[i].availableLineIndexes.length;
   }
 
   bool get _canSwitchLine =>
@@ -411,15 +411,17 @@ class _EpisodeListDialogState extends State<EpisodeListDialog> {
     final base = textColor ?? theme.colorScheme.onSurface;
     final primary = theme.colorScheme.primary;
     final current = widget.currentLineIndex ?? 1;
+    final indexes = widget.videoList[widget.currentIndex].availableLineIndexes
+        .toList(growable: false);
 
     return SizedBox(
       height: 32,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        itemCount: _lineCount,
+        itemCount: indexes.length,
         separatorBuilder: (_, _) => const SizedBox(width: 8),
         itemBuilder: (_, index) {
-          final lineIndex = index + 1;
+          final lineIndex = indexes[index];
           final selected = lineIndex == current;
           return InkWell(
             onTap: selected ? null : () => _selectLine(lineIndex),
@@ -534,7 +536,7 @@ class _EpisodeListDialogState extends State<EpisodeListDialog> {
       index: index,
       rawTitle: rawTitle,
       isSelected: index == widget.currentIndex,
-      isWatched: PlaybackContent.isEpisodeWatched(widget.videoId, index),
+      isWatched: HistoryRepository.isEpisodeWatched(widget.videoId, index),
       textColor: textColor,
       onTap: () => Navigator.pop(context, index),
     );

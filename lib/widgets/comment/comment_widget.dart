@@ -1,3 +1,5 @@
+import 'package:baka/utils/duration_utils.dart';
+import 'package:baka/utils/json_values.dart';
 import 'package:baka/core/api_transport.dart';
 import 'package:baka/api/bangumi_account_api.dart';
 import 'package:baka/services/account/bangumi_session.dart';
@@ -13,6 +15,8 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher_string.dart';
+
+final _bbImgRe = RegExp(r'\[img\](.*?)\[/img\]', caseSensitive: false);
 
 const _emojis = [
   '(⊙﹏⊙)',
@@ -48,9 +52,7 @@ _BgmComment? _parseBgmComment(Object? value) {
   final user = value['user'] as Map?;
   final rawContent = value['content']?.toString() ?? '';
   final images = <String>[];
-  final textWithoutImages = rawContent.replaceAllMapped(BgmUtils.bbImgPattern, (
-    match,
-  ) {
+  final textWithoutImages = rawContent.replaceAllMapped(_bbImgRe, (match) {
     final url = match.group(1)?.trim();
     if (url != null && url.isNotEmpty) images.add(url);
     return '';
@@ -83,7 +85,7 @@ _BgmComment? _parseBgmComment(Object? value) {
     ),
     content: content,
     images: images,
-    createdAt: BgmUtils.toInt(value['createdAt']) ?? 0,
+    createdAt: toInt(value['createdAt']) ?? 0,
     replies: replies,
   );
 }

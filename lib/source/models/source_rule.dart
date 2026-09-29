@@ -89,12 +89,12 @@ class PipelineStep {
         if (rawStep is PipelineStep) {
           branch.add(rawStep);
         } else if (rawStep is Map) {
-          branch.add(PipelineStep.fromJson(Map<String, dynamic>.from(rawStep)));
+          branch.add(PipelineStep.fromJson(rawStep.cast<String, dynamic>()));
         }
       }
-      branches.add(List<PipelineStep>.unmodifiable(branch));
+      branches.add(UnmodifiableListView(branch));
     }
-    return List<List<PipelineStep>>.unmodifiable(branches);
+    return UnmodifiableListView(branches);
   }
 
   /// 取字符串列表参数。
@@ -159,6 +159,24 @@ class SourceRule {
        detail = List.unmodifiable(detail ?? const []),
        play = List.unmodifiable(play ?? const []);
 
+  // Only locally owned or already frozen collections reach this constructor.
+  // Public construction still snapshots caller-owned mutable collections.
+  SourceRule._({
+    required this.id,
+    required this.name,
+    required this.baseUrl,
+    required this.iconUrl,
+    required this.description,
+    required this.headers,
+    required this.recipes,
+    required this.search,
+    required this.detail,
+    required this.play,
+    required this.useWebview,
+    required this.directConnection,
+    required this.mediaValidationTimeoutMs,
+  });
+
   /// 判断一个 JSON 是否声明为 v2 规则格式。
   static bool isV2Json(Map<String, dynamic> json) {
     final format = (json['format'] as String?)?.trim().toLowerCase();
@@ -169,29 +187,31 @@ class SourceRule {
 
   factory SourceRule.fromJson(Map<String, dynamic> json) {
     List<PipelineStep> parseSteps(Object? value) {
-      if (value is! List) return const [];
-      return value
-          .whereType<Map>()
-          .map((e) => PipelineStep.fromJson(Map<String, dynamic>.from(e)))
-          .toList(growable: false);
+      if (value is! List || value.isEmpty) return const [];
+      return List<PipelineStep>.unmodifiable(
+        value.whereType<Map>().map(
+          (step) => PipelineStep.fromJson(step.cast<String, dynamic>()),
+        ),
+      );
     }
 
-    return SourceRule(
+    return SourceRule._(
       id: (json['id'] as String?)?.trim() ?? '',
       name: (json['name'] as String?)?.trim() ?? '未命名源',
       baseUrl: (json['baseUrl'] as String?)?.trim() ?? '',
       iconUrl: json['iconUrl']?.toString().trim() ?? '',
       description: (json['description'] as String?)?.trim() ?? '',
       headers: json['headers'] is Map
-          ? {
+          ? UnmodifiableMapView({
               for (final entry in (json['headers'] as Map).entries)
                 entry.key.toString(): entry.value.toString(),
-            }
+            })
           : const {},
       recipes: json['recipes'] is List
-          ? (json['recipes'] as List)
-                .map((e) => e.toString())
-                .toList(growable: false)
+          ? List<String>.unmodifiable(
+              (json['recipes'] as List)
+                  .map((e) => e.toString()),
+            )
           : const [],
       search: parseSteps(json['search']),
       detail: parseSteps(json['detail']),
@@ -210,6 +230,11 @@ class SourceRule {
     'baseUrl': baseUrl,
     if (iconUrl.isNotEmpty) 'iconUrl': iconUrl,
     if (description.isNotEmpty) 'description': description,
+    ...pipelineJson(),
+  };
+
+  /// JSON is materialized only for editing, exporting or persistence.
+  Map<String, dynamic> pipelineJson() => {
     if (headers.isNotEmpty) 'headers': headers,
     if (recipes.isNotEmpty) 'recipes': recipes,
     'search': search.map((s) => s.toJson()).toList(),
@@ -236,17 +261,44 @@ class SourceRule {
     bool? directConnection,
     int? mediaValidationTimeoutMs,
   }) {
-    return SourceRule(
+    if ((id == null || id == this.id) &&
+        (name == null || name == this.name) &&
+        (baseUrl == null || baseUrl == this.baseUrl) &&
+        (iconUrl == null || iconUrl == this.iconUrl) &&
+        (description == null || description == this.description) &&
+        (headers == null || identical(headers, this.headers)) &&
+        (recipes == null || identical(recipes, this.recipes)) &&
+        (search == null || identical(search, this.search)) &&
+        (detail == null || identical(detail, this.detail)) &&
+        (play == null || identical(play, this.play)) &&
+        (useWebview == null || useWebview == this.useWebview) &&
+        (directConnection == null ||
+            directConnection == this.directConnection) &&
+        (mediaValidationTimeoutMs == null ||
+            mediaValidationTimeoutMs == this.mediaValidationTimeoutMs)) {
+      return this;
+    }
+    return SourceRule._(
       id: id ?? this.id,
       name: name ?? this.name,
       baseUrl: baseUrl ?? this.baseUrl,
       iconUrl: iconUrl ?? this.iconUrl,
       description: description ?? this.description,
-      headers: headers ?? this.headers,
-      recipes: recipes ?? this.recipes,
-      search: search ?? this.search,
-      detail: detail ?? this.detail,
-      play: play ?? this.play,
+      headers: headers == null || identical(headers, this.headers)
+          ? this.headers
+          : Map.unmodifiable(headers),
+      recipes: recipes == null || identical(recipes, this.recipes)
+          ? this.recipes
+          : List.unmodifiable(recipes),
+      search: search == null || identical(search, this.search)
+          ? this.search
+          : List.unmodifiable(search),
+      detail: detail == null || identical(detail, this.detail)
+          ? this.detail
+          : List.unmodifiable(detail),
+      play: play == null || identical(play, this.play)
+          ? this.play
+          : List.unmodifiable(play),
       useWebview: useWebview ?? this.useWebview,
       directConnection: directConnection ?? this.directConnection,
       mediaValidationTimeoutMs:

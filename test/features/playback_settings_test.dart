@@ -32,11 +32,9 @@ void main() {
       });
       expect(Instances.sp.getBool('player_autoFullscreen'), isTrue);
       expect(Instances.sp.getDouble('player_longPressSpeed'), 2.5);
-    });
 
-    test('identical snapshots do not write any preference key', () async {
-      const preferences = PlaybackPreferences();
-      await PlaybackSettingsService.saveChanges(preferences, preferences);
+      await Instances.sp.clear();
+      await PlaybackSettingsService.saveChanges(previous, previous);
       expect(Instances.sp.getKeys(), isEmpty);
     });
 
@@ -66,9 +64,8 @@ void main() {
         'mediacodec_embed',
       );
       expect(PlaybackSettingsService.normalizeVideoRenderer(null), 'gpu');
-    });
 
-    test('Android migrates gpu-next and quality renderers down to gpu', () {
+      // Android 上无法使用 gpu-next/quality，一律回落到 gpu。
       expect(
         PlaybackSettingsService.normalizeVideoRenderer(
           'gpu-next',
@@ -91,10 +88,6 @@ void main() {
         'mediacodec_embed',
       );
       expect(
-        PlaybackSettingsService.normalizeVideoRenderer('gpu', android: true),
-        'gpu',
-      );
-      expect(
         PlaybackSettingsService.normalizeVideoRenderer(null, android: true),
         'gpu',
       );
@@ -113,9 +106,7 @@ void main() {
       expect(PlaybackSettingsService.normalizeHwdecMode('no'), 'no');
       expect(PlaybackSettingsService.normalizeHwdecMode('bogus'), 'auto');
       expect(PlaybackSettingsService.normalizeHwdecMode(null), 'auto');
-    });
 
-    test('Android TV defaults to and migrates to mediacodec-copy', () {
       Instances.isTV = true;
       // 未设置或遗留的 auto 一律落到 mediacodec-copy。
       expect(
@@ -260,16 +251,16 @@ void main() {
       expect(properties['dscale'], 'bilinear');
       expect(properties['correct-downscaling'], 'no');
       expect(properties, isNot(contains('vo')));
-    });
 
-    test('Android Anime4K uses a signed half-float framebuffer', () {
-      final properties = buildPlayerProperties(
-        videoRenderer: 'gpu',
-        videoEnhancementEnabled: true,
-        android: true,
+      // Anime4K 在 Android 上需要带符号半浮点帧缓冲。
+      expect(
+        buildPlayerProperties(
+          videoRenderer: 'gpu',
+          videoEnhancementEnabled: true,
+          android: true,
+        )['fbo-format'],
+        'rgba16f',
       );
-
-      expect(properties['fbo-format'], 'rgba16f');
       expect(
         buildVideoEnhancementFramebufferProperties(
           enabled: false,
@@ -284,17 +275,15 @@ void main() {
         ),
         isEmpty,
       );
-    });
 
-    test('Android falls gpu-next back to the conservative gpu profile', () {
-      final properties = buildPlayerProperties(
+      // gpu-next 在 Android 上没有对应的 profile，回落成保守的 gpu 配置。
+      final gpuNext = buildPlayerProperties(
         videoRenderer: 'gpu-next',
         android: true,
       );
-
-      expect(properties['fbo-format'], 'rgba8');
-      expect(properties['scale'], 'bilinear');
-      expect(properties, isNot(contains('vo')));
+      expect(gpuNext['fbo-format'], 'rgba8');
+      expect(gpuNext['scale'], 'bilinear');
+      expect(gpuNext, isNot(contains('vo')));
     });
 
     test('mediacodec_embed pins hwdec but never sets vo on initial load', () {

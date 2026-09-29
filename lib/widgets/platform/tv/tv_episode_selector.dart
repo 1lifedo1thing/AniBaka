@@ -1,10 +1,10 @@
+import 'package:baka/utils/json_values.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:baka/api/anibaka_api.dart';
 import 'package:baka/models/playback_episode.dart';
-import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/widgets/platform/tv/tv_focusable.dart';
 import 'package:baka/widgets/platform/tv/tv_theme_util.dart';
 import 'package:baka/widgets/common/value_selector.dart';
@@ -56,7 +56,7 @@ class _TvEpisodeSelectorState extends State<TvEpisodeSelector> {
   int get _lineCount {
     final index = widget.currentIndex;
     return index >= 0 && index < widget.videoList.length
-        ? widget.videoList[index].lineCount
+        ? widget.videoList[index].availableLineIndexes.length
         : 0;
   }
 
@@ -175,9 +175,7 @@ class _TvEpisodeSelectorState extends State<TvEpisodeSelector> {
   }
 
   static String _stillUrl(Map<String, dynamic>? data) =>
-      BgmUtils.trimmed(data?['still_url']) ??
-      BgmUtils.trimmed(data?['still_thumb']) ??
-      '';
+      trimmed(data?['still_url']) ?? trimmed(data?['still_thumb']) ?? '';
 
   Widget _buildStill(String url, IconData icon, double size) {
     final fallback = Center(
@@ -287,12 +285,11 @@ class _TvEpisodeSelectorState extends State<TvEpisodeSelector> {
         : null;
     final stillUrl = _stillUrl(stillData);
 
-    final name =
-        BgmUtils.trimmed(stillData?['name']) ?? epItem?.title ?? '剧集详情';
+    final name = trimmed(stillData?['name']) ?? epItem?.title ?? '剧集详情';
     final overview =
-        BgmUtils.trimmed(stillData?['overview']) ??
+        trimmed(stillData?['overview']) ??
         (epItem != null ? '第 ${_focusedIndex + 1} 集' : '');
-    final airDate = BgmUtils.trimmed(stillData?['air_date']);
+    final airDate = trimmed(stillData?['air_date']);
     final isPlaying = _focusedIndex == widget.currentIndex;
 
     return Container(
@@ -530,8 +527,7 @@ class _TvEpisodeSelectorState extends State<TvEpisodeSelector> {
             future: future,
             builder: (context, snapshot) {
               final stillUrl = _stillUrl(snapshot.data);
-              final epName =
-                  BgmUtils.trimmed(snapshot.data?['name']) ?? item.title;
+              final epName = trimmed(snapshot.data?['name']) ?? item.title;
               return Padding(
                 padding: const EdgeInsets.only(right: 14),
                 child: Center(
@@ -680,12 +676,14 @@ class _TvEpisodeSelectorState extends State<TvEpisodeSelector> {
       );
     }
 
+    final indexes = widget.videoList[widget.currentIndex].availableLineIndexes
+        .toList(growable: false);
     return ListView.builder(
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.symmetric(horizontal: 28),
-      itemCount: _lineCount,
+      itemCount: indexes.length,
       itemBuilder: (context, index) {
-        final lineIndex = index + 1;
+        final lineIndex = indexes[index];
         final isSelected = lineIndex == widget.currUrl;
         final lineName =
             (widget.sourceNames != null &&

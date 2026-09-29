@@ -1,3 +1,5 @@
+import 'package:baka/models/bgm.dart';
+import 'package:baka/utils/json_values.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,7 +11,6 @@ import 'package:baka/models/collection.dart';
 import 'package:baka/models/playback_episode.dart';
 import 'package:baka/services/collection/collection_repository.dart';
 import 'package:baka/app/navigation.dart';
-import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:baka/widgets/anime_detail/video_source_search_sheet.dart';
 import 'package:baka/widgets/platform/tv/tv_episode_selector.dart';
@@ -39,12 +40,12 @@ class _TvAnimeDetailPlaceholderState extends State<TvAnimeDetailPlaceholder> {
   int? get _subjectId => _bgmInfo.subjectId;
 
   int? get _validPostId {
-    final postId = BgmUtils.toInt(_data['id']);
+    final postId = toInt(_data['id']);
     return (postId != null && postId > 0) ? postId : null;
   }
 
   void _initializeDetail() {
-    _bgmInfo = BgmUtils.readFromData(_data);
+    _bgmInfo = BgmInfo.fromData(_data);
     final bgm = (_data['bgmDetailData'] as Map?)?.cast<String, dynamic>();
     _detail = AnimeDetailViewData.from(
       source: _data,
@@ -67,17 +68,23 @@ class _TvAnimeDetailPlaceholderState extends State<TvAnimeDetailPlaceholder> {
     try {
       if (_bgmInfo.subjectId == null) {
         _bgmInfo = await resolveBgmFromData(_data);
+        if (!mounted) return;
+        if (_bgmInfo.subjectId != null) _data['bgmId'] = _bgmInfo.subjectId;
+        if (_bgmInfo.score != null) _data['score'] = _bgmInfo.score;
+        if (_bgmInfo.imageUrl != null) _data['bgmImageUrl'] = _bgmInfo.imageUrl;
       }
 
       final subjectId = _subjectId;
       if (subjectId == null) return;
 
-      final bgmFuture = getBgmSubject(subjectId);
-      final anibakaFuture = AniBakaApi.getAnimeDetail(subjectId);
-      final episodesFuture = getBgmEpisodes(subjectId);
-      final bgm = await bgmFuture;
-      final anibaka = await anibakaFuture;
-      final episodes = await episodesFuture;
+      final (bgm, anibaka, episodes) = await (
+        getBgmSubject(subjectId),
+        AniBakaApi.getAnimeDetail(subjectId).catchError((Object error) {
+          debugPrint('获取 AniBaka 详情失败: $error');
+          return null;
+        }),
+        getBgmEpisodes(subjectId),
+      ).wait;
       if (!mounted) return;
 
       final detail = AnimeDetailViewData.from(
@@ -460,7 +467,7 @@ class _TvAnimeDetailPlaceholderState extends State<TvAnimeDetailPlaceholder> {
                     currentIndex: 0,
                     currUrl: 1,
                     bgmId: _subjectId ?? _detail.bgmId,
-                    tmdbId: BgmUtils.toInt(_detail.tmdbId),
+                    tmdbId: toInt(_detail.tmdbId),
                     tvdbId: _detail.tvdbId,
                     onEpisodeSelected: (index) {
                       setState(() {

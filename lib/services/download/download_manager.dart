@@ -1,13 +1,12 @@
+import 'package:baka/utils/title_matcher.dart';
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:baka/instance.dart';
 import 'package:baka/models/download_task.dart';
 import 'package:baka/core/app_storage.dart';
 import 'package:baka/services/playback/danmaku_controller.dart';
-import 'package:baka/utils/bgm_utils.dart';
-import 'package:baka/utils/hls_offline_remux.dart';
+import 'package:baka/services/download/hls_offline_remux.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
@@ -20,7 +19,6 @@ class DownloadService {
   static const String _storageKey = 'download_tasks';
   DownloadService();
 
-  static final _bandwidthRe = RegExp(r'BANDWIDTH=(\d+)');
   static final _illegalPathCharsRe = RegExp(r'[\\/:*?"<>|\r\n]+');
   static final _whitespaceRe = RegExp(r'\s+');
 
@@ -33,7 +31,8 @@ class DownloadService {
   bool _closed = false;
   void Function(DownloadTask task)? onCompleted;
 
-  final _dio = Dio(
+  /// 视频与图片下载共用连接池、系统代理和应用关闭时的资源释放。
+  final client = Dio(
     BaseOptions(
       connectTimeout: const Duration(seconds: 30),
       receiveTimeout: const Duration(seconds: 0),
@@ -61,7 +60,9 @@ class DownloadService {
             Error.throwWithStackTrace(error, stack);
           });
 
-  Future<void> close() async {
+  Future<void>? _disposing;
+  Future<void> dispose() => _disposing ??= _dispose();
+  Future<void> _dispose() async {
     if (_closed) return;
     _closed = true;
     _active?.token.cancel();
@@ -70,7 +71,12 @@ class DownloadService {
       await _running;
       if (_initialization != null) await _save();
     } finally {
-      _dio.close(force: true);
+      client.close(force: true);
+      for (final task in tasks) {
+        task.dispose();
+      }
+      _waiting.clear();
+      onCompleted = null;
       _tasks.dispose();
     }
   }
@@ -174,6 +180,7 @@ class DownloadService {
       _deleteTaskFiles(task).ignore();
     }
     tasks.remove(task);
+    if (!identical(active?.task, task)) task.dispose();
     _notifyAndSave();
   }
 
@@ -219,7 +226,11 @@ class DownloadService {
   }
 
   void clearCompleted() {
-    tasks.removeWhere((task) => task.status == DownloadStatus.completed);
+    tasks.removeWhere((task) {
+      if (task.status != DownloadStatus.completed) return false;
+      task.dispose();
+      return true;
+    });
     _notifyAndSave();
   }
 
@@ -317,8 +328,13 @@ class DownloadService {
     } catch (_) {
       if (!cancelToken.isCancelled) task.status = DownloadStatus.failed;
     } finally {
+      run.token.cancel();
+      if (task.status == DownloadStatus.downloading) {
+        task.status = DownloadStatus.paused;
+      }
       if (run.deleteOnFinish) await _deleteTaskFiles(task).catchError((_) {});
       _active = null;
+      if (run.deleteOnFinish) task.dispose();
       _notifyAndSave();
       _processQueue();
     }
@@ -337,7 +353,9 @@ class DownloadService {
     _throwIfCancelled(cancelToken);
     task.downloadedBytes = resumePos;
 
-    await _dio.download(
+    final progressClock = Stopwatch()..start();
+    var lastProgress = -150;
+    await client.download(
       task.url,
       filePath,
       cancelToken: cancelToken,
@@ -347,6 +365,9 @@ class DownloadService {
       ),
       onReceiveProgress: (received, total) {
         if (cancelToken.isCancelled) return;
+        final now = progressClock.elapsedMilliseconds;
+        if (received != total && now - lastProgress < 150) return;
+        lastProgress = now;
         final currentBytes = resumePos + received;
         task.downloadedBytes = currentBytes;
         if (total > 0) task.totalBytes = resumePos + total;
@@ -386,7 +407,10 @@ class DownloadService {
     // 分片下完后合并为单一视频，播放时走普通文件 seek，不再依赖 m3u8。
     task.progress = 0.99;
     _notifyAndSave();
-    final remuxed = await HlsOfflineRemux.remuxManifest(manifestPath);
+    final remuxed = await HlsOfflineRemux.remuxManifest(
+      manifestPath,
+      checkCancelled: () => _throwIfCancelled(cancelToken),
+    );
     _throwIfCancelled(cancelToken);
     final playablePath = remuxed ?? manifestPath;
     task.filePath = playablePath;
@@ -407,7 +431,7 @@ class DownloadService {
     var content = await _fetchPlaylistText(playlistUrl, cancelToken);
 
     for (var i = 0; i < 4; i++) {
-      final variantUrl = _selectBestVariant(content, playlistUrl);
+      final variantUrl = selectHlsVariant(content, playlistUrl);
       if (variantUrl == null) break;
       playlistUrl = variantUrl;
       content = await _fetchPlaylistText(playlistUrl, cancelToken);
@@ -420,36 +444,12 @@ class DownloadService {
   }
 
   Future<String> _fetchPlaylistText(Uri url, CancelToken cancelToken) async {
-    final response = await _dio.get<String>(
+    final response = await client.get<String>(
       url.toString(),
       cancelToken: cancelToken,
       options: Options(responseType: ResponseType.plain),
     );
     return response.data ?? '';
-  }
-
-  /// 取码率最高的变体。单趟扫描直接留最大值，不再物化整张变体表再排序。
-  Uri? _selectBestVariant(String content, Uri playlistUrl) {
-    Uri? best;
-    var bestBandwidth = -1;
-    int? pendingBandwidth;
-    for (final raw in LineSplitter.split(content)) {
-      final line = raw.trim();
-      if (line.isEmpty) continue;
-      if (line.startsWith('#EXT-X-STREAM-INF')) {
-        pendingBandwidth =
-            int.tryParse(_bandwidthRe.firstMatch(line)?.group(1) ?? '') ?? 0;
-        continue;
-      }
-      if (!line.startsWith('#') &&
-          pendingBandwidth != null &&
-          pendingBandwidth > bestBandwidth) {
-        best = playlistUrl.resolve(line);
-        bestBandwidth = pendingBandwidth;
-      }
-      pendingBandwidth = null;
-    }
-    return best;
   }
 
   Future<_HlsCacheResult> _cacheMediaPlaylist({
@@ -458,130 +458,79 @@ class DownloadService {
     required Directory cacheDir,
     required CancelToken cancelToken,
   }) async {
-    final rewritten = StringBuffer();
-    final assets = <_HlsAsset>[];
-    // 同一 URL 不同 BYTERANGE 必须落成不同本地文件。
-    final localNameByKey = <String, String>{};
-    var segmentIndex = 0;
-    var keyIndex = 0;
-    var mapIndex = 0;
-    HlsByteRange? pendingByteRange;
-
-    String addAsset(
-      String rawUrl,
-      String localName, {
-      HlsByteRange? byteRange,
-    }) {
-      final absoluteUrl = playlist.url.resolve(rawUrl).toString();
-      final key = byteRange == null
-          ? absoluteUrl
-          : '$absoluteUrl#${byteRange.offset}:${byteRange.length}';
-      return localNameByKey.putIfAbsent(key, () {
-        assets.add((
-          url: absoluteUrl,
-          localName: localName,
-          byteRange: byteRange,
-        ));
-        return localName;
-      });
-    }
-
-    for (final line in LineSplitter.split(playlist.content)) {
-      final trimmed = line.trim();
-      if (trimmed.toUpperCase().startsWith('#EXT-X-BYTERANGE:')) {
-        pendingByteRange = HlsByteRange.tryParse(
-          trimmed.substring('#EXT-X-BYTERANGE:'.length),
-        );
-        // 离线文件是完整分片，清单里不再保留 BYTERANGE。
-        continue;
-      }
-
-      final isKey = trimmed.startsWith('#EXT-X-KEY');
-      if (isKey || trimmed.startsWith('#EXT-X-MAP')) {
-        final uri = _m3u8Attribute(line, 'URI');
-        if (uri == null || uri.value.isEmpty) {
-          rewritten.writeln(line);
-          continue;
-        }
-        final mapRange = HlsByteRange.tryParse(
-          _m3u8Attribute(line, 'BYTERANGE')?.value,
-        );
-        final localName = addAsset(
-          uri.value,
-          isKey
-              ? 'key_${(keyIndex++).toString().padLeft(3, '0')}'
-                    '${_extensionFromUrl(uri.value, '.key')}'
-              : 'map_${(mapIndex++).toString().padLeft(3, '0')}'
-                    '${_extensionFromUrl(uri.value, '.mp4')}',
-          byteRange: mapRange,
-        );
-        // 去掉 MAP 上的 BYTERANGE，URI 换成本地名。
-        var mapped = line.replaceRange(uri.start, uri.end, 'URI="$localName"');
-        mapped = mapped.replaceAll(
-          RegExp(r',?\s*BYTERANGE=(?:"[^"]+"|[^\s,]+)', caseSensitive: false),
-          '',
-        );
-        rewritten.writeln(mapped);
-        pendingByteRange = null;
-      } else if (trimmed.isEmpty || trimmed.startsWith('#')) {
-        rewritten.writeln(line);
-      } else {
-        final range = pendingByteRange;
-        pendingByteRange = null;
-        final localName = addAsset(
-          trimmed,
-          'segment_${(segmentIndex++).toString().padLeft(5, '0')}${_extensionFromUrl(trimmed, '.ts')}',
-          byteRange: range,
-        );
-        rewritten.writeln(localName);
-      }
-    }
-
-    if (segmentIndex == 0) {
-      throw StateError('m3u8 playlist has no segments');
-    }
-
+    final plan = planHlsDownload(playlist.url, playlist.content);
+    final assets = plan.assets;
     final totalUnits = assets.length;
-    var completedUnits = 0;
-    var downloadedBytes = 0;
+    var next = 0, completedUnits = 0, downloadedBytes = 0;
+    const concurrency = 4;
+    final received = List.filled(concurrency, 0);
+    final fractions = List.filled(concurrency, 0.0);
+    final clock = Stopwatch()..start();
+    var lastPublish = -150;
+    final assetToken = CancelToken();
+    unawaited(cancelToken.whenCancel.then((error) => assetToken.cancel(error)));
+    Object? failure;
+    StackTrace? failureStack;
 
-    for (final asset in assets) {
-      _throwIfCancelled(cancelToken);
-      final bytes = await _downloadHlsAsset(
-        asset,
-        cacheDir,
-        cancelToken,
-        onProgress: (received, total) {
-          if (cancelToken.isCancelled) return;
-          final assetProgress = total > 0
-              ? (received / total).clamp(0.0, 1.0)
-              : 0.5;
-          task.downloadedBytes = downloadedBytes + received;
-          task.progress = totalUnits == 0
-              ? 0
-              : ((completedUnits + assetProgress) / totalUnits).clamp(
-                  0.0,
-                  0.99,
-                );
-        },
-      );
-      _throwIfCancelled(cancelToken);
-      downloadedBytes += bytes;
-      completedUnits++;
-      task.downloadedBytes = downloadedBytes;
-      task.progress = totalUnits == 0 ? 0 : completedUnits / totalUnits;
+    void publish({bool force = false}) {
+      if (cancelToken.isCancelled) return;
+      final now = clock.elapsedMilliseconds;
+      if (!force && now - lastPublish < 150) return;
+      lastPublish = now;
+      var bytes = downloadedBytes;
+      var units = completedUnits.toDouble();
+      for (var i = 0; i < concurrency; i++) {
+        bytes += received[i];
+        units += fractions[i];
+      }
+      task.downloadedBytes = bytes;
+      task.progress = (units / totalUnits).clamp(0.0, 0.99);
     }
 
-    // 清单仅作 remux 中间产物；分片已按 BYTERANGE 裁好，URI 为本地文件名。
-    var localContent = rewritten.toString();
-    if (!localContent.contains('#EXT-X-ENDLIST')) {
-      localContent = '$localContent#EXT-X-ENDLIST\n';
+    Future<void> worker(int slot) async {
+      try {
+        while (next < totalUnits) {
+          _throwIfCancelled(assetToken);
+          final asset = assets[next++];
+          final bytes = await _downloadHlsAsset(
+            asset,
+            cacheDir,
+            assetToken,
+            onProgress: (count, total) {
+              if (assetToken.isCancelled) return;
+              received[slot] = count;
+              fractions[slot] = total > 0
+                  ? (count / total).clamp(0.0, 1.0)
+                  : 0.5;
+              publish();
+            },
+          );
+          _throwIfCancelled(assetToken);
+          downloadedBytes += bytes;
+          completedUnits++;
+          received[slot] = 0;
+          fractions[slot] = 0;
+          publish();
+        }
+      } catch (error, stack) {
+        failure ??= error;
+        failureStack ??= stack;
+        assetToken.cancel(error);
+      }
     }
-    return (localContent: localContent, totalBytes: downloadedBytes);
+
+    await Future.wait([
+      for (var slot = 0; slot < concurrency && slot < totalUnits; slot++)
+        worker(slot),
+    ]);
+    if (failure != null) Error.throwWithStackTrace(failure!, failureStack!);
+    _throwIfCancelled(cancelToken);
+    publish(force: true);
+    return (localContent: plan.localContent, totalBytes: downloadedBytes);
   }
 
   Future<int> _downloadHlsAsset(
-    _HlsAsset asset,
+    HlsAsset asset,
     Directory cacheDir,
     CancelToken cancelToken, {
     required void Function(int received, int total) onProgress,
@@ -595,7 +544,11 @@ class DownloadService {
         return length;
       }
       if (range != null && length >= range.offset + range.length) {
-        await HlsOfflineRemux.sliceFileToByteRange(target, range);
+        await HlsOfflineRemux.sliceFileToByteRange(
+          target,
+          range,
+          checkCancelled: () => _throwIfCancelled(cancelToken),
+        );
         return target.length();
       }
     }
@@ -610,7 +563,7 @@ class DownloadService {
           'bytes=${range.offset}-${range.offset + range.length - 1}';
     }
 
-    await _dio.download(
+    await client.download(
       asset.url,
       partial.path,
       cancelToken: cancelToken,
@@ -619,13 +572,18 @@ class DownloadService {
       onReceiveProgress: onProgress,
     );
 
+    _throwIfCancelled(cancelToken);
     if (await target.exists()) await target.delete();
     await partial.rename(target.path);
 
     if (range != null) {
       final length = await target.length();
       if (length != range.length && length >= range.offset + range.length) {
-        await HlsOfflineRemux.sliceFileToByteRange(target, range);
+        await HlsOfflineRemux.sliceFileToByteRange(
+          target,
+          range,
+          checkCancelled: () => _throwIfCancelled(cancelToken),
+        );
       }
     }
     return target.length();
@@ -654,13 +612,16 @@ class DownloadService {
         final danmuList = await DanmakuController.fetchDanmaku(
           subjectId: task.bgmId!,
           episodeIndex: task.episodeIndex!,
-          titles: BgmUtils.buildSearchTitles([task.title]),
+          titles: buildSearchTitles([task.title]),
+          abortTrigger: token.whenCancel.then((_) {}),
         );
         _throwIfCancelled(token);
         if (danmuList.isNotEmpty) {
           final dir = await _downloadDirectory();
           final path = '${dir.path}/${task.filename}_danmaku.json';
-          await File(path).writeAsString(DanmakuController.encodeDanmaku(danmuList));
+          await File(
+            path,
+          ).writeAsString(DanmakuController.encodeDanmaku(danmuList));
           task.danmakuPath = path;
         }
       } catch (e) {
@@ -681,48 +642,6 @@ class DownloadService {
     if (status.isGranted) return true;
     if (status.isDenied) return (await Permission.videos.request()).isGranted;
     return false;
-  }
-
-  /// 定位 `NAME=` 属性并同时给出值与可替换区间。
-  ///
-  /// 取代原先「按属性名现编正则、读一次、再编一次同样的正则写回」的两趟写法：
-  /// 属性语法只有「引号包裹」和「读到逗号为止」两种，单趟扫描即可，且每行零正则编译。
-  static ({int start, int end, String value})? _m3u8Attribute(
-    String line,
-    String name,
-  ) {
-    final at = line.indexOf('$name=');
-    if (at < 0) return null;
-
-    final valueStart = at + name.length + 1;
-    if (valueStart < line.length) {
-      final quote = line.codeUnitAt(valueStart);
-      if (quote == 0x22 || quote == 0x27) {
-        final close = line.indexOf(String.fromCharCode(quote), valueStart + 1);
-        if (close > 0) {
-          return (
-            start: at,
-            end: close + 1,
-            value: line.substring(valueStart + 1, close),
-          );
-        }
-      }
-    }
-
-    var end = line.indexOf(',', valueStart);
-    if (end < 0) end = line.length;
-    return (start: at, end: end, value: line.substring(valueStart, end).trim());
-  }
-
-  String _extensionFromUrl(String url, String fallback) {
-    final path = Uri.tryParse(url)?.path ?? url;
-    final fileName = path.split('/').last;
-    final dot = fileName.lastIndexOf('.');
-    if (dot == -1 || dot == fileName.length - 1) return fallback;
-
-    final extension = fileName.substring(dot);
-    if (extension.length > 8) return fallback;
-    return extension;
   }
 
   String _stripExtension(String fileName) {
@@ -772,5 +691,4 @@ class _DownloadTasksNotifier extends ValueNotifier<List<DownloadTask>> {
 }
 
 typedef _M3u8Playlist = ({Uri url, String content});
-typedef _HlsAsset = ({String url, String localName, HlsByteRange? byteRange});
 typedef _HlsCacheResult = ({String localContent, int totalBytes});

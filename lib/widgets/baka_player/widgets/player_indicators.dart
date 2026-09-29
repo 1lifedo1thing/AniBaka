@@ -22,10 +22,11 @@ class PlayerLoadingIndicator extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<PlaybackCoreState>(
+    return ValueSelector<PlaybackCoreState, bool>(
       valueListenable: controller.core,
-      builder: (context, core, _) {
-        if ((core.loading || core.buffering) && !core.failed) {
+      select: (state) => (state.loading || state.buffering) && !state.failed,
+      builder: (context, loading) {
+        if (loading) {
           return const Center(
             child: SizedBox(
               height: 20,
@@ -393,12 +394,15 @@ class _TimeProgressLabel extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
-          timeline.previewPosition.label(reference: total),
+          timeline.previewPosition.toTimeString(
+            reference: total,
+            includeDays: true,
+          ),
           style: _whiteTextStyle.copyWith(fontWeight: FontWeight.bold),
         ),
         Text(' / ', style: _whiteTextStyle.copyWith(color: Colors.white54)),
         Text(
-          total.label(),
+          total.toTimeString(includeDays: true),
           style: _whiteTextStyle.copyWith(color: Colors.white70),
         ),
       ],

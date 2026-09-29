@@ -21,6 +21,7 @@ void configureTestServices() {
     session: session,
     client: client,
     version: 'test',
+    credentialOrigin: () => Uri.parse('https://www.anibaka.com'),
   );
   bangumiSession = BangumiSession(
     Instances.sp,
@@ -34,7 +35,7 @@ void configureTestServices() {
   sourceRepository = SourceAdapterService(sourceCatalog);
   ruleRepository = RuleRepositoryService(sourceRepository, sourceCatalog);
   addTearDown(ruleRepository.dispose);
-  addTearDown(sourceRepository.close);
+  addTearDown(sourceRepository.dispose);
   addTearDown(sourceCatalog.dispose);
   addTearDown(bangumiSession.api.close);
   addTearDown(client.close);

@@ -36,6 +36,32 @@ abstract class _PeerBase {
   final Uint8List peerId;
 
   Socket? _socket;
+  StreamSubscription<Uint8List>? _subscription;
+  ConnectionTask<Socket>? _connecting;
+  bool _disconnected = false;
+
+  Future<Socket> _openSocket() async {
+    final task = await Socket.startConnect(address.ip, address.port);
+    _connecting = task;
+    if (_disconnected) task.cancel();
+    try {
+      final socket = await task.socket.timeout(
+        const Duration(seconds: 8),
+        onTimeout: () {
+          task.cancel();
+          throw TimeoutException('Peer connect timed out');
+        },
+      );
+      if (_disconnected) {
+        socket.destroy();
+        throw StateError('Peer stopped');
+      }
+      return socket;
+    } finally {
+      _connecting = null;
+    }
+  }
+
   bool _connected = false;
   bool _handshakeDone = false;
   bool _sentHandshake = false;
@@ -67,6 +93,10 @@ abstract class _PeerBase {
   void _onDisconnected() {}
 
   void disconnect() {
+    _disconnected = true;
+    _connecting?.cancel();
+    unawaited(_subscription?.cancel());
+    _subscription = null;
     final completer = _handshake;
     if (completer != null && !completer.isCompleted) completer.complete(false);
     if (!_connected && _socket == null) return;
@@ -77,9 +107,13 @@ abstract class _PeerBase {
   }
 
   Future<bool> _doHandshake(Socket socket, {required bool sendFirst}) async {
+    if (_disconnected) {
+      socket.destroy();
+      return false;
+    }
     _socket = socket;
     _connected = true;
-    socket.listen(
+    _subscription = socket.listen(
       _onData,
       onError: (_) => disconnect(),
       onDone: disconnect,
@@ -272,11 +306,7 @@ class PeerConnection extends _PeerBase {
   /// 主动连接 + 握手。
   Future<bool> connect() async {
     try {
-      final socket = await Socket.connect(
-        address.ip,
-        address.port,
-        timeout: const Duration(seconds: 8),
-      );
+      final socket = await _openSocket();
       if (!await _doHandshake(socket, sendFirst: true)) return false;
     } catch (_) {
       return false;
@@ -553,11 +583,7 @@ class MetadataPeerConnection extends _PeerBase {
     Duration timeout = const Duration(seconds: 25),
   }) async {
     try {
-      final socket = await Socket.connect(
-        address.ip,
-        address.port,
-        timeout: const Duration(seconds: 8),
-      );
+      final socket = await _openSocket();
       _metadataResult = Completer<Uint8List?>();
 
       // 覆盖 disconnect 以同时完成 metadata result

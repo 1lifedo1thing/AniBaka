@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:app_links/app_links.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/app/navigation.dart';
-import 'package:baka/utils/app_logger.dart';
+import 'package:baka/core/app_logger.dart';
 import 'package:baka/widgets/watch_party/watch_party_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:win32_registry/win32_registry.dart';

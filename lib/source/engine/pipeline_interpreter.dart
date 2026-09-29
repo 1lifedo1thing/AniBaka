@@ -1,3 +1,5 @@
+import 'package:baka/source/runtime/source_operation.dart';
+import 'package:baka/source/engine/rule_language_spec.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -118,7 +120,7 @@ class _PipelineContext {
 class PipelineInterpreter {
   const PipelineInterpreter();
 
-  static final RegExp _templatePattern = RegExp(r'\{([a-zA-Z0-9_]+)(:raw)?\}');
+  static final RegExp _templatePattern = RuleLanguageSpec.templatePlaceholder;
   static final RegExp _viewportMetaPattern = RegExp(
     r'''<meta\b(?=[^>]*\bname\s*=\s*["']viewport["'])[^>]*\bid\s*=\s*["']([^"']+)["'][^>]*>''',
     caseSensitive: false,
@@ -177,8 +179,15 @@ class PipelineInterpreter {
     SourceRule rule,
     PipelineHost host,
     String keyword, {
+    SourceOperation? operation,
     RequestPriority priority = RequestPriority.search,
   }) async {
+    if (operation != null) {
+      return operation.run(
+        () => runSearch(rule, host, keyword, priority: priority),
+      );
+    }
+    SourceOperation.check();
     final ctx = _PipelineContext(
       host: host,
       baseUrl: rule.baseUrl,
@@ -194,8 +203,15 @@ class PipelineInterpreter {
     SourceRule rule,
     PipelineHost host,
     String seriesId, {
+    SourceOperation? operation,
     RequestPriority priority = RequestPriority.search,
   }) async {
+    if (operation != null) {
+      return operation.run(
+        () => runDetail(rule, host, seriesId, priority: priority),
+      );
+    }
+    SourceOperation.check();
     final ctx = _PipelineContext(
       host: host,
       baseUrl: rule.baseUrl,
@@ -220,8 +236,15 @@ class PipelineInterpreter {
     SourceRule rule,
     PipelineHost host,
     String episodeId, {
+    SourceOperation? operation,
     RequestPriority priority = RequestPriority.play,
   }) async {
+    if (operation != null) {
+      return operation.run(
+        () => runPlayMedia(rule, host, episodeId, priority: priority),
+      );
+    }
+    SourceOperation.check();
     final ctx = _PipelineContext(
       host: host,
       baseUrl: rule.baseUrl,
@@ -250,8 +273,10 @@ class PipelineInterpreter {
 
   Future<void> _runSteps(List<PipelineStep> steps, _PipelineContext ctx) async {
     for (final step in steps) {
+      SourceOperation.check();
       final result = _runStep(step, ctx);
       if (result is Future<void>) await result;
+      SourceOperation.check();
     }
   }
 
@@ -272,7 +297,7 @@ class PipelineInterpreter {
       case 'delay':
         final ms = step.intValue('ms') ?? step.intValue('delay') ?? 0;
         if (ms > 0) {
-          return Future<void>.delayed(Duration(milliseconds: ms));
+          return SourceOperation.delay(Duration(milliseconds: ms));
         }
       case 'select':
         _opSelect(step, ctx);
@@ -337,7 +362,7 @@ class PipelineInterpreter {
   Future<void> _opFetch(PipelineStep step, _PipelineContext ctx) async {
     final delayMs = step.intValue('delayMs') ?? step.intValue('delay') ?? 0;
     if (delayMs > 0) {
-      await Future<void>.delayed(Duration(milliseconds: delayMs));
+      await SourceOperation.delay(Duration(milliseconds: delayMs));
     }
     final template = step.str('url');
     final rawUrl = template != null && template.isNotEmpty
@@ -724,9 +749,12 @@ class PipelineInterpreter {
 
     const paths = ['/index.php/ajax/suggest', '/ajax/suggest'];
     final listPath = step.str('listPath') ?? 'list';
-    List<dynamic>? list;
 
+    final nameKey = step.str('nameKey') ?? 'name';
+    final kw = keyword.toLowerCase().trim();
+    final queryFingerprint = TitleFingerprint(kw);
     for (final path in paths) {
+      SourceOperation.check();
       final url = ctx.host.toAbsolute(
         '$path?mid=$mid&wd=${Uri.encodeComponent(keyword)}&limit=$limit',
         base,
@@ -747,29 +775,19 @@ class PipelineInterpreter {
       }
 
       final found = AnimeRuleOps.jsonPath(_asJson(candidate), listPath);
-      if (found is List && found.isNotEmpty) {
-        list = found;
-        break;
-      }
-    }
-
-    if (list != null) {
-      final nameKey = step.str('nameKey') ?? 'name';
-      final kw = keyword.toLowerCase().trim();
-      final filtered = list.where((item) {
+      if (found is! List) continue;
+      final filtered = found.where((item) {
         if (item is! Map) return false;
         final name = item[nameKey]?.toString().toLowerCase().trim() ?? '';
         if (name.isEmpty) return false;
-        if (kw.isEmpty) return true;
-        // 校验 MacCMS ajax 建议结果：若名称与关键词无任何相关重合，判定为 MacCMS 返回的热门榜单并过滤
-        return name.contains(kw) ||
+        return kw.isEmpty ||
+            name.contains(kw) ||
             kw.contains(name) ||
-            TitleFingerprint(name).similarityTo(TitleFingerprint(kw)) > 0.10;
-      }).toList();
-
-      if (filtered.isNotEmpty) {
-        _appendJsonSeries(filtered, step, ctx);
-      }
+            TitleFingerprint(name).similarityTo(queryFingerprint) > 0.10;
+      });
+      final before = ctx.outputCount;
+      _appendJsonSeries(filtered.toList(), step, ctx);
+      if (ctx.outputCount > before) return;
     }
   }
 
@@ -1257,6 +1275,8 @@ class PipelineInterpreter {
         '{id}';
     final plainIdTemplate = idTemplate == '{id}';
     final rawIdTemplate = idTemplate == '{id:raw}';
+    final sourceIdText = sourceId?.toString() ?? '';
+    final sourceIndexText = sourceIndex.toString();
     final episodes = <Episode>[];
     for (var i = 0; i < epList.length; i++) {
       final item = epList[i];
@@ -1266,23 +1286,33 @@ class PipelineInterpreter {
           ? Uri.encodeComponent(item['id']?.toString() ?? '')
           : rawIdTemplate && hasDirectId
           ? item['id']?.toString() ?? ''
-          : _render(
+          : renderTemplate(
               idTemplate,
-              ctx,
-              extra: <String, String?>{
-                for (final entry in item.entries)
-                  entry.key.toString(): entry.value?.toString(),
-                'source_id': sourceId?.toString() ?? '',
-                'source_index': sourceIndex.toString(),
-                'index': (i + 1).toString(),
+              (name) => switch (name) {
+                'source_id' => sourceIdText,
+                'source_index' => sourceIndexText,
+                'index' => (i + 1).toString(),
+                _ when item.containsKey(name) => item[name]?.toString(),
+                'url' => ctx.currentString,
+                _ => ctx.vars[name]?.toString(),
               },
             );
+      if (_blankEpisodeId(epId)) continue;
       final title = item[epNameKey]?.toString().trim() ?? '';
       episodes.add(
         Episode(epId, i, title.isEmpty ? 'Episode ${i + 1}' : title),
       );
     }
     return episodes;
+  }
+
+  static bool _blankEpisodeId(String id) {
+    if (id.trim().isEmpty) return true;
+    try {
+      return Uri.decodeComponent(id).trim().isEmpty;
+    } on FormatException {
+      return false;
+    }
   }
 
   /// `videoUrl`：从当前内容中择优提取视频直链。

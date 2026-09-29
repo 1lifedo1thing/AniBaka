@@ -44,6 +44,7 @@ class LoginState extends State<Login> {
 
   @override
   void dispose() {
+    _bangumi.cancelOAuthLogin();
     _nameController.dispose();
     _pwdController.dispose();
     _qqController.dispose();
@@ -160,6 +161,7 @@ class LoginState extends State<Login> {
     setState(() => _bangumiBusy = true);
     try {
       final login = await _bangumi.beginOAuthLogin();
+      if (!mounted) return;
       final opened = await launchUrlString(
         login.authorizationUrl,
         mode: LaunchMode.externalApplication,
@@ -167,6 +169,7 @@ class LoginState extends State<Login> {
       if (!opened) {
         throw const BangumiSyncException('无法打开浏览器，请检查系统是否安装浏览器');
       }
+      if (!mounted) return;
       if (mounted) {
         showSnackBar('请在浏览器中登录并授权，AniBaka 正在等待结果…');
       }
@@ -185,6 +188,7 @@ class LoginState extends State<Login> {
         }
       }
     } finally {
+      _bangumi.cancelOAuthLogin();
       if (mounted) setState(() => _bangumiBusy = false);
     }
   }

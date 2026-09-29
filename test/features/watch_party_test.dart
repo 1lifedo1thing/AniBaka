@@ -370,7 +370,7 @@ void main() {
     tearDown(() async {
       await links.close();
       await stream.close();
-      await party.close();
+      await party.dispose();
     });
     test('a cold link waits for navigation readiness', () async {
       stream.add(Uri.parse('anibaka://watch/invite-1'));
@@ -441,7 +441,7 @@ void main() {
         );
         service.attachPlayer(player, content, onEpisodeRequested: (_) async {});
         addTearDown(() async {
-          await service.close();
+          await service.dispose();
           await player.dispose();
           await content.dispose();
         });
@@ -553,7 +553,7 @@ void main() {
         duration: const Duration(hours: 1),
       );
       addTearDown(() async {
-        await service.close();
+        await service.dispose();
         await player.dispose();
         await content.dispose();
       });
@@ -721,7 +721,7 @@ void main() {
         );
         service.attachPlayer(player, content, onEpisodeRequested: (_) async {});
         addTearDown(() async {
-          await service.close();
+          await service.dispose();
           await player.dispose();
           await content.dispose();
         });

@@ -1,10 +1,12 @@
-import 'dart:convert';
+import 'package:baka/utils/json_values.dart';
+import 'dart:async';
 import 'dart:io';
 
 import 'package:baka/api/api_config.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/models/collection.dart';
 import 'package:baka/core/api_transport.dart';
+import 'package:baka/core/http_request.dart';
 import 'package:baka/core/system_proxy.dart';
 import 'package:baka/utils/bgm_utils.dart';
 import 'package:http/http.dart' as http;
@@ -80,8 +82,12 @@ class BangumiOAuthToken {
 class BangumiOAuthBroker {
   const BangumiOAuthBroker();
 
-  Future<BangumiOAuthStart> begin() async {
-    final data = await _post('/api/v1/bangumi/oauth/start', const {});
+  Future<BangumiOAuthStart> begin({Future<void>? abortTrigger}) async {
+    final data = await _post(
+      '/api/v1/bangumi/oauth/start',
+      const {},
+      abortTrigger: abortTrigger,
+    );
     final authorizationUrl = data['authorization_url']?.toString() ?? '';
     final state = data['state']?.toString() ?? '';
     if (authorizationUrl.isEmpty || state.isEmpty) {
@@ -90,22 +96,52 @@ class BangumiOAuthBroker {
     return BangumiOAuthStart(authorizationUrl: authorizationUrl, state: state);
   }
 
-  Future<BangumiOAuthToken> waitForCompletion(String state) async {
-    final deadline = DateTime.now().add(const Duration(minutes: 10));
-    while (DateTime.now().isBefore(deadline)) {
-      final uri = Uri.parse(
-        '${ApiConfig.host}/api/v1/bangumi/oauth/status',
-      ).replace(queryParameters: {'state': state});
-      final response = await apiTransport.get(
-        uri.toString(),
-        timeout: const Duration(seconds: 20),
-        notifyOnError: false,
-      );
-      final data = _parseBrokerResponse(response);
-      if (data?['status'] == 'complete') return _tokenFromJson(data!);
-      await Future<void>.delayed(const Duration(seconds: 2));
+  Future<BangumiOAuthToken> waitForCompletion(
+    String state, {
+    Future<void>? abortTrigger,
+    Duration timeout = const Duration(minutes: 10),
+  }) async {
+    final uri = Uri.parse(
+      '${ApiConfig.host}/api/v1/bangumi/oauth/status',
+    ).replace(queryParameters: {'state': state});
+    final abort = Completer<void>();
+    var timedOut = false;
+    void stop() {
+      if (!abort.isCompleted) abort.complete();
     }
-    throw const BangumiSyncException('Bangumi 登录超时，请重试');
+
+    final timer = Timer(timeout, () {
+      timedOut = true;
+      stop();
+    });
+    abortTrigger?.then((_) => stop());
+    try {
+      while (!abort.isCompleted) {
+        final root = await Future.any<Map<String, dynamic>>([
+          apiTransport.getJson<Map<String, dynamic>>(
+            uri.toString(),
+            notifyOnError: false,
+            abortTrigger: abort.future,
+          ),
+          // Stop waiting even if a shared account refresh is still running.
+          abort.future.then((_) => throw http.RequestAbortedException(uri)),
+        ]);
+        if (abort.isCompleted) break;
+        final data = _parseBrokerResponse(root);
+        if (data['status'] == 'complete') return _tokenFromJson(data);
+        // The broker currently specifies polling; do not assume long polling.
+        await Future.any([
+          Future<void>.delayed(const Duration(seconds: 2)),
+          abort.future,
+        ]);
+      }
+      throw http.RequestAbortedException(uri);
+    } on http.RequestAbortedException {
+      if (timedOut) throw TimeoutException('Bangumi 登录超时，请重试', timeout);
+      rethrow;
+    } finally {
+      timer.cancel();
+    }
   }
 
   Future<BangumiOAuthToken> refresh(String refreshToken) async {
@@ -117,29 +153,30 @@ class BangumiOAuthBroker {
 
   static Future<Map<String, dynamic>> _post(
     String path,
-    Map<String, dynamic> body,
-  ) async {
-    final response = await apiTransport.post('${ApiConfig.host}$path', body);
-    final data = _parseBrokerResponse(response);
-    if (data == null) {
-      throw const BangumiSyncException('AniBaka账号未登录');
-    }
-    return data;
+    Map<String, dynamic> body, {
+    Future<void>? abortTrigger,
+  }) async {
+    return _parseBrokerResponse(
+      await apiTransport.postJson<Map<String, dynamic>>(
+        '${ApiConfig.host}$path',
+        body,
+        notifyOnError: false,
+        abortTrigger: abortTrigger,
+      ),
+    );
   }
 
-  static Map<String, dynamic>? _parseBrokerResponse(String response) {
-    final root = BgmUtils.parseJsonMap(response);
-    if (root == null) return null;
-    if (BgmUtils.toInt(root['code']) != 0) {
-      final msg = root['message']?.toString() ?? 'Bangumi 登录失败';
-      if (msg.contains('未配置')) {
+  static Map<String, dynamic> _parseBrokerResponse(Map<String, dynamic> root) {
+    try {
+      return ApiTransport.unwrap<Map<String, dynamic>>(root);
+    } on ApiException catch (error) {
+      if (error.message.contains('未配置')) {
         throw const BangumiSyncException(
           '服务端未配置 Bangumi 授权应用，请使用 Access Token 方式连接',
         );
       }
-      throw BangumiSyncException(msg);
+      rethrow;
     }
-    return BgmUtils.asMap(root['data']);
   }
 
   static BangumiOAuthToken _tokenFromJson(Map<String, dynamic> json) {
@@ -150,13 +187,13 @@ class BangumiOAuthBroker {
     return BangumiOAuthToken(
       accessToken: accessToken,
       refreshToken: json['refresh_token']?.toString() ?? '',
-      expiresIn: BgmUtils.toInt(json['expires_in']) ?? 604800,
+      expiresIn: toInt(json['expires_in']) ?? 604800,
     );
   }
 }
 
 AnimeCollection parseBangumiCollection(Map<String, dynamic> json) {
-  final subject = BgmUtils.asMap(json['subject']);
+  final subject = asMap(json['subject']);
   final nameCn = subject?['name_cn']?.toString().trim() ?? '';
   final name = subject?['name']?.toString().trim() ?? '';
   final rawTags = json['tags'];
@@ -164,22 +201,20 @@ AnimeCollection parseBangumiCollection(Map<String, dynamic> json) {
       ? rawTags.map((e) => e.toString()).toList()
       : const <String>[];
   return AnimeCollection(
-    bgmId: BgmUtils.toInt(json['subject_id']) ?? 0,
-    status: BgmUtils.toInt(json['type']) ?? CollectionStatus.wish.value,
-    rating: BgmUtils.toInt(json['rate']) ?? 0,
-    epWatched: BgmUtils.toInt(json['ep_status']) ?? 0,
+    bgmId: toInt(json['subject_id']) ?? 0,
+    status: toInt(json['type']) ?? CollectionStatus.wish.value,
+    rating: toInt(json['rate']) ?? 0,
+    epWatched: toInt(json['ep_status']) ?? 0,
     tags: tags.isEmpty ? null : tags.join(','),
     bangumiTags: tags,
-    bgmImage: BgmUtils.bgmCoverProxyUrl(
-      BgmUtils.toInt(json['subject_id']) ?? 0,
-    ),
+    bgmImage: BgmUtils.bgmCoverProxyUrl(toInt(json['subject_id']) ?? 0),
     isPrivate: json['private'] == true,
     bgmTitle: nameCn.isNotEmpty ? nameCn : name,
     comment: json['comment']?.toString().trim().isNotEmpty == true
         ? json['comment'].toString().trim()
         : null,
-    epTotal: BgmUtils.toInt(subject?['eps']),
-    bgmRating: BgmUtils.toDouble(subject?['score']),
+    epTotal: toInt(subject?['eps']),
+    bgmRating: toDouble(subject?['score']),
   );
 }
 
@@ -195,35 +230,46 @@ class _BangumiEpisodeRecord {
   final double sort;
 
   factory _BangumiEpisodeRecord.fromJson(Map<String, dynamic> json) {
-    final episode = BgmUtils.asMap(json['episode']);
+    final episode = asMap(json['episode']);
     return _BangumiEpisodeRecord(
-      id: BgmUtils.toInt(episode?['id']) ?? 0,
-      collectionType: BgmUtils.toInt(json['type']) ?? 0,
-      sort: BgmUtils.toDouble(episode?['sort']) ?? 0,
+      id: toInt(episode?['id']) ?? 0,
+      collectionType: toInt(json['type']) ?? 0,
+      sort: toDouble(episode?['sort']) ?? 0,
     );
   }
 }
 
 class BangumiApi {
-  BangumiApi() : _client = IOClient(SystemProxyService.createHttpClient());
+  BangumiApi({http.Client? client})
+    : _client = client ?? IOClient(SystemProxyService.createHttpClient());
 
   final http.Client _client;
+  final String _userAgent =
+      'AniBakaBaka/AniBaka/${Instances.appVersion} '
+      '(${Platform.operatingSystem}) (https://github.com/AniBakaBaka/AniBaka)';
   void close() => _client.close();
 
-  Future<BangumiAccount> getMe(String token) async {
-    final json = await _request('GET', '/v0/me', token: token);
-    return BangumiAccount.fromJson(BgmUtils.parseJsonMap(json) ?? const {});
+  Future<BangumiAccount> getMe(
+    String token, {
+    Future<void>? abortTrigger,
+  }) async {
+    final json = await _request<Map<String, dynamic>>(
+      'GET',
+      '/v0/me',
+      token: token,
+      abortTrigger: abortTrigger,
+    );
+    return BangumiAccount.fromJson(json);
   }
 
   Future<AnimeCollection?> getCollection(String token, int subjectId) async {
     try {
-      final json = await _request(
+      final json = await _request<Map<String, dynamic>>(
         'GET',
         '/v0/users/-/collections/$subjectId',
         token: token,
       );
-      final map = BgmUtils.parseJsonMap(json);
-      return map == null ? null : parseBangumiCollection(map);
+      return parseBangumiCollection(json);
     } on BangumiSyncException catch (error) {
       if (error.statusCode == 404) return null;
       rethrow;
@@ -248,15 +294,15 @@ class BangumiApi {
           'offset': '$offset',
         },
       ).toString();
-      final page =
-          BgmUtils.parseJsonMap(await _request('GET', path, token: token)) ??
-          const <String, dynamic>{};
-      total = BgmUtils.toInt(page['total']) ?? 0;
-      final items = BgmUtils.parseJsonList(page['data']);
+      final page = await _request<Map<String, dynamic>>(
+        'GET',
+        path,
+        token: token,
+      );
+      total = toInt(page['total']) ?? 0;
+      final items = page['data'] as List? ?? const [];
       for (final item in items) {
-        final map = BgmUtils.asMap(item);
-        if (map == null) continue;
-        final record = parseBangumiCollection(map);
+        final record = parseBangumiCollection(item as Map<String, dynamic>);
         if ((record.bgmId ?? 0) > 0) result.add(record);
       }
       if (items.isEmpty) break;
@@ -268,7 +314,7 @@ class BangumiApi {
   Future<void> putCollection(String token, AnimeCollection collection) async {
     final subjectId = collection.bgmId;
     if (subjectId == null || subjectId <= 0) return;
-    await _request(
+    await _request<void>(
       'POST',
       '/v0/users/-/collections/$subjectId',
       token: token,
@@ -291,14 +337,16 @@ class BangumiApi {
       path: '/v0/users/-/collections/$subjectId/episodes',
       queryParameters: const {'episode_type': '0', 'limit': '1000'},
     ).toString();
-    final page =
-        BgmUtils.parseJsonMap(await _request('GET', path, token: token)) ??
-        const <String, dynamic>{};
+    final page = await _request<Map<String, dynamic>>(
+      'GET',
+      path,
+      token: token,
+    );
     final episodes = <_BangumiEpisodeRecord>[];
-    for (final item in BgmUtils.parseJsonList(page['data'])) {
-      final map = BgmUtils.asMap(item);
-      if (map == null) continue;
-      final episode = _BangumiEpisodeRecord.fromJson(map);
+    for (final item in page['data'] as List? ?? const []) {
+      final episode = _BangumiEpisodeRecord.fromJson(
+        item as Map<String, dynamic>,
+      );
       if (episode.id > 0) episodes.add(episode);
     }
     episodes.sort((a, b) => a.sort.compareTo(b.sort));
@@ -328,62 +376,54 @@ class BangumiApi {
     List<int> episodeIds,
     int type,
   ) {
-    return _request(
+    return _request<void>(
       'PATCH',
       '/v0/users/-/collections/$subjectId/episodes',
       token: token,
       body: {'episode_id': episodeIds, 'type': type},
-    ).then((_) {});
+    );
   }
 
-  Future<dynamic> _request(
+  Future<T> _request<T>(
     String method,
     String path, {
     required String token,
     Map<String, dynamic>? body,
+    Future<void>? abortTrigger,
   }) async {
-    final request = http.Request(method, Uri.parse('$_bangumiApiBase$path'));
-    request.headers.addAll({
-      HttpHeaders.authorizationHeader: 'Bearer $token',
-      HttpHeaders.acceptHeader: 'application/json',
-      HttpHeaders.userAgentHeader:
-          'AniBakaBaka/AniBaka/${Instances.appVersion} '
-          '(${Platform.operatingSystem}) '
-          '(https://github.com/AniBakaBaka/AniBaka)',
-      if (body != null) HttpHeaders.contentTypeHeader: 'application/json',
-    });
-    if (body != null) request.body = jsonEncode(body);
-
-    http.StreamedResponse streamed;
     try {
-      streamed = await _client
-          .send(request)
-          .timeout(const Duration(seconds: 25));
-    } on BangumiSyncException {
-      rethrow;
-    } catch (_) {
-      throw const BangumiSyncException('无法连接 Bangumi；部分网络环境可能需要先开启代理软件');
-    }
-    final response = await http.Response.fromStream(streamed);
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      if (response.statusCode == 401 || response.statusCode == 403) {
-        throw const BangumiSyncException('Bangumi Access Token 无效、已过期或权限不足');
+      final response = await sendHttp(
+        _client,
+        method,
+        Uri.parse('$_bangumiApiBase$path'),
+        headers: {
+          HttpHeaders.authorizationHeader: 'Bearer $token',
+          HttpHeaders.acceptHeader: 'application/json',
+          HttpHeaders.userAgentHeader: _userAgent,
+        },
+        data: body,
+        abortTrigger: abortTrigger,
+      );
+      // Bangumi mutation endpoints may successfully return 204 with no body.
+      if (response.body.isEmpty && null is T) return null as T;
+      return decodeJson<T>(response.body);
+    } on ApiException catch (error) {
+      final status = error.statusCode;
+      if (status == 401 || status == 403) {
+        throw BangumiSyncException(
+          'Bangumi Access Token 无效、已过期或权限不足',
+          statusCode: status,
+        );
       }
-      var message = 'Bangumi 请求失败（${response.statusCode}）';
+      var message = 'Bangumi 请求失败（$status）';
       try {
-        final error = BgmUtils.parseJsonMap(response.body) ?? const {};
-        final detail = error['description'] ?? error['title'];
-        if (detail != null && detail.toString().isNotEmpty) {
-          message = detail.toString();
-        }
-      } catch (_) {}
-      throw BangumiSyncException(message, statusCode: response.statusCode);
-    }
-    if (response.body.trim().isEmpty) return null;
-    try {
-      return jsonDecode(response.body);
-    } catch (_) {
-      throw const BangumiSyncException('Bangumi 返回了无法识别的数据');
+        final json = decodeJson<Map<String, dynamic>>(error.responseBody ?? '');
+        final detail = json['description'] ?? json['title'];
+        if (detail is String && detail.isNotEmpty) message = detail;
+      } on FormatException {
+        /* Non-JSON error bodies keep the HTTP status. */
+      }
+      throw BangumiSyncException(message, statusCode: status);
     }
   }
 }
@@ -414,10 +454,12 @@ String collectionFingerprint({
   return '$status|$rating|${comment?.trim() ?? ''}|$episodeWatched|$tagStr|${isPrivate ? 1 : 0}';
 }
 
+final _collectionTagSeparator = RegExp(r'[,，\s]+');
+
 List<String> parseCollectionTags(String? value) {
   if (value == null || value.trim().isEmpty) return const [];
   return value
-      .split(RegExp(r'[,，\s]+'))
+      .split(_collectionTagSeparator)
       .map((t) => t.trim())
       .where((t) => t.isNotEmpty)
       .toSet()

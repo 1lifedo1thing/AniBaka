@@ -107,7 +107,7 @@ class _AiRuleAuthoringPageState extends State<AiRuleAuthoringPage> {
       text: source?.description ?? '',
     );
     _pipelineController = TextEditingController(
-      text: _encodePipeline(source?.pipeline ?? _emptyPipeline),
+      text: _encodePipeline(source?.pipelineJson() ?? _emptyPipeline),
     );
 
     if (seed?.instructions.isNotEmpty == true) _showAdvanced = true;
@@ -139,7 +139,7 @@ class _AiRuleAuthoringPageState extends State<AiRuleAuthoringPage> {
 
   @override
   void dispose() {
-    _service?.cancel();
+    _service?.dispose();
     _testAdapter?.dispose();
     _activity.dispose();
     _enabled.dispose();
@@ -198,7 +198,7 @@ class _AiRuleAuthoringPageState extends State<AiRuleAuthoringPage> {
     }
     try {
       final config = _buildConfig(pipeline);
-      final rule = config.toSourceRule();
+      final rule = config.rule;
       final validation = RuleValidator.validate(rule);
       if (!validation.isValid) {
         showSnackBar('规则校验未通过：${validation.errors.join('；')}', isError: true);
@@ -269,8 +269,10 @@ class _AiRuleAuthoringPageState extends State<AiRuleAuthoringPage> {
           if (result.config.baseUrl.isNotEmpty) {
             _siteController.text = result.config.baseUrl;
           }
-          if (result.config.pipeline != null) {
-            _pipelineController.text = _encodePipeline(result.config.pipeline!);
+          if (result.config.hasPipeline) {
+            _pipelineController.text = _encodePipeline(
+              result.config.pipelineJson()!,
+            );
           }
         });
         HapticFeedback.heavyImpact();
@@ -281,7 +283,7 @@ class _AiRuleAuthoringPageState extends State<AiRuleAuthoringPage> {
         HapticFeedback.heavyImpact();
       }
     } finally {
-      service.cancel();
+      service.dispose();
       if (mounted) setState(() => _running = false);
     }
   }
@@ -360,7 +362,7 @@ class _AiRuleAuthoringPageState extends State<AiRuleAuthoringPage> {
       final pipeline = CustomSourceConfig.fromJson({
         ...json,
         'format': kSourceRuleFormatV2,
-      }).pipeline;
+      }).pipelineJson();
       if (pipeline == null || pipeline.isEmpty) throw const FormatException();
 
       setState(() {
@@ -444,7 +446,10 @@ class _AiRuleAuthoringPageState extends State<AiRuleAuthoringPage> {
           final catalog = await adapter.getPlaybackCatalog(_testSeriesUrl!);
           if (!mounted || !identical(adapter, _testAdapter)) return;
           passed = !catalog.isEmpty && catalog.episodes.first.lines.isNotEmpty;
-          _testEpisodeUrl = passed ? catalog.episodes.first.lines.first : null;
+          final firstEpisode = passed ? catalog.episodes.first : null;
+          _testEpisodeUrl = firstEpisode?.lineAt(
+            firstEpisode.availableLineIndexes.firstOrNull ?? 1,
+          );
           log = passed
               ? '解析成功：${catalog.sourceNames.length} 条线路，共 ${catalog.episodes.length} 集\n线路：${catalog.sourceNames.join('、')}'
               : '未提取到播放线路';
@@ -648,7 +653,7 @@ class _AiRuleAuthoringPageState extends State<AiRuleAuthoringPage> {
           ),
         if (wide)
           FilledButton.icon(
-            onPressed: _running ? _service?.cancel : (_busy ? null : _start),
+            onPressed: _running ? _service?.dispose : (_busy ? null : _start),
             icon: Icon(
               _running ? Icons.stop_rounded : Icons.auto_awesome_rounded,
               size: 18,
@@ -1190,7 +1195,7 @@ class _AiRuleAuthoringPageState extends State<AiRuleAuthoringPage> {
                         Expanded(
                           child: OutlinedButton.icon(
                             onPressed: _running
-                                ? _service?.cancel
+                                ? _service?.dispose
                                 : (_busy ? null : _start),
                             style: OutlinedButton.styleFrom(
                               minimumSize: const Size(0, 46),

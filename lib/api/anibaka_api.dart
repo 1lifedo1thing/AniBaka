@@ -2,10 +2,11 @@ import 'package:baka/api/api_config.dart';
 import 'package:baka/api/request_cache.dart';
 import 'package:baka/core/api_transport.dart';
 import 'package:baka/models/collection.dart';
+import 'package:baka/models/page.dart';
 import 'package:baka/models/play_history.dart';
 import 'package:baka/models/watch_party.dart';
 
-/// AniBaka v1 API 的唯一客户端入口。
+/// 收藏、历史及详情的现有接口；新业务接口放在各自业务文件中。
 final class AniBakaApi {
   AniBakaApi._();
 
@@ -13,16 +14,24 @@ final class AniBakaApi {
 
   /// 条目详情单条响应可达数十 KB（海报 / 剧照数组），做有界 LRU：
   /// 只保留最近 16 条、10 分钟内有效，避免长时间浏览把整份详情常驻内存。
-  static final _animeDetails = RequestCache<int, Map<String, dynamic>?>(
-    limit: 16,
-    ttl: const Duration(minutes: 10),
-    shouldCache: (value) => value != null,
-  );
+  static final _animeDetails =
+      RequestCache<(String, int), Map<String, dynamic>?>(
+        limit: 16,
+        ttl: const Duration(minutes: 10),
+        shouldCache: (value) => value != null,
+      );
 
   /// 集截图按 (bgm_id / tmdb_id / tvdb_id, season, episode) 缓存。
   static final _episodeStills =
       RequestCache<
-        ({int? bgmId, int? tmdbId, String? tvdbId, int season, int episode}),
+        ({
+          String origin,
+          int? bgmId,
+          int? tmdbId,
+          String? tvdbId,
+          int season,
+          int episode,
+        }),
         Map<String, dynamic>?
       >(
         limit: 16,
@@ -51,7 +60,7 @@ final class AniBakaApi {
         AnimeCollection.fromJson,
       );
 
-  static Future<CollectionListResponse?> getCollections({
+  static Future<PageData<AnimeCollection>?> getCollections({
     int page = 1,
     int pageSize = 20,
     int? status,
@@ -66,25 +75,25 @@ final class AniBakaApi {
       },
     );
     return _read(
-      apiTransport.getData<Map<String, dynamic>>(uri.toString()),
-      CollectionListResponse.fromJson,
+      apiTransport.getData<Map<String, dynamic>?>(uri.toString()),
+      (json) => parsePage(json, AnimeCollection.fromJson),
     );
   }
 
   static Future<CollectionStats?> getCollectionStats() => _read(
-    apiTransport.getData<Map<String, dynamic>>('$_baseUrl/collection/stats'),
+    apiTransport.getData<Map<String, dynamic>?>('$_baseUrl/collection/stats'),
     CollectionStats.fromJson,
   );
 
   static Future<AnimeCollection?> getCollectionByPostId(int postId) => _read(
-    apiTransport.getData<Map<String, dynamic>>(
+    apiTransport.getData<Map<String, dynamic>?>(
       '$_baseUrl/collection/post/$postId',
     ),
     AnimeCollection.fromJson,
   );
 
   static Future<AnimeCollection?> getCollectionByBgmId(int bgmId) => _read(
-    apiTransport.getData<Map<String, dynamic>>(
+    apiTransport.getData<Map<String, dynamic>?>(
       '$_baseUrl/bgm-collection/$bgmId',
     ),
     AnimeCollection.fromJson,
@@ -104,12 +113,12 @@ final class AniBakaApi {
     PlayHistory.fromJson,
   );
 
-  static Future<PlayHistoryListResponse?> getPlayHistory({int pageSize = 20}) =>
+  static Future<List<PlayHistory>?> getPlayHistory({int pageSize = 20}) =>
       _read(
-        apiTransport.getData<Map<String, dynamic>>(
+        apiTransport.getData<Map<String, dynamic>?>(
           '$_baseUrl/play-history?page_size=$pageSize',
         ),
-        PlayHistoryListResponse.fromJson,
+        (json) => parseList(json['list'], PlayHistory.fromJson),
       );
 
   static Future<bool> clearPlayHistory() =>
@@ -117,15 +126,15 @@ final class AniBakaApi {
 
   static Future<Map<String, dynamic>?> getAnimeDetail(int bgmId) =>
       _animeDetails.get(
-        bgmId,
-        () => apiTransport.getData<Map<String, dynamic>>(
+        (ApiConfig.host, bgmId),
+        () => apiTransport.getData<Map<String, dynamic>?>(
           '$_baseUrl/anime/detail?bgm_id=$bgmId',
           notifyOnError: false,
         ),
       );
 
   static Map<String, dynamic>? peekAnimeDetail(int bgmId) =>
-      _animeDetails.peek(bgmId);
+      _animeDetails.peek((ApiConfig.host, bgmId));
 
   static Future<Map<String, dynamic>?> getEpisodeStills({
     int? bgmId,
@@ -135,6 +144,7 @@ final class AniBakaApi {
     int episode = 1,
   }) {
     final key = (
+      origin: ApiConfig.host,
       bgmId: bgmId,
       tmdbId: tmdbId,
       tvdbId: tvdbId,
@@ -151,7 +161,7 @@ final class AniBakaApi {
           'ep': '$episode',
         },
       );
-      return apiTransport.getData<Map<String, dynamic>>(
+      return apiTransport.getData<Map<String, dynamic>?>(
         uri.toString(),
         notifyOnError: false,
       );
@@ -163,75 +173,40 @@ final class AniBakaApi {
   static Future<WatchPartyInvite> createWatchRoom(
     WatchPartyMedia media,
   ) async => WatchPartyInvite.fromJson(
-    await _requiredData(
-      apiTransport.postJson<Map<String, dynamic>>('$_watchBaseUrl/rooms', {
-        'media': media.toJson(),
-      }, notifyOnError: false),
-      unavailable: '一起看服务暂时不可用',
-      failed: '创建一起看房间失败',
-    ),
+    await apiTransport.postData<Map<String, dynamic>>('$_watchBaseUrl/rooms', {
+      'media': media.toJson(),
+    }, notifyOnError: false),
   );
 
   static Future<List<WatchPartyInvite>> listWatchRooms() async {
-    final data = await _requiredData(
-      apiTransport.getJson<Map<String, dynamic>>(
-        '$_watchBaseUrl/rooms',
-        notifyOnError: false,
-      ),
-      unavailable: '一起看服务暂时不可用',
-      failed: '获取一起看房间失败',
+    final data = await apiTransport.getData<Map<String, dynamic>>(
+      '$_watchBaseUrl/rooms',
+      notifyOnError: false,
     );
-    final rooms = data['rooms'] as List<dynamic>;
     return [
-      for (final room in rooms)
+      for (final room in data['rooms'] as List<dynamic>)
         WatchPartyInvite.fromJson(room as Map<String, dynamic>),
     ];
   }
 
   static Future<WatchPartyInvite> getWatchInvite(String code) async =>
       WatchPartyInvite.fromJson(
-        await _requiredData(
-          apiTransport.getJson<Map<String, dynamic>>(
-            '$_watchBaseUrl/invites/$code',
-            notifyOnError: false,
-          ),
-          unavailable: '一起看服务暂时不可用',
-          failed: '获取邀请失败',
+        await apiTransport.getData<Map<String, dynamic>>(
+          '$_watchBaseUrl/invites/${Uri.encodeComponent(code)}',
+          notifyOnError: false,
         ),
       );
 
   static Future<String> joinWatchRoom(String code, String nickname) async {
-    final data = await _requiredData(
-      apiTransport.postJson<Map<String, dynamic>>(
-        '$_watchBaseUrl/invites/$code/join',
-        {'nickname': nickname},
-        notifyOnError: false,
-      ),
-      unavailable: '一起看服务暂时不可用',
-      failed: '加入一起看房间失败',
+    final data = await apiTransport.postData<Map<String, dynamic>>(
+      '$_watchBaseUrl/invites/${Uri.encodeComponent(code)}/join',
+      {'nickname': nickname},
+      notifyOnError: false,
     );
     return data['websocketUrl'] as String;
   }
 
-  static Future<void> closeWatchRoom(String roomId) => _requiredData(
-    apiTransport.deleteJson<Map<String, dynamic>>(
-      '$_watchBaseUrl/rooms/$roomId',
-    ),
-    unavailable: '无法结束房间',
-    failed: '无法结束房间',
-  ).then((_) {});
-
-  static Future<Map<String, dynamic>> _requiredData(
-    Future<Map<String, dynamic>?> request, {
-    required String unavailable,
-    required String failed,
-  }) async {
-    final json = await request;
-    if (json == null) throw StateError(unavailable);
-    final data = ApiTransport.unwrap<Map<String, dynamic>>(json);
-    if (data == null) {
-      throw StateError(json['message']?.toString() ?? failed);
-    }
-    return data;
+  static Future<void> closeWatchRoom(String roomId) async {
+    await _deleted('$_watchBaseUrl/rooms/${Uri.encodeComponent(roomId)}');
   }
 }

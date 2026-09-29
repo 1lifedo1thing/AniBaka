@@ -1,6 +1,6 @@
+import 'package:baka/utils/duration_utils.dart';
 import 'dart:async';
 
-import 'package:baka/utils/date_util.dart';
 import 'package:dlna_dart/dlna.dart';
 import 'package:flutter/material.dart';
 import 'package:baka/models/playback_episode.dart';

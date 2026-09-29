@@ -1,3 +1,4 @@
+import 'package:baka/source/runtime/source_operation.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:baka/models/custom_source_config.dart';
@@ -48,6 +49,7 @@ class FakeHost implements PipelineHost {
     Object? body,
     String? referer,
     String? contentType,
+    SourceOperation? operation,
     RequestPriority priority = RequestPriority.search,
   }) async {
     fetched.add(url);
@@ -141,6 +143,7 @@ class HhPlayerBootstrapHost extends FakeHost {
     Object? body,
     String? referer,
     String? contentType,
+    SourceOperation? operation,
     RequestPriority priority = RequestPriority.search,
   }) async {
     if (url == apiUrl) {
@@ -195,6 +198,7 @@ class VerifyCheckHost extends FakeHost {
     Object? body,
     String? referer,
     String? contentType,
+    SourceOperation? operation,
     RequestPriority priority = RequestPriority.search,
   }) async {
     fetched.add(url);
@@ -313,6 +317,51 @@ SourceRule _rule(List<Map<String, dynamic>> play) => SourceRule.fromJson({
 });
 
 void main() {
+  test('installed rules share parsed branches and isolate replaced lists', () {
+    final config = CustomSourceConfig.fromJson({
+      'id': 'shared',
+      'name': 'Shared',
+      'baseUrl': 'https://example.test',
+      'directConnection': true,
+      'pipeline': {
+        'headers': {'Referer': 'https://example.test'},
+        'search': [
+          {'op': 'template', 'value': '{keyword}'},
+        ],
+        'detail': [],
+        'play': [
+          {
+            'op': 'first',
+            'branches': [
+              [
+                {'op': 'template', 'value': 'video.mp4'},
+              ],
+            ],
+          },
+        ],
+      },
+    });
+    final changed = config.copyWith(enabled: false, updatedAt: DateTime(2026));
+    expect(changed.rule, same(config.rule));
+    final renamed = changed.copyWith(name: 'Renamed');
+    expect(renamed.rule.search, same(config.rule.search));
+    expect(renamed.rule.play, same(config.rule.play));
+    expect(renamed.rule.headers, same(config.rule.headers));
+    expect(() => renamed.rule.play.clear(), throwsUnsupportedError);
+    final replacement = <PipelineStep>[const PipelineStep('follow', {})];
+    final replaced = config.rule.copyWith(play: replacement);
+    replacement.clear();
+    expect(replaced.play.single.op, 'follow');
+    expect(config.rule.play.single.branches.single.single.op, 'template');
+    final restored = CustomSourceConfig.fromJson(
+      jsonDecode(jsonEncode(renamed.toJson())) as Map<String, dynamic>,
+    );
+    expect(restored.rule.toJson(), renamed.rule.toJson());
+    expect(restored.enabled, isFalse);
+    expect(restored.updatedAt, DateTime(2026));
+    expect(restored.rule.directConnection, isTrue);
+  });
+
   group('pipeline', () {
     const interp = PipelineInterpreter();
 
@@ -503,7 +552,7 @@ void main() {
     test('jsonEpisodes：从 JSON 构建播放线路', () async {
       final host = FakeHost({
         'https://example.com/detail/1':
-            '{"playlist":[{"id":"a","name":"线路A","eps":[{"vid":"e1","t":"第1集"},{"vid":"e2","t":"第2集"}]}]}',
+            '{"playlist":[{"id":"a","name":"线路A","eps":[{"vid":"e1","t":"第1集","source_id":"ignored","index":99,"nullable":null},{"vid":"e2","t":"第2集"}]}]}',
       });
       final rule = SourceRule.fromJson({
         'format': kSourceRuleFormatV2,
@@ -519,7 +568,8 @@ void main() {
             'episodesKey': 'eps',
             'episodeNameKey': 't',
             'sourceNameKey': 'name',
-            'episodeIdTemplate': '/watch/{vid}',
+            'episodeIdTemplate':
+                '/watch/{vid}?s={source_id}&line={source_index}&ep={index}&n={nullable}',
           },
         ],
         'play': [],
@@ -529,7 +579,14 @@ void main() {
       expect(sources, hasLength(1));
       expect(sources.first.sourceName, '线路A');
       expect(sources.first.episodes, hasLength(2));
-      expect(sources.first.episodes.first.episodeId, '/watch/e1');
+      expect(
+        sources.first.episodes.first.episodeId,
+        '/watch/e1?s=a&line=0&ep=1&n=',
+      );
+      expect(
+        sources.first.episodes.last.episodeId,
+        '/watch/e2?s=a&line=0&ep=2&n=',
+      );
       expect(sources.first.episodes[1].name, '第2集');
     });
 
@@ -800,30 +857,6 @@ void main() {
       });
       final out = await interp.runPlay(rule, host, plain);
       expect(out, plain);
-    });
-
-    test('maccmsSuggest 单次解析响应并回退备用接口', () async {
-      final host = FakeHost({
-        'https://example.com/index.php/ajax/suggest?mid=1&wd=x&limit=20':
-            '{"list":[]}',
-        'https://example.com/ajax/suggest?mid=1&wd=x&limit=20':
-            '{"list":[{"id":"7","name":"x fallback"}]}',
-      });
-      final rule = SourceRule.fromJson({
-        'format': kSourceRuleFormatV2,
-        'id': 's',
-        'name': 'S',
-        'baseUrl': 'https://example.com',
-        'search': [
-          {'op': 'maccmsSuggest', 'detailUrlTemplate': '/detail/{id}'},
-        ],
-        'detail': [],
-        'play': [],
-      });
-
-      final result = await interp.runSearch(rule, host, 'x');
-      expect(result.single.seriesId, 'https://example.com/detail/7');
-      expect(host.fetched, hasLength(2));
     });
 
     test(
@@ -1175,6 +1208,22 @@ void main() {
       expect(v.errors.any((e) => e.contains('正则')), isTrue);
       expect(v.errors.any((e) => e.contains('未知 op')), isTrue);
       expect(v.errors.any((e) => e.contains('alphabet')), isTrue);
+
+      expect(
+        RuleValidator.validate(
+          _rule([
+            {'op': 'replace', 'pattern': r'\/', 'replacement': '/'},
+            {'op': 'playerDecrypt', 'salt': 'site-salt'},
+            {
+              'op': 'sniff',
+              'goal': 'html',
+              'readyRegex': r'player_aaaa|<video',
+              'rejectContains': ['DokiDoki CDN'],
+            },
+          ]),
+        ).errors,
+        isEmpty,
+      );
     });
 
     test('directConnection is preserved and disables the system proxy', () {
@@ -1207,8 +1256,8 @@ void main() {
         'play': const <Object>[],
       });
 
-      expect(config.pipeline?['directConnection'], isTrue);
-      expect(config.toSourceRule().directConnection, isTrue);
+      expect(config.pipelineJson()?['directConnection'], isTrue);
+      expect(config.rule.directConnection, isTrue);
     });
   });
 
@@ -1310,23 +1359,6 @@ void main() {
       expect(host.receivedTimeout, const Duration(seconds: 35));
       expect(host.receivedSettleDelay, const Duration(seconds: 6));
       expect(result, 'https://cdn.example.com/ready.mp4');
-    });
-
-    test('validator accepts the new generic ops', () {
-      final validation = RuleValidator.validate(
-        _rule([
-          {'op': 'replace', 'pattern': r'\/', 'replacement': '/'},
-          {'op': 'playerDecrypt', 'salt': 'site-salt'},
-          {
-            'op': 'sniff',
-            'goal': 'html',
-            'readyRegex': r'player_aaaa|<video',
-            'rejectContains': ['DokiDoki CDN'],
-          },
-        ]),
-      );
-
-      expect(validation.errors, isEmpty);
     });
   });
 }

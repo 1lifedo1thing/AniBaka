@@ -2,12 +2,13 @@ import 'package:baka/core/api_transport.dart';
 import 'package:baka/services/account/bangumi_session.dart';
 import 'package:baka/api/post.dart';
 import 'package:baka/utils/date_util.dart';
-import 'package:baka/utils/image_utils.dart';
+import 'package:baka/widgets/common/image_actions.dart';
 import 'package:baka/utils/reg_utils.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:baka/widgets/comment/comment_widget.dart';
 import 'package:baka/widgets/common/skeletonizer.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -392,6 +393,13 @@ class _CommentCardState extends State<_CommentCard> {
   MarkdownStyleSheet? _style;
   late Widget _body;
   bool _liking = false;
+  CancelToken? _imageSaveToken;
+
+  @override
+  void dispose() {
+    _imageSaveToken?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -681,11 +689,22 @@ class _CommentCardState extends State<_CommentCard> {
   Widget _buildMarkdownImage(Uri uri, ThemeData theme) {
     final url = uri.toString();
     return GestureDetector(
-      onTap: () => ImageUtils.previewImage(url),
+      onTap: () => previewImage(url),
       onLongPress: () async {
+        if (_imageSaveToken != null) return;
+        final token = _imageSaveToken = CancelToken();
         HapticFeedback.mediumImpact();
-        final path = await ImageUtils.saveImageToGallery(url);
-        if (path != null) showSnackBar('保存图片路径：$path');
+        try {
+          final path = await saveImage(url, cancelToken: token);
+          if (mounted && path != null) showSnackBar('保存图片路径：$path');
+        } catch (error) {
+          if (mounted &&
+              !(error is DioException && CancelToken.isCancel(error))) {
+            showSnackBar('图片保存失败，请重试', isError: true);
+          }
+        } finally {
+          _imageSaveToken = null;
+        }
       },
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 8),

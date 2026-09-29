@@ -1,7 +1,8 @@
-import 'dart:async';
-import 'dart:convert';
 import 'package:baka/core/account_session.dart';
+import 'package:baka/core/http_request.dart';
 import 'package:http/http.dart' as http;
+
+export 'package:baka/core/http_request.dart' show ApiException;
 
 /// Installed by the composition root; stateless API functions share this pool.
 late ApiTransport apiTransport;
@@ -11,176 +12,217 @@ class ApiTransport {
     required this.session,
     required this.client,
     required this.version,
+    required this.credentialOrigin,
     this.onError,
   });
   final AccountSession session;
   final http.Client client;
   final String version;
+
+  /// Read on each request so changing servers takes effect immediately.
+  final Uri Function() credentialOrigin;
   final void Function(Object error)? onError;
 
-  Future<String> _send(
+  Future<http.Response> _send(
     String method,
-    String url, {
+    Uri uri, {
+    Object? data,
+    Duration? timeout,
+    Future<void>? abortTrigger,
+  }) async {
+    if (session.closed) throw StateError('Account session is closed');
+    final revision = session.generation;
+    final origin = credentialOrigin().origin;
+    final accountRequest = uri.origin == origin;
+    final auth = uri.path == '/user/login' || uri.path == '/user/refresh';
+    // Broker 401 can describe upstream Bangumi credentials, not our session.
+    final upstreamAuth = uri.path.startsWith('/api/v1/bangumi/oauth/');
+    final carriesCredentials =
+        accountRequest && !auth && session.token.isNotEmpty;
+
+    void ensureCurrent() {
+      if (accountRequest &&
+          (origin != credentialOrigin().origin ||
+              revision != session.generation)) {
+        throw StateError('账号或服务器已变更，请重试');
+      }
+    }
+
+    Future<void> expired() async {
+      ensureCurrent();
+      await session.logout();
+      throw const ApiException('登录已过期，请重新登录', statusCode: 401);
+    }
+
+    if (carriesCredentials && session.expiresSoon && !await session.refresh()) {
+      await expired();
+    }
+    for (var attempt = 0; ; attempt++) {
+      ensureCurrent();
+      final token = carriesCredentials ? session.token : '';
+      try {
+        final response = await sendHttp(
+          client,
+          method,
+          uri,
+          headers: {
+            'baka-user-agent': version,
+            'Content-Type': 'application/json',
+            if (token.isNotEmpty) 'token': token,
+          },
+          data: data,
+          timeout: timeout ?? apiRequestTimeout,
+          abortTrigger: abortTrigger,
+          // Custom token headers must never follow a redirect to another origin.
+          followRedirects: !accountRequest,
+        );
+        ensureCurrent();
+        return response;
+      } on ApiException catch (error) {
+        ensureCurrent();
+        if (error.statusCode != 401 || !carriesCredentials || upstreamAuth) {
+          rethrow;
+        }
+        if (attempt == 0 &&
+            (token != session.token || await session.refresh())) {
+          continue;
+        }
+        await expired();
+      }
+    }
+  }
+
+  Future<T> _request<T>(
+    String method,
+    String url,
+    T Function(String body) read, {
     Object? data,
     Duration? timeout,
     bool notifyOnError = true,
+    Future<void>? abortTrigger,
   }) async {
-    if (session.closed) return '';
-    final revision = session.generation;
-    final uri = Uri.parse(url);
-    final auth = uri.path == '/user/login' || uri.path == '/user/refresh';
-    final upstreamAuth = uri.path.startsWith('/api/v1/bangumi/oauth/');
-    final carriesCredentials = !auth && session.token.isNotEmpty;
     try {
-      if (carriesCredentials &&
-          session.expiresSoon &&
-          !await session.refresh()) {
-        if (revision == session.generation) await session.logout();
-        return '';
-      }
-      for (var attempt = 0; attempt < 2; attempt++) {
-        if (carriesCredentials && revision != session.generation) return '';
-        final token = session.token;
-        final abort = Completer<void>();
-        final request =
-            http.AbortableRequest(method, uri, abortTrigger: abort.future)
-              ..headers.addAll({
-                'baka-user-agent': version,
-                'Content-Type': 'application/json',
-                if (!auth && token.isNotEmpty) 'token': token,
-              });
-        if (data != null) request.body = jsonEncode(data);
-        final response = client.send(request).then(http.Response.fromStream);
-        final result = timeout == null
-            ? await response
-            : await response.timeout(
-                timeout,
-                onTimeout: () {
-                  abort.complete();
-                  throw TimeoutException('$method $uri', timeout);
-                },
-              );
-        if (carriesCredentials && revision != session.generation) return '';
-        if (result.statusCode != 401 || auth) return result.body;
-
-        if (upstreamAuth) return '';
-        if (token.isEmpty) return '';
-        if (attempt == 0 && (token != session.token || await session.refresh())) {
-          continue;
-        }
-        if (revision == session.generation) await session.logout();
-        return '';
-      }
+      final response = await _send(
+        method,
+        Uri.parse(url),
+        data: data,
+        timeout: timeout,
+        abortTrigger: abortTrigger,
+      );
+      return read(response.body);
     } catch (error) {
-      if (notifyOnError && revision == session.generation) onError?.call(error);
+      if (notifyOnError) onError?.call(error);
+      rethrow;
     }
-    return '';
+  }
+
+  static String _body(String body) {
+    if (body.isEmpty) throw const FormatException('空响应');
+    return body;
   }
 
   Future<String> get(
     String url, {
     Duration? timeout,
     bool notifyOnError = true,
-  }) => _send('GET', url, timeout: timeout, notifyOnError: notifyOnError);
+  }) => _request(
+    'GET',
+    url,
+    _body,
+    timeout: timeout,
+    notifyOnError: notifyOnError,
+  );
   Future<String> post(
     String url,
     Object? data, {
     Duration? timeout,
     bool notifyOnError = true,
-  }) => _send(
+  }) => _request(
     'POST',
     url,
+    _body,
     data: data,
     timeout: timeout,
     notifyOnError: notifyOnError,
   );
-  Future<String> put(String url, Object? data) => _send('PUT', url, data: data);
-  Future<String> delete(String url, {Object? data}) =>
-      _send('DELETE', url, data: data);
-  Future<T?> getJson<T>(
+  Future<T> getJson<T>(
     String url, {
     Duration? timeout,
     bool notifyOnError = true,
-  }) => _decode<T>(get(url, timeout: timeout, notifyOnError: notifyOnError));
-  Future<T?> postJson<T>(
+    Future<void>? abortTrigger,
+  }) => _request(
+    'GET',
+    url,
+    decodeJson<T>,
+    timeout: timeout,
+    notifyOnError: notifyOnError,
+    abortTrigger: abortTrigger,
+  );
+  Future<T> postJson<T>(
     String url,
     Object? data, {
     Duration? timeout,
     bool notifyOnError = true,
-  }) => _decode<T>(
-    post(url, data, timeout: timeout, notifyOnError: notifyOnError),
+    Future<void>? abortTrigger,
+  }) => _request(
+    'POST',
+    url,
+    decodeJson<T>,
+    data: data,
+    timeout: timeout,
+    notifyOnError: notifyOnError,
+    abortTrigger: abortTrigger,
   );
-  Future<T?> putJson<T>(String url, Object? data) => _decode<T>(put(url, data));
-  Future<T?> deleteJson<T>(String url, {Object? data}) =>
-      _decode<T>(delete(url, data: data));
-  static Future<T?> _decode<T>(Future<String> request) async {
-    final body = await request;
-    return body.isEmpty ? null : jsonDecode(body) as T;
+  Future<T> deleteJson<T>(String url, {Object? data}) =>
+      _request('DELETE', url, decodeJson<T>, data: data);
+
+  /// Only the envelope handles application codes; HTTP failures never reach it.
+  static bool accepted(Map<String, dynamic> json) {
+    final code = json['code'];
+    if (code is! int) throw const FormatException('响应缺少有效 code');
+    if (code != 0 && code != 200) {
+      throw ApiException(
+        (json['message'] ?? json['msg'])?.toString() ?? '接口请求失败（$code）',
+        code: code,
+      );
+    }
+    return true;
   }
 
-  /// AniBaka 网关响应信封 `{code, message, data}` 的成功码：
-  /// `/api/v1/*` 用 `0`，旧版 `/posts`、`/comments` 等用 `200`。
-  static const _successCodes = {0, 200};
+  /// Missing data is a protocol error. Explicit null is allowed only for T?.
+  static T unwrap<T>(Map<String, dynamic> json) {
+    accepted(json);
+    final data = json['data'];
+    if (!json.containsKey('data') || data is! T) {
+      throw FormatException('响应 data 缺失或类型错误，预期 $T');
+    }
+    return data;
+  }
 
-  /// 解包信封并取出 `data`。空响应、非成功码或缺少 `data` 时返回 null。
-  static T? unwrap<T>(Map<String, dynamic>? json) =>
-      json != null && _successCodes.contains(json['code'])
-      ? json['data'] as T?
-      : null;
-
-  /// 信封写操作是否成功（响应本身没有 `data` 时使用）。
-  static bool accepted(Map<String, dynamic>? json) =>
-      json != null && _successCodes.contains(json['code']);
-
-  Future<T?> getData<T>(String url, {bool notifyOnError = true}) async =>
-      unwrap<T>(
-        await getJson<Map<String, dynamic>>(url, notifyOnError: notifyOnError),
-      );
-
-  /// 原始 JSON 端点（BGM 网关等，没有 `{code, message, data}` 信封）。
-  /// 这类端点要么返回数据，要么请求本身已经失败，空响应按失败处理。
-  Future<Map<String, dynamic>> getMap(
+  Future<T> getData<T>(
     String url, {
     bool notifyOnError = true,
-  }) async =>
-      await getJson<Map<String, dynamic>>(url, notifyOnError: notifyOnError) ??
-      (throw StateError('空响应: $url'));
-
-  /// 原始 JSON 数组端点；语义同 [getMap]。
-  Future<List<dynamic>> getRawList(
-    String url, {
-    bool notifyOnError = true,
-  }) async =>
-      await getJson<List<dynamic>>(url, notifyOnError: notifyOnError) ??
-      (throw StateError('空响应: $url'));
-
-  Future<Map<String, dynamic>> postMap(
+    Duration? timeout,
+    Future<void>? abortTrigger,
+  }) => _request(
+    'GET',
+    url,
+    (body) => unwrap<T>(decodeJson<Map<String, dynamic>>(body)),
+    notifyOnError: notifyOnError,
+    timeout: timeout,
+    abortTrigger: abortTrigger,
+  );
+  Future<T> postData<T>(
     String url,
     Object? data, {
     bool notifyOnError = true,
-  }) async =>
-      await postJson<Map<String, dynamic>>(
-        url,
-        data,
-        notifyOnError: notifyOnError,
-      ) ??
-      (throw StateError('空响应: $url'));
-
-  Future<T?> postData<T>(
-    String url,
-    Object? data, {
-    bool notifyOnError = true,
-  }) async =>
-      unwrap<T>(
-        await postJson<Map<String, dynamic>>(
-          url,
-          data,
-          notifyOnError: notifyOnError,
-        ),
-      );
-
-  Future<T?> deleteData<T>(String url, {Object? data}) async =>
-      unwrap<T>(await deleteJson<Map<String, dynamic>>(url, data: data));
+  }) => _request(
+    'POST',
+    url,
+    (body) => unwrap<T>(decodeJson<Map<String, dynamic>>(body)),
+    data: data,
+    notifyOnError: notifyOnError,
+  );
 
   void close() => client.close();
 }

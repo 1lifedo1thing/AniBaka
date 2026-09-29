@@ -1,3 +1,6 @@
+import 'package:baka/models/playback_request.dart';
+import 'package:baka/models/bgm.dart';
+import 'package:baka/utils/json_values.dart';
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:hive/hive.dart';
@@ -7,7 +10,6 @@ import 'package:baka/core/account_session.dart';
 import 'package:baka/core/app_storage.dart';
 import 'package:baka/models/play_history.dart';
 import 'package:baka/services/account/bangumi_session.dart';
-import 'package:baka/utils/bgm_utils.dart';
 
 /// 播放历史同步服务
 late HistoryRepository historyRepository;
@@ -28,8 +30,8 @@ class HistoryRepository {
   final Map<String, List<Map<String, dynamic>>> _memory = {};
 
   String _localKey(Map record) {
-    final bgm = BgmUtils.toInt(record['bgmId']);
-    final ep = BgmUtils.toInt(record['index']);
+    final bgm = toInt(record['bgmId']);
+    final ep = toInt(record['index']);
     final video = (bgm != null && bgm > 0) ? 'bgm_$bgm' : 'id_${record['id']}';
     return '$video::ep_$ep';
   }
@@ -60,10 +62,13 @@ class HistoryRepository {
     return _memory[key] = records;
   }
 
-  bool _sameAnime(Map left, Map right) {
-    final leftBgmId = BgmUtils.toInt(left['bgmId']);
-    final rightBgmId = BgmUtils.toInt(right['bgmId']);
-    if (leftBgmId != null && leftBgmId > 0 && rightBgmId != null && rightBgmId > 0) {
+  bool _sameAnime(Map left, Map right, {int? bgmId}) {
+    final leftBgmId = bgmId ?? toInt(left['bgmId']);
+    final rightBgmId = toInt(right['bgmId']);
+    if (leftBgmId != null &&
+        leftBgmId > 0 &&
+        rightBgmId != null &&
+        rightBgmId > 0) {
       return leftBgmId == rightBgmId;
     }
     final leftId = left['id']?.toString();
@@ -86,20 +91,22 @@ class HistoryRepository {
       'index': ep == null ? null : (ep > 0 ? ep - 1 : 0),
       'position': r.playProgress * 1000,
       'duration': r.videoDuration * 1000,
-      'watchTime': r.updatedAt?.millisecondsSinceEpoch ?? DateTime.now().millisecondsSinceEpoch,
+      'watchTime':
+          r.updatedAt?.millisecondsSinceEpoch ??
+          DateTime.now().millisecondsSinceEpoch,
       'url': 1,
       if (bgmId != null && bgmId > 0) 'bgmId': bgmId,
     };
   }
 
   PlayHistory? _toRemote(Map local) {
-    final bgmId = BgmUtils.toInt(local['bgmId']);
+    final bgmId = toInt(local['bgmId']);
     final validBgm = (bgmId != null && bgmId > 0) ? bgmId : null;
-    final videoId = validBgm ?? BgmUtils.toInt(local['id']);
+    final videoId = validBgm ?? toInt(local['id']);
     if (videoId == null) return null;
 
-    final episodeIndex = BgmUtils.toInt(local['index']);
-    final cover = BgmUtils.resolveCoverImage(local);
+    final episodeIndex = toInt(local['index']);
+    final cover = resolveCoverImage(local);
     final position = local['position'] as num? ?? 0;
     final duration = local['duration'] as num? ?? 0;
 
@@ -125,20 +132,21 @@ class HistoryRepository {
   List<Map<String, dynamic>> getHistoryList() => _readList(_historyKey);
 
   ({int episodeIndex, int lineIndex})? _findResumeSelection(
-    Map videoData,
+    PlaybackRequest request,
     Iterable<Map> records,
+    int? bgmId,
   ) {
     for (final record in records) {
-      if (!_sameAnime(videoData, record)) continue;
-      final episodeIndex = BgmUtils.toInt(record['index']);
+      if (!_sameAnime(request.metadata, record, bgmId: bgmId)) continue;
+      final episodeIndex = toInt(record['index']);
       if (episodeIndex == null || episodeIndex < 0) continue;
-      final source = videoData['source']?.toString() ?? '';
+      final source = request.source;
       final rememberedSource = record['source']?.toString() ?? '';
       final sameSource =
           source.isEmpty ||
           rememberedSource.isEmpty ||
           source == rememberedSource;
-      final lineIndex = sameSource ? (BgmUtils.toInt(record['url']) ?? 1) : 1;
+      final lineIndex = sameSource ? (toInt(record['url']) ?? 1) : 1;
       return (
         episodeIndex: episodeIndex,
         lineIndex: lineIndex > 0 ? lineIndex : 1,
@@ -147,23 +155,27 @@ class HistoryRepository {
     return null;
   }
 
-  ({int episodeIndex, int lineIndex})? getResumeSelection(Map videoData) =>
-      _findResumeSelection(videoData, _readList(_resumeKey)) ??
-      _findResumeSelection(videoData, _readList(_historyKey));
+  ({int episodeIndex, int lineIndex})? getResumeSelection(
+    PlaybackRequest request, {
+    int? bgmId,
+  }) =>
+      _findResumeSelection(request, _readList(_resumeKey), bgmId) ??
+      _findResumeSelection(request, _readList(_historyKey), bgmId);
 
   Future<void> rememberEpisode({
-    required Map videoData,
+    required PlaybackRequest request,
     required int episodeIndex,
     required int urlIndex,
+    int? bgmId,
   }) async {
     if (episodeIndex < 0 || !Hive.isBoxOpen(AppStorage.playHistoryBoxName)) {
       return;
     }
     final record = <String, dynamic>{
-      'id': videoData['id'],
-      'title': videoData['title'],
-      'bgmId': videoData['bgmId'],
-      'source': videoData['source'],
+      'id': request.metadata['id'],
+      'title': request.metadata['title'],
+      'bgmId': bgmId ?? request.metadata['bgmId'],
+      'source': request.source,
       'index': episodeIndex,
       'url': urlIndex > 0 ? urlIndex : 1,
       'watchTime': DateTime.now().millisecondsSinceEpoch,
@@ -182,8 +194,10 @@ class HistoryRepository {
 
   Future<void> syncRemoteToLocal() async {
     try {
-      final response = await AniBakaApi.getPlayHistory(pageSize: _maxHistoryCount);
-      if (response == null || response.list.isEmpty) return;
+      final response = await AniBakaApi.getPlayHistory(
+        pageSize: _maxHistoryCount,
+      );
+      if (response == null || response.isEmpty) return;
 
       final list = getHistoryList();
       final map = <String, Map<String, dynamic>>{};
@@ -192,7 +206,7 @@ class HistoryRepository {
         map.putIfAbsent(_localKey(item), () => item);
       }
 
-      for (final remote in response.list) {
+      for (final remote in response) {
         final key = _remoteKey(remote);
         final local = map[key];
         final remoteTime = remote.updatedAt?.millisecondsSinceEpoch ?? 0;
@@ -205,7 +219,11 @@ class HistoryRepository {
       }
 
       final ordered = map.values.toList(growable: false)
-        ..sort((a, b) => ((b['watchTime'] as int?) ?? 0).compareTo((a['watchTime'] as int?) ?? 0));
+        ..sort(
+          (a, b) => ((b['watchTime'] as int?) ?? 0).compareTo(
+            (a['watchTime'] as int?) ?? 0,
+          ),
+        );
       final finalHistory = ordered.length > _maxHistoryCount
           ? ordered.sublist(0, _maxHistoryCount)
           : ordered;
@@ -216,29 +234,31 @@ class HistoryRepository {
   }
 
   Future<void> saveHistory({
-    required Map videoData,
+    required PlaybackRequest request,
     required int episodeIndex,
     required int positionMs,
     required int durationMs,
     required int urlIndex,
+    String? cover,
+    int? bgmId,
   }) async {
     try {
       if (durationMs <= 0 || positionMs <= _minPositionToSaveMs) return;
 
       final record = <String, dynamic>{
-        'id': videoData['id'],
-        'title': videoData['title'],
-        'content': videoData['content'],
-        'image': videoData['image'],
-        'bgmImageUrl': videoData['bgmImageUrl'],
-        'bgmId': videoData['bgmId'],
-        'source': videoData['source'],
-        'seriesUrl': videoData['seriesUrl'],
-        'sourceUrl': videoData['sourceUrl'],
-        'sourceDisplayName': videoData['sourceDisplayName'],
-        'tag': videoData['tag'],
-        'score': videoData['score'],
-        'info': videoData['info'],
+        'id': request.metadata['id'],
+        'title': request.metadata['title'],
+        'content': request.metadata['content'],
+        'image': request.metadata['image'],
+        'bgmImageUrl': cover ?? request.metadata['bgmImageUrl'],
+        'bgmId': bgmId ?? request.metadata['bgmId'],
+        'source': request.source,
+        'seriesUrl': request.metadata['seriesUrl'],
+        'sourceUrl': request.metadata['sourceUrl'],
+        'sourceDisplayName': request.metadata['sourceDisplayName'],
+        'tag': request.metadata['tag'],
+        'score': request.metadata['score'],
+        'info': request.metadata['info'],
         'index': episodeIndex,
         'position': positionMs,
         'duration': durationMs,
@@ -260,17 +280,26 @@ class HistoryRepository {
 
       final remote = _toRemote(record);
       if (remote != null && session.token.isNotEmpty) {
-        unawaited(AniBakaApi.savePlayHistory(remote));
+        unawaited(
+          AniBakaApi.savePlayHistory(remote).catchError((Object error) {
+            // Local history is already saved; cloud sync is best effort here.
+            debugPrint('上传播放历史失败: $error');
+            return null;
+          }),
+        );
       }
 
-      final bgmId = BgmUtils.toInt(record['bgmId']);
+      final subjectId = toInt(record['bgmId']);
       if (record['isFinished'] == true &&
-          bgmId != null &&
+          subjectId != null &&
           bangumi.isConnected &&
           bangumi.autoMarkEpisode) {
         unawaited(
-          bangumiSession
-              .markEpisodeWatched(subjectId: bgmId, watched: episodeIndex + 1)
+          bangumi
+              .markEpisodeWatched(
+                subjectId: subjectId,
+                watched: episodeIndex + 1,
+              )
               .catchError((Object error, StackTrace stackTrace) {
                 debugPrint('更新 Bangumi 集数失败: $error');
               }),
@@ -280,6 +309,20 @@ class HistoryRepository {
       debugPrint('保存历史记录错误: $e');
     }
   }
+
+  static bool isEpisodeWatched(String videoId, int episodeIndex) =>
+      readProgress('${videoId}_${episodeIndex}_1').inSeconds > 30;
+
+  static Duration readProgress(String key) => Duration(
+    milliseconds:
+        AppStorage.videoProgressBox.get(key)?['positionMs'] as int? ?? 0,
+  );
+
+  Future<void> saveProgress(String key, Duration position) =>
+      AppStorage.videoProgressBox.put(key, {
+        'positionMs': position.inMilliseconds,
+        'updateTime': DateTime.now().millisecondsSinceEpoch,
+      });
 
   Future<void> clearHistory() async {
     await Future.wait([

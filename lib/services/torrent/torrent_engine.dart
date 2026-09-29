@@ -52,6 +52,13 @@ class TorrentStats {
 
 /// Torrent 引擎 — 编排 tracker、peer、piece 管理和流媒体服务器
 class TorrentEngine {
+  bool _disposed = false;
+  Future<void>? _disposing;
+  final _stopped = Completer<void>();
+  final _cancelToken = CancelToken();
+  final _tracker = TrackerClient();
+  final Set<PeerConnection> _connectingPeers = {};
+  final Set<MetadataPeerConnection> _metadataPeers = {};
   TorrentMetadata? _metadata;
   PieceManager? _pieceManager;
   final TorrentStreamServer _streamServer = TorrentStreamServer();
@@ -102,7 +109,11 @@ class TorrentEngine {
   Future<String?> startFromTorrentUrl(String torrentUrl) async {
     _setState(TorrentState.resolving);
     try {
-      final response = await _dio.get<List<int>>(torrentUrl);
+      final response = await _dio.get<List<int>>(
+        torrentUrl,
+        cancelToken: _cancelToken,
+      );
+      if (_disposed) return null;
       if (response.data == null) {
         _setError('下载 .torrent 文件失败');
         return null;
@@ -122,7 +133,9 @@ class TorrentEngine {
     try {
       final magnet = MagnetLink.parse(magnetUri);
 
-      _metadata = await _resolveMagnetMetadata(magnet);
+      final metadata = await _resolveMagnetMetadata(magnet);
+      if (_disposed) return null;
+      _metadata = metadata;
       if (_metadata == null) {
         _setError('无法通过 BEP 9 或 magnet 精确来源获取种子元数据');
         return null;
@@ -163,10 +176,21 @@ class TorrentEngine {
       );
     }
 
-    return completer.future;
+    try {
+      return await Future.any([
+        completer.future,
+        _stopped.future.then((_) => null),
+      ]);
+    } finally {
+      _cancelToken.cancel();
+      for (final peer in _metadataPeers.toList()) {
+        peer.disconnect();
+      }
+    }
   }
 
   Future<String?> _startDownload() async {
+    if (_disposed) return null;
     final meta = _metadata!;
     debugPrint('[TorrentEngine] 开始下载: ${meta.name}');
     debugPrint(
@@ -200,11 +224,18 @@ class TorrentEngine {
       onChanged?.call();
     };
 
-    await _streamServer.start(_pieceManager!);
-    await _startPeerListener(meta, _pieceManager!);
+    final pm = _pieceManager!;
+    await _streamServer.start(pm);
+    if (_disposed) {
+      await _streamServer.stop();
+      return null;
+    }
+    await _startPeerListener(meta, pm);
+    if (_disposed) return null;
 
     _setState(TorrentState.connecting);
     final peerCount = await _connectToPeers();
+    if (_disposed) return null;
 
     // Tracker peer lists routinely contain stale endpoints. Keep the local
     // stream alive and re-announce during the service's buffer window instead
@@ -230,13 +261,14 @@ class TorrentEngine {
 
     _isConnectingPeers = true;
     try {
-      final announce = await TrackerClient.announceMetadata(
+      final announce = await _tracker.announceMetadata(
         metadata: meta,
         downloaded: pm.torrentDownloadedBytes,
         uploaded: _totalUploadedBytes(),
         port: _listenPort,
         event: event,
       );
+      if (_disposed) return 0;
       _scheduleAnnounce(announce.interval);
       final peers = announce.peers;
       debugPrint('[TorrentEngine] 从 tracker 获取到 ${peers.length} 个 peer');
@@ -254,7 +286,9 @@ class TorrentEngine {
       var connectedCount = 0;
 
       Future<void> connectWorker() async {
-        while (nextCandidate < candidates.length && _peers.length < _maxPeers) {
+        while (!_disposed &&
+            nextCandidate < candidates.length &&
+            _peers.length < _maxPeers) {
           final addr = candidates[nextCandidate++];
           final peer = PeerConnection(
             address: addr,
@@ -264,7 +298,9 @@ class TorrentEngine {
             onUploaded: _recordUploaded,
           );
 
+          _connectingPeers.add(peer);
           final connected = await peer.connect();
+          _connectingPeers.remove(peer);
           if (!connected ||
               _metadata != meta ||
               _pieceManager != pm ||
@@ -297,7 +333,7 @@ class TorrentEngine {
 
   void _scheduleAnnounce(Duration? interval) {
     _announceTimer?.cancel();
-    _announceTimer = interval == null
+    _announceTimer = _disposed || interval == null
         ? null
         : Timer(interval, () => unawaited(_connectToPeers()));
   }
@@ -313,6 +349,10 @@ class TorrentEngine {
     for (final port in const [TrackerClient.defaultListenPort, 0]) {
       try {
         final server = await ServerSocket.bind(InternetAddress.anyIPv4, port);
+        if (_disposed) {
+          await server.close();
+          return;
+        }
         _peerServer = server;
         _listenPort = server.port;
         server.listen(
@@ -348,7 +388,9 @@ class TorrentEngine {
       pieceManager: pieceManager,
       onUploaded: _recordUploaded,
     );
+    _connectingPeers.add(peer);
     final accepted = await peer.accept(socket);
+    _connectingPeers.remove(peer);
     if (!accepted ||
         _metadata != metadata ||
         _pieceManager != pieceManager ||
@@ -392,30 +434,15 @@ class TorrentEngine {
     }
   }
 
-  Future<void> _announceStopped() async {
-    final meta = _metadata;
-    final pm = _pieceManager;
-    if (meta == null || pm == null) return;
-    try {
-      await TrackerClient.announceMetadata(
-        metadata: meta,
-        downloaded: pm.torrentDownloadedBytes,
-        uploaded: _totalUploadedBytes(),
-        port: _listenPort,
-        event: 'stopped',
-      );
-    } catch (_) {}
-  }
-
   Future<TorrentMetadata?> _fetchMetadataViaPeers(MagnetLink magnet) async {
     _setState(TorrentState.connecting);
-    final announce = await TrackerClient.announceFromMagnet(
+    final announce = await _tracker.announceFromMagnet(
       magnet: magnet,
       port: _listenPort,
     );
     final peers = announce.peers;
     debugPrint('[TorrentEngine] BEP 9 metadata 候选 peer: ${peers.length}');
-    if (peers.isEmpty) return null;
+    if (_disposed || peers.isEmpty) return null;
 
     final completer = Completer<TorrentMetadata?>();
     final infoHash = magnet.infoHashBytes;
@@ -425,15 +452,20 @@ class TorrentEngine {
     var activeWorkers = workerCount;
 
     Future<void> worker() async {
-      while (!completer.isCompleted) {
+      while (!_disposed && !completer.isCompleted) {
         final index = next++;
         if (index >= limit) break;
         try {
-          final infoBytes = await MetadataPeerConnection(
+          final peer = MetadataPeerConnection(
             address: peers[index],
             infoHash: infoHash,
             peerId: TrackerClient.peerId,
-          ).fetch(timeout: const Duration(seconds: 10));
+          );
+          _metadataPeers.add(peer);
+          final infoBytes = await peer.fetch(
+            timeout: const Duration(seconds: 10),
+          );
+          _metadataPeers.remove(peer);
           if (infoBytes == null || completer.isCompleted) continue;
           final metadata = TorrentMetadata.fromInfoBytes(
             infoBytes,
@@ -457,16 +489,29 @@ class TorrentEngine {
     final timer = Timer(const Duration(seconds: 30), () {
       if (!completer.isCompleted) completer.complete(null);
     });
-    unawaited(completer.future.whenComplete(timer.cancel));
-    return completer.future;
+    try {
+      return await Future.any([
+        completer.future,
+        _stopped.future.then((_) => null),
+      ]);
+    } finally {
+      timer.cancel();
+      for (final peer in _metadataPeers.toList()) {
+        peer.disconnect();
+      }
+    }
   }
 
   Future<TorrentMetadata?> _fetchMetadataFromExactSources(
     MagnetLink magnet,
   ) async {
     for (final url in magnet.exactSources) {
+      if (_disposed || _cancelToken.isCancelled) return null;
       try {
-        final response = await _dio.get<List<int>>(url);
+        final response = await _dio.get<List<int>>(
+          url,
+          cancelToken: _cancelToken,
+        );
         if (response.statusCode != 200 || response.data == null) continue;
         final metadata = TorrentMetadata.fromBytes(
           _responseBytes(response.data!),
@@ -480,7 +525,7 @@ class TorrentEngine {
   }
 
   void _setState(TorrentState newState) {
-    if (_state == newState) return;
+    if (_disposed || _state == newState) return;
     _state = newState;
     onChanged?.call();
   }
@@ -492,8 +537,39 @@ class TorrentEngine {
   }
 
   /// 停止下载并清理资源
-  Future<void> stop() async {
-    final stoppedAnnounce = _announceStopped();
+  Future<void> dispose() => _disposing ??= _dispose();
+  Future<void> _dispose() async {
+    _disposed = true;
+    _stopped.complete();
+    _cancelToken.cancel();
+    _dio.close(force: true);
+    _tracker.dispose();
+    final metadata = _metadata;
+    final pm = _pieceManager;
+    final stoppedTracker = TrackerClient();
+    final stoppedAnnounce = metadata == null || pm == null
+        ? Future<void>.value()
+        : stoppedTracker
+              .announceMetadata(
+                metadata: metadata,
+                downloaded: pm.torrentDownloadedBytes,
+                uploaded: _totalUploadedBytes(),
+                port: _listenPort,
+                event: 'stopped',
+              )
+              .then<void>((_) {});
+    final stopDeadline = Timer(
+      const Duration(seconds: 2),
+      stoppedTracker.dispose,
+    );
+    for (final peer in _metadataPeers.toList()) {
+      peer.disconnect();
+    }
+    for (final peer in _connectingPeers.toList()) {
+      peer.disconnect();
+    }
+    _metadataPeers.clear();
+    _connectingPeers.clear();
     _announceTimer?.cancel();
     _peerCheckTimer?.cancel();
     _announceTimer = null;
@@ -514,8 +590,13 @@ class TorrentEngine {
     _metadata = null;
     _readyNotified = false;
     _uploadedBytes = 0;
-    _setState(TorrentState.idle);
-    await stoppedAnnounce.timeout(const Duration(seconds: 2), onTimeout: () {});
+    _state = TorrentState.idle;
+    try {
+      await stoppedAnnounce;
+    } finally {
+      stopDeadline.cancel();
+      stoppedTracker.dispose();
+    }
   }
 
   /// 更新速度统计（从 getStats 中分离，消除 getter 副作用）

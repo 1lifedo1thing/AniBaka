@@ -4,9 +4,9 @@ import 'package:flutter/material.dart';
 /// Keeps Windows tooltip anchors separate in scrolling semantics containers.
 class PlatformTooltip extends StatelessWidget {
   const PlatformTooltip({
-    super.key,
     required this.message,
     required this.child,
+    super.key,
   });
 
   final String message;

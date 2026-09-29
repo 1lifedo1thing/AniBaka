@@ -5,7 +5,7 @@ import 'dart:convert';
 import 'package:baka/api/anibaka_api.dart';
 import 'package:baka/models/watch_party.dart';
 import 'package:baka/services/playback/playback_content.dart';
-import 'package:baka/utils/app_logger.dart';
+import 'package:baka/core/app_logger.dart';
 import 'package:baka/widgets/baka_player/controller.dart';
 import 'package:flutter/material.dart';
 import 'package:web_socket_channel/io.dart';
@@ -140,6 +140,7 @@ class WatchPartyService {
   }
 
   int _beginConnection() {
+    if (_disposed) throw StateError('WatchPartyService is disposed');
     final generation = ++_connectionGeneration;
     _intentionalDisconnect = false;
     _reconnectTimer?.cancel();
@@ -151,6 +152,7 @@ class WatchPartyService {
   }
 
   bool _isCurrentConnection(int generation, [IOWebSocketChannel? channel]) =>
+      !_disposed &&
       generation == _connectionGeneration &&
       (channel == null || identical(channel, _channel));
 
@@ -171,10 +173,11 @@ class WatchPartyService {
       await channel.ready;
     } catch (error) {
       if (_isCurrentConnection(generation, channel)) {
-        _channel = null;
         _setFailure('无法连接一起看房间');
+        await _disconnect();
+      } else {
+        await channel.sink.close(ws_status.goingAway);
       }
-      await channel.sink.close(ws_status.goingAway);
       rethrow;
     }
     if (!_isCurrentConnection(generation, channel)) {
@@ -213,11 +216,7 @@ class WatchPartyService {
     } on TimeoutException {
       if (_isCurrentConnection(generation, channel)) {
         _setFailure('连接成功，但未收到房间状态');
-        _heartbeat?.cancel();
-        await _channelSubscription?.cancel();
-        _channelSubscription = null;
-        await channel.sink.close(ws_status.goingAway);
-        if (identical(_channel, channel)) _channel = null;
+        await _disconnect();
       }
       throw StateError('连接成功，但未收到房间状态');
     }
@@ -305,6 +304,10 @@ class WatchPartyService {
 
   Future<void> _disconnect([int closeCode = ws_status.goingAway]) async {
     _heartbeat?.cancel();
+    _heartbeat = null;
+    final initial = _initialSnapshot;
+    _initialSnapshot = null;
+    if (initial != null && !initial.isCompleted) initial.complete();
     _pendingRemote = null;
     final subscription = _channelSubscription;
     final channel = _channel;
@@ -573,8 +576,7 @@ class WatchPartyService {
 
   void _onDisconnected(int generation, IOWebSocketChannel channel) {
     if (!_isCurrentConnection(generation, channel)) return;
-    _channel = null;
-    _channelSubscription = null;
+    unawaited(_disconnect());
     _scheduleReconnect(generation);
   }
 
@@ -638,9 +640,11 @@ class WatchPartyService {
     return user.isLoggedIn && user.name.isNotEmpty ? user.name : 'AniBaka';
   }
 
+  bool _disposed = false;
   Future<void>? _closing;
-  Future<void> close() => _closing ??= _close();
+  Future<void> dispose() => _closing ??= _close();
   Future<void> _close() async {
+    _disposed = true;
     await leave();
     detachPlayer();
     state.dispose();

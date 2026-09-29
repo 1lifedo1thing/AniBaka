@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'package:baka/source/runtime/source_operation.dart';
+import 'package:baka/source/runtime/request_scheduler.dart';
+import 'package:baka/source/runtime/webview_task_queue.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -11,15 +15,17 @@ import 'package:baka/instance.dart';
 /// already running or waiting in the shared WebView queue without affecting
 /// tasks submitted later by another adapter.
 class WebViewTaskScope {
-  int _generation = 0;
-
-  void cancel() => _generation++;
+  RequestCancelToken _token = RequestCancelToken();
+  void cancel() {
+    _token.cancel();
+    _token = RequestCancelToken();
+  }
 }
 
 /// 后台 WebView 适配器：加载页面、嗅探视频直链、抓取渲染后的 HTML 与 cookie。
 ///
 /// 设计要点：
-/// - 共享单个控制器，任务经 [_enqueue] 串行执行，互不争用；
+/// - 共享单个控制器，任务经任务队列串行执行，互不争用；
 /// - 嗅探脚本每个文档只安装一次，靠 Hook（media src / XHR / fetch /
 ///   JSON.parse / PerformanceObserver）事件驱动地捕获媒体 URL；
 /// - Dart 侧轮询只读取一个变量，未命中时才触发一次增量兜底扫描，
@@ -399,31 +405,40 @@ class WebViewAdapter {
 
   static webview_windows.WebviewController? _desktopController;
   static WebViewController? _mobileController;
-  static Future<void> _queue = Future.value();
-
-  /// 共享控制器上的任务串行化，避免并发任务互相覆盖页面。
-  static Future<T> _enqueue<T>(Future<T> Function() task) {
-    final result = _queue.then((_) => task());
-    _queue = result.then((_) {}, onError: (_) {});
-    return result;
-  }
+  static final _tasks = WebViewTaskQueue();
+  static Future<T> _stage<T>(Future<T> future) =>
+      SourceOperation.current?.wait(future) ?? future;
 
   static Future<webview_windows.WebviewController>
   _getDesktopController() async {
     if (_desktopController != null) return _desktopController!;
+    SourceOperation.check();
     final controller = webview_windows.WebviewController();
+    var disposed = false;
+    void disposeController() {
+      if (disposed) return;
+      disposed = true;
+      unawaited(controller.dispose().catchError((_) {}));
+    }
+
+    final detach = SourceOperation.current?.token.onCancel(disposeController);
     try {
       await controller.initialize();
+      SourceOperation.check();
       await controller.setUserAgent(desktopUserAgent);
+      SourceOperation.check();
       // 文档创建期注入，覆盖 iframe 与页面最早期的请求：先静音，后嗅探。
       await controller.addScriptToExecuteOnDocumentCreated(_muteMediaScript);
+      SourceOperation.check();
       await controller.addScriptToExecuteOnDocumentCreated(_snifferScript);
+      SourceOperation.check();
     } catch (e) {
-      try {
-        controller.dispose();
-      } catch (_) {}
+      disposeController();
       rethrow;
+    } finally {
+      detach?.call();
     }
+    SourceOperation.check();
     _desktopController = controller;
     return controller;
   }
@@ -435,7 +450,9 @@ class WebViewAdapter {
       controller.executeScript(_stopMediaScript).catchError((_) {}),
       controller.stop().catchError((_) {}),
     ]);
+    SourceOperation.check();
     await controller.loadStringContent(_blankPage).catchError((_) {});
+    SourceOperation.check();
   }
 
   static List<MapEntry<String, String>> _parseCookieHeader(
@@ -467,13 +484,15 @@ class WebViewAdapter {
   }) async {
     final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
+      SourceOperation.check();
       try {
         if (_cleanJsResult(await controller.executeScript('location.host')) ==
             host) {
           return true;
         }
       } catch (_) {}
-      await Future.delayed(const Duration(milliseconds: 150));
+      await SourceOperation.delay(const Duration(milliseconds: 150));
+      SourceOperation.check();
     }
     return false;
   }
@@ -488,13 +507,16 @@ class WebViewAdapter {
     await controller.loadUrl(origin.toString());
     // 只有确认当前文档确实属于目标站点才写入，避免重定向到第三方域后
     // 把会话 Cookie 写错域（浏览器也会拒绝跨域赋值）。
+    SourceOperation.check();
     if (!await _waitForDesktopHost(controller, target.host)) return;
     for (final cookie in cookies) {
+      SourceOperation.check();
       final assignment = '${cookie.key}=${cookie.value}; path=/';
       try {
         await controller.executeScript(
           'document.cookie=${jsonEncode(assignment)}',
         );
+        SourceOperation.check();
       } catch (_) {}
     }
   }
@@ -506,6 +528,7 @@ class WebViewAdapter {
     if (cookies.isEmpty || target.host.isEmpty) return;
     final manager = WebViewCookieManager();
     for (final cookie in cookies) {
+      SourceOperation.check();
       await manager.setCookie(
         WebViewCookie(
           name: cookie.key,
@@ -534,77 +557,113 @@ class WebViewAdapter {
     String? cookieHeader,
     WebViewTaskScope? taskScope,
   }) {
-    final taskGeneration = taskScope?._generation;
-    return _enqueue(() async {
-      var cancelled = false;
-      bool taskCancelled() =>
-          cancelled ||
-          (taskScope != null && taskScope._generation != taskGeneration);
-
-      if (taskCancelled()) return onCancelled();
-
-      Future<void> Function()? reset;
-      try {
-        final cookies = _parseCookieHeader(cookieHeader);
-        late Future<dynamic> Function(String) exec;
-        if (Platform.isWindows) {
-          final controller = await _getDesktopController();
-          reset = () => _resetDesktop(controller);
-          exec = controller.executeScript;
-          await controller.setUserAgent(userAgent).catchError((_) {});
-          if (cookies.isNotEmpty) {
-            await _seedDesktopCookies(controller, Uri.parse(url), cookies);
-          }
-          if (taskCancelled()) return onCancelled();
-          await controller.loadUrl(url);
-        } else {
-          final controller = _mobileController ??= WebViewController();
-          exec = controller.runJavaScriptReturningResult;
-          reset = () async {
-            await controller
-                .setNavigationDelegate(NavigationDelegate())
-                .catchError((_) {});
-            await controller.runJavaScript(_stopMediaScript).catchError((_) {});
-            await controller
-                .loadRequest(Uri.parse('about:blank'))
-                .catchError((_) {});
-          };
-          await controller.setJavaScriptMode(JavaScriptMode.unrestricted);
-          await controller.setUserAgent(
-            Instances.isTV ? desktopUserAgent : userAgent,
-          );
-          if (cookies.isNotEmpty) {
-            await _seedMobileCookies(Uri.parse(url), cookies);
-          }
-          void inject(String _) {
-            if (!taskCancelled()) {
-              controller
-                  .runJavaScript('$_muteMediaScript\n$_snifferScript')
-                  .catchError((_) {});
-            }
-          }
-
-          if (sniff) {
-            await controller.setNavigationDelegate(
-              NavigationDelegate(onPageStarted: inject, onPageFinished: inject),
-            );
-          }
-          if (taskCancelled()) return onCancelled();
-          await controller.loadRequest(Uri.parse(url));
-        }
-        if (taskCancelled()) return onCancelled();
-        // A timed-out poll may resume later; it must not touch the next task's page.
-        return await poll(
-          (js) => taskCancelled() ? Future.value('') : exec(js),
-          taskCancelled,
-        ).timeout(timeout, onTimeout: onTimeout);
-      } catch (_) {
-        return taskCancelled() ? onCancelled() : onTimeout();
-      } finally {
-        cancelled = true;
-        await reset?.call();
+    final owner = taskScope?._token;
+    Future<void> Function()? reset;
+    webview_windows.WebviewController? desktop;
+    WebViewController? mobile;
+    void discard() {
+      if (desktop != null && identical(_desktopController, desktop)) {
+        _desktopController = null;
       }
-    });
+      if (mobile != null && identical(_mobileController, mobile)) {
+        _mobileController = null;
+      }
+      if (desktop != null) {
+        unawaited(desktop!.dispose().catchError((_) {}));
+      }
+    }
+
+    return _tasks.run<T>(
+      timeout: timeout,
+      owner: owner,
+      onExpired: onCancelled,
+      cleanup: () async {
+        await reset?.call();
+      },
+      discard: discard,
+      action: (operation) async {
+        var cancelled = false;
+        bool taskCancelled() => cancelled || operation.isCancelled;
+
+        if (taskCancelled()) return onCancelled();
+
+        try {
+          final cookies = _parseCookieHeader(cookieHeader);
+          late Future<dynamic> Function(String) exec;
+          if (Platform.isWindows) {
+            final controller = await _stage(_getDesktopController());
+            desktop = controller;
+            reset = () => _resetDesktop(controller);
+            exec = controller.executeScript;
+            await controller.setUserAgent(userAgent).catchError((_) {});
+            SourceOperation.check();
+            if (cookies.isNotEmpty) {
+              await _seedDesktopCookies(controller, Uri.parse(url), cookies);
+              SourceOperation.check();
+            }
+            if (taskCancelled()) return onCancelled();
+            await controller.loadUrl(url);
+          } else {
+            final controller = _mobileController ??= WebViewController();
+            mobile = controller;
+            exec = controller.runJavaScriptReturningResult;
+            reset = () async {
+              await controller
+                  .setNavigationDelegate(NavigationDelegate())
+                  .catchError((_) {});
+              SourceOperation.check();
+              await controller
+                  .runJavaScript(_stopMediaScript)
+                  .catchError((_) {});
+              SourceOperation.check();
+              await controller
+                  .loadRequest(Uri.parse('about:blank'))
+                  .catchError((_) {});
+              SourceOperation.check();
+            };
+            await controller.setJavaScriptMode(JavaScriptMode.unrestricted);
+            SourceOperation.check();
+            await controller.setUserAgent(
+              Instances.isTV ? desktopUserAgent : userAgent,
+            );
+            SourceOperation.check();
+            if (cookies.isNotEmpty) {
+              await _seedMobileCookies(Uri.parse(url), cookies);
+              SourceOperation.check();
+            }
+            void inject(String _) {
+              if (!taskCancelled()) {
+                controller
+                    .runJavaScript('$_muteMediaScript\n$_snifferScript')
+                    .catchError((_) {});
+              }
+            }
+
+            if (sniff) {
+              await controller.setNavigationDelegate(
+                NavigationDelegate(
+                  onPageStarted: inject,
+                  onPageFinished: inject,
+                ),
+              );
+              SourceOperation.check();
+            }
+            if (taskCancelled()) return onCancelled();
+            await controller.loadRequest(Uri.parse(url));
+          }
+          if (taskCancelled()) return onCancelled();
+          // A timed-out poll may resume later; it must not touch the next task's page.
+          return await poll(
+            (js) => taskCancelled() ? Future.value('') : exec(js),
+            taskCancelled,
+          ).timeout(timeout, onTimeout: onTimeout);
+        } catch (_) {
+          return taskCancelled() ? onCancelled() : onTimeout();
+        } finally {
+          cancelled = true;
+        }
+      },
+    );
   }
 
   static String _cleanJsResult(dynamic result) {
@@ -646,7 +705,7 @@ class WebViewAdapter {
           await exec(_snifferFollowFrameScript);
         }
       } catch (_) {}
-      await Future.delayed(Duration(milliseconds: intervalMs));
+      await SourceOperation.delay(Duration(milliseconds: intervalMs));
       if (intervalMs < 750) intervalMs += 125;
     }
     return null;
@@ -684,11 +743,11 @@ class WebViewAdapter {
       try {
         if (_cleanJsResult(await exec(_readyStateScript)) == 'complete') break;
       } catch (_) {}
-      await Future.delayed(const Duration(milliseconds: 250));
+      await SourceOperation.delay(const Duration(milliseconds: 250));
     }
 
     // 静置，给页面 JS 留出渲染时间。
-    if (settleDelay > Duration.zero) await Future.delayed(settleDelay);
+    if (settleDelay > Duration.zero) await SourceOperation.delay(settleDelay);
 
     var html = '';
     while (!cancelled() && DateTime.now().isBefore(deadline)) {
@@ -713,7 +772,7 @@ class WebViewAdapter {
           }
         }
       } catch (_) {}
-      await Future.delayed(const Duration(milliseconds: 700));
+      await SourceOperation.delay(const Duration(milliseconds: 700));
     }
 
     var cookies = '';

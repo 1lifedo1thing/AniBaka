@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 
 import 'package:flutter/painting.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -10,6 +11,15 @@ import 'package:baka/models/subtitle_config.dart';
 /// 播放器设置持久化服务
 class PlaybackSettingsService {
   PlaybackSettingsService._();
+
+  static const _subtitleSettingsKey = 'subtitle_settings';
+
+  static SubtitleConfig _loadSubtitles(SharedPreferences sp) {
+    final raw = sp.getString(_subtitleSettingsKey);
+    return raw == null
+        ? const SubtitleConfig()
+        : SubtitleConfig.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+  }
 
   static const _defaultDanmakuOffKey = 'player_defaultDanmakuOff';
   static const _defaultPlaybackSpeedKey = 'player_defaultPlaybackSpeed';
@@ -220,7 +230,7 @@ class PlaybackSettingsService {
       videoEnhancementMode: enhancementMode,
       lastVideoEnhancementMode: lastEnhancementMode,
       showSubtitle: sp.getBool(_showSubtitleKey) ?? true,
-      subtitleConfig: SubtitleConfig.load(),
+      subtitleConfig: _loadSubtitles(sp),
       hwdecMode: normalizeHwdecMode(sp.getString(_hwdecModeKey)),
       videoRenderer: normalizeVideoRenderer(sp.getString(_videoRendererKey)),
       filterHlsAds: sp.getBool(_filterHlsAdsKey) ?? false,
@@ -272,7 +282,9 @@ class PlaybackSettingsService {
     write(_filterHlsAdsKey, previous.filterHlsAds, next.filterHlsAds);
 
     if (previous.subtitleConfig != next.subtitleConfig) {
-      writes.add(next.subtitleConfig.save());
+      writes.add(sp.setString(
+        _subtitleSettingsKey, jsonEncode(next.subtitleConfig.toJson()),
+      ));
     }
 
     return writes.isEmpty ? Future.value() : Future.wait(writes);

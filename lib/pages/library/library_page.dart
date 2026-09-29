@@ -2,6 +2,7 @@ import 'package:baka/models/playback_request.dart';
 import 'package:baka/api/anibaka_api.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/models/collection.dart';
+import 'package:baka/models/page.dart';
 import 'package:baka/pages/player/player_page.dart';
 import 'package:baka/services/collection/collection_repository.dart';
 import 'package:baka/services/playback/history_repository.dart';
@@ -14,8 +15,9 @@ import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 
 class LibraryPage extends StatefulWidget {
   final int initialIndex;
+  final bool embedded;
 
-  const LibraryPage({super.key, this.initialIndex = 0});
+  const LibraryPage({super.key, this.initialIndex = 0, this.embedded = false});
 
   @override
   State<LibraryPage> createState() => _LibraryPageState();
@@ -81,7 +83,7 @@ class _LibraryPageState extends State<LibraryPage> {
       }
 
       final stats = results[0] as CollectionStats?;
-      final response = results[1] as CollectionListResponse?;
+      final response = results[1] as PageData<AnimeCollection>?;
       setState(() {
         if (stats != null) _stats = stats;
         if (response != null) {
@@ -101,8 +103,12 @@ class _LibraryPageState extends State<LibraryPage> {
   }
 
   Future<void> _fetchStats() async {
-    final newStats = await collections.getStats();
-    if (newStats != null && mounted) setState(() => _stats = newStats);
+    try {
+      final newStats = await collections.getStats();
+      if (newStats != null && mounted) setState(() => _stats = newStats);
+    } catch (error) {
+      debugPrint('刷新收藏统计失败: $error');
+    }
   }
 
   Future<void> _fetchCollectionData({bool reset = true}) async {
@@ -183,9 +189,12 @@ class _LibraryPageState extends State<LibraryPage> {
         slivers: [
           SliverAppBar(
             pinned: true,
-            title: const Text(
-              '我的片库',
-              style: TextStyle(fontWeight: FontWeight.bold),
+            automaticallyImplyLeading: !widget.embedded,
+            title: Text(
+              widget.embedded
+                  ? (_selectedIndex == 1 ? '我的追番' : '观看历史')
+                  : '我的片库',
+              style: const TextStyle(fontWeight: FontWeight.bold),
             ),
             backgroundColor: Theme.of(context).scaffoldBackgroundColor,
             surfaceTintColor: Colors.transparent,
@@ -210,12 +219,13 @@ class _LibraryPageState extends State<LibraryPage> {
               const SizedBox(width: 8),
             ],
           ),
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-              child: _buildSegmentedControl(),
+          if (!widget.embedded)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                child: _buildSegmentedControl(),
+              ),
             ),
-          ),
           if (_selectedIndex == 1)
             SliverToBoxAdapter(
               child: Padding(

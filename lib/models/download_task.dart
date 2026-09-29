@@ -1,6 +1,5 @@
+import 'package:baka/utils/json_values.dart';
 import 'package:flutter/foundation.dart';
-
-import 'package:baka/utils/bgm_utils.dart';
 
 enum DownloadStatus { waiting, downloading, paused, completed, failed }
 
@@ -60,6 +59,12 @@ class DownloadTask {
   int get downloadedBytes => downloadedBytesNotifier.value;
   set downloadedBytes(int b) => downloadedBytesNotifier.value = b;
 
+  void dispose() {
+    statusNotifier.dispose();
+    progressNotifier.dispose();
+    downloadedBytesNotifier.dispose();
+  }
+
   Map<String, dynamic> toJson() => {
     'id': id,
     'url': url,
@@ -87,7 +92,7 @@ class DownloadTask {
     title: json['title'],
     subtitle: json['subtitle'],
     thumbnail: json['thumbnail'],
-    bgmId: BgmUtils.toInt(json['bgmId'] ?? json['videoId']),
+    bgmId: toInt(json['bgmId'] ?? json['videoId']),
     episodeIndex: json['episodeIndex'],
     kind: _kindFromJson(json),
     danmakuPath: json['danmakuPath'],

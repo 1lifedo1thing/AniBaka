@@ -1,42 +1,53 @@
 import 'package:baka/source/models/source_rule.dart';
 
 class CustomSourceConfig {
-  final String id;
-  final String name;
-  final String baseUrl;
-  final String iconUrl;
-  final String description;
+  /// The catalog, validator and adapter share this parsed rule.
+  final SourceRule rule;
+  String get id => rule.id;
+  String get name => rule.name;
+  String get baseUrl => rule.baseUrl;
+  String get iconUrl => rule.iconUrl;
+  String get description => rule.description;
 
   /// v2 管线规则体（recipes/headers/search/detail/play/useWebview）。
-  final Map<String, dynamic>? pipeline;
+  final bool hasPipeline;
+  Map<String, dynamic>? pipelineJson() =>
+      hasPipeline ? rule.pipelineJson() : null;
 
   final bool enabled;
   final DateTime createdAt;
   final DateTime updatedAt;
 
-  SourceRule toSourceRule() => SourceRule.fromJson(<String, dynamic>{
-    'id': id,
-    'name': name,
-    'baseUrl': baseUrl,
-    'iconUrl': iconUrl,
-    'description': description,
-    ...?pipeline,
-  });
-
   CustomSourceConfig({
-    required this.id,
-    required this.name,
-    required this.baseUrl,
+    required String id,
+    required String name,
+    required String baseUrl,
     String? iconUrl,
     String? description,
-    this.pipeline,
+    Map<String, dynamic>? pipeline,
     bool? enabled,
     DateTime? createdAt,
     DateTime? updatedAt,
-  }) : iconUrl = iconUrl ?? '',
-       description = description ?? '',
+  }) : rule = SourceRule.fromJson({
+         'id': id,
+         'name': name,
+         'baseUrl': baseUrl,
+         'iconUrl': iconUrl ?? '',
+         'description': description ?? '',
+         ...?pipeline,
+       }),
+       hasPipeline = pipeline != null,
        enabled = enabled ?? true,
        createdAt = createdAt ?? DateTime.now(),
+       updatedAt = updatedAt ?? DateTime.now();
+
+  CustomSourceConfig.fromRule(
+    this.rule, {
+    this.hasPipeline = true,
+    this.enabled = true,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  }) : createdAt = createdAt ?? DateTime.now(),
        updatedAt = updatedAt ?? DateTime.now();
 
   factory CustomSourceConfig.fromJson(Map<String, dynamic> json) {
@@ -45,7 +56,10 @@ class CustomSourceConfig {
       id: (json['id'] as String?) ?? '',
       name: (json['name'] as String?) ?? '未命名源',
       baseUrl: (json['baseUrl'] as String?) ?? '',
-      iconUrl: (json['iconUrl'] ?? json['icon'] ?? json['favicon'] ?? json['badge'])?.toString() ?? '',
+      iconUrl:
+          (json['iconUrl'] ?? json['icon'] ?? json['favicon'] ?? json['badge'])
+              ?.toString() ??
+          '',
       description: json['description'] as String?,
       pipeline: pipelineBody,
       enabled: json['enabled'] as bool?,
@@ -60,9 +74,10 @@ class CustomSourceConfig {
 
   static Map<String, dynamic>? _extractPipelineBody(Map<String, dynamic> json) {
     if (json['pipeline'] is Map) {
-      final pipeline = Map<String, dynamic>.from(json['pipeline'] as Map);
-      if (!pipeline.containsKey('directConnection') && json['directConnection'] != null) {
-        pipeline['directConnection'] = json['directConnection'];
+      final pipeline = (json['pipeline'] as Map).cast<String, dynamic>();
+      if (!pipeline.containsKey('directConnection') &&
+          json['directConnection'] != null) {
+        return {...pipeline, 'directConnection': json['directConnection']};
       }
       return pipeline;
     }
@@ -74,7 +89,8 @@ class CustomSourceConfig {
       if (json['detail'] != null) 'detail': json['detail'],
       if (json['play'] != null) 'play': json['play'],
       if (json['useWebview'] != null) 'useWebview': json['useWebview'],
-      if (json['directConnection'] != null) 'directConnection': json['directConnection'],
+      if (json['directConnection'] != null)
+        'directConnection': json['directConnection'],
       if (json['mediaValidationTimeoutMs'] != null)
         'mediaValidationTimeoutMs': json['mediaValidationTimeoutMs'],
     };
@@ -87,7 +103,7 @@ class CustomSourceConfig {
     'baseUrl': baseUrl,
     if (iconUrl.isNotEmpty) 'iconUrl': iconUrl,
     'description': description,
-    'pipeline': pipeline,
+    'pipeline': pipelineJson(),
     'enabled': enabled,
     'createdAt': createdAt.toIso8601String(),
     'updatedAt': updatedAt.toIso8601String(),
@@ -103,25 +119,39 @@ class CustomSourceConfig {
     bool? enabled,
     DateTime? createdAt,
     DateTime? updatedAt,
-  }) => CustomSourceConfig(
-    id: id ?? this.id,
-    name: name ?? this.name,
-    baseUrl: baseUrl ?? this.baseUrl,
-    iconUrl: iconUrl ?? this.iconUrl,
-    description: description ?? this.description,
-    pipeline: pipeline ?? this.pipeline,
+  }) => CustomSourceConfig.fromRule(
+    pipeline == null
+        ? rule.copyWith(
+            id: id,
+            name: name,
+            baseUrl: baseUrl,
+            iconUrl: iconUrl,
+            description: description,
+          )
+        : SourceRule.fromJson({
+            'id': id ?? this.id,
+            'name': name ?? this.name,
+            'baseUrl': baseUrl ?? this.baseUrl,
+            'iconUrl': iconUrl ?? this.iconUrl,
+            'description': description ?? this.description,
+            ...pipeline,
+          }),
+    hasPipeline: hasPipeline || pipeline != null,
     enabled: enabled ?? this.enabled,
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
   );
 
   @override
-  String toString() => 'CustomSourceConfig(id: $id, name: $name, enabled: $enabled)';
+  String toString() =>
+      'CustomSourceConfig(id: $id, name: $name, enabled: $enabled)';
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is CustomSourceConfig && id == other.id && updatedAt == other.updatedAt;
+      other is CustomSourceConfig &&
+          id == other.id &&
+          updatedAt == other.updatedAt;
 
   @override
   int get hashCode => Object.hash(id, updatedAt);

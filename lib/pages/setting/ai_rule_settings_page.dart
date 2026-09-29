@@ -190,7 +190,7 @@ class _AiRuleSettingsPageState extends State<AiRuleSettingsPage> {
       });
       showSnackBar('连接失败：$error', isError: true);
     } finally {
-      service.cancel();
+      service.dispose();
       if (mounted) setState(() => _testing = false);
     }
   }

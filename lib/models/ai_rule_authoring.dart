@@ -22,14 +22,6 @@ class AiProviderConfig {
     if (value.endsWith('/chat/completions')) return Uri.parse(value);
     return Uri.parse('$value/chat/completions');
   }
-
-  AiProviderConfig copyWith({String? baseUrl, String? model, String? apiKey}) {
-    return AiProviderConfig(
-      baseUrl: baseUrl ?? this.baseUrl,
-      model: model ?? this.model,
-      apiKey: apiKey ?? this.apiKey,
-    );
-  }
 }
 
 class RuleAuthoringSeed {

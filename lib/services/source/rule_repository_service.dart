@@ -56,6 +56,13 @@ class RuleRepositoryService extends ChangeNotifier {
     ttl: _cacheTtl,
   );
 
+  @override
+  void dispose() {
+    _dio.close(force: true);
+    _memoryCache.clear();
+    super.dispose();
+  }
+
   List<String> get subscriptions {
     final stored = Instances.sp.getStringList(_subscriptionsKey);
     final values = stored == null || stored.isEmpty

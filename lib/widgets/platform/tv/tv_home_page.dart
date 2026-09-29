@@ -1,3 +1,5 @@
+import 'package:baka/models/bgm.dart';
+import 'package:baka/utils/json_values.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
@@ -5,7 +7,6 @@ import 'package:baka/api/bgm.dart';
 import 'package:baka/api/anibaka_api.dart';
 import 'package:baka/models/anime_detail_view_data.dart';
 import 'package:baka/pages/home/home_controller.dart';
-import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/widgets/anime/post_card.dart';
 import 'package:baka/widgets/common/skeletonizer.dart';
 import 'package:baka/widgets/platform/tv/tv_focusable.dart';
@@ -298,7 +299,7 @@ class _TvHomeHeroState extends State<_TvHomeHero> {
 
   Future<AnimeDetailViewData?> _loadDetail() async {
     final item = widget.item;
-    final subjectId = BgmUtils.toInt(item['bgmId']);
+    final subjectId = toInt(item['bgmId']);
     if (subjectId == null || subjectId <= 0) return null;
     final data = await Future.wait([
       getBgmSubject(subjectId),
@@ -306,10 +307,7 @@ class _TvHomeHeroState extends State<_TvHomeHero> {
     ]);
     return AnimeDetailViewData.from(
       source: item,
-      bgmInfo: BgmInfo(
-        score: BgmUtils.toDouble(item['score']),
-        subjectId: subjectId,
-      ),
+      bgmInfo: BgmInfo(score: toDouble(item['score']), subjectId: subjectId),
       bgm: data[0],
       anibaka: data[1],
     );
@@ -325,7 +323,7 @@ class _TvHomeHeroState extends State<_TvHomeHero> {
     final item = widget.item;
 
     final title = detail?.title ?? item['title']?.toString() ?? '';
-    final scoreNum = detail?.score ?? BgmUtils.toDouble(item['score']) ?? 0;
+    final scoreNum = detail?.score ?? toDouble(item['score']) ?? 0;
     final scoreText = scoreNum.toStringAsFixed(1);
     final summary = detail?.summary ?? item['summary']?.toString() ?? '';
     final backdropUrl =
@@ -335,7 +333,7 @@ class _TvHomeHeroState extends State<_TvHomeHero> {
         item['content']?.toString() ??
         '';
     final logoUrl = detail?.logoUrl ?? item['logoUrl']?.toString() ?? '';
-    final rankNum = BgmUtils.toInt(item['rank']) ?? 0;
+    final rankNum = toInt(item['rank']) ?? 0;
 
     return SizedBox(
       height: 370,

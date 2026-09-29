@@ -67,11 +67,11 @@ class AiRuleAuthoringService {
   bool _cancelled = false;
   late String _targetId;
 
-  void cancel() {
+  void dispose() {
     if (_cancelled) return;
     _cancelled = true;
     _cancelToken.cancel('AI rule authoring cancelled');
-    _probeService.cancel();
+    _probeService.dispose();
     _validationRunner.dispose();
     _modelClient.close(force: true);
   }
@@ -241,7 +241,8 @@ class AiRuleAuthoringService {
           // 提示词约定候选形如 {"action":"candidate","rule":{...}}；
           // 兼容直接把 pipeline 放在顶层的写法。
           final rawRule = action['rule'];
-          final rawPipeline = action['pipeline'] ??
+          final rawPipeline =
+              action['pipeline'] ??
               (rawRule is Map ? rawRule['pipeline'] : null);
           if (rawPipeline is! Map) {
             messages.add({
@@ -251,17 +252,7 @@ class AiRuleAuthoringService {
             });
             continue;
           }
-          final candidate = CustomSourceConfig(
-            id: _targetId,
-            name: (action['name'] ??
-                    (rawRule is Map ? rawRule['name'] : null) ??
-                    seed.currentConfig?.name ??
-                    '自动生成图源')
-                .toString(),
-            baseUrl: siteUri.origin,
-            pipeline: Map<String, dynamic>.from(rawPipeline),
-            description: '由 AniBaka AI 规则生成',
-          );
+          late final CustomSourceConfig candidate;
           onProgress(
             RuleAuthoringProgress(
               round: round,
@@ -269,13 +260,34 @@ class AiRuleAuthoringService {
               message: '第 $candidateCount 次候选规则验证中...',
             ),
           );
-
-          lastValidation = await _validationRunner.validate(
-            candidate,
-            keyword: seed.keyword.trim(),
-            preferredSeriesId: seed.seriesId,
-            preferredEpisodeId: seed.episodeId,
-          );
+          try {
+            candidate = CustomSourceConfig(
+              id: _targetId,
+              name:
+                  (action['name'] ??
+                          (rawRule is Map ? rawRule['name'] : null) ??
+                          seed.currentConfig?.name ??
+                          '自动生成图源')
+                      .toString(),
+              baseUrl: siteUri.origin,
+              pipeline: rawPipeline.cast<String, dynamic>(),
+              description: '由 AniBaka AI 规则生成',
+            );
+            lastValidation = await _validationRunner.validate(
+              candidate,
+              keyword: seed.keyword.trim(),
+              preferredSeriesId: seed.seriesId,
+              preferredEpisodeId: seed.episodeId,
+            );
+          } catch (error) {
+            // Parsing now happens at the boundary; malformed AI candidates
+            // still return feedback for the next round instead of ending it.
+            lastValidation = RuleValidationReport(
+              success: false,
+              stage: 'static',
+              message: SiteProbeService.safeError(error),
+            );
+          }
           _throwIfCancelled();
           if (lastValidation.success) {
             onProgress(

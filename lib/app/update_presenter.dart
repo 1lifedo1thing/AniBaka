@@ -1,8 +1,9 @@
 import 'dart:io';
 
 import 'package:baka/api/post.dart';
+import 'package:baka/core/api_transport.dart';
 import 'package:baka/instance.dart';
-import 'package:baka/utils/version_util.dart';
+import 'package:baka/models/update_info.dart';
 import 'package:baka/widgets/dialog/update_dialog.dart';
 import 'package:flutter/foundation.dart';
 
@@ -54,7 +55,9 @@ class VersionService {
   }
 
   static Future<UpdateInfo> checkUpdateInfo() async {
-    final appInfo = await checkAppUpdateApi();
+    final appInfo = await apiTransport.getJson<Map<String, dynamic>>(
+      'https://version.anibaka.com/',
+    );
     final localVersion = Instances.appVersion;
 
     final appUpdate = appInfo['app_update'] as Map<String, dynamic>;

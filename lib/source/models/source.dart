@@ -29,6 +29,7 @@ class PlaybackCatalog {
       final source = sources[sourceIndex];
       for (var i = 0; i < source.episodes.length; i++) {
         final episode = source.episodes[i];
+        if (episode.episodeId.isEmpty) continue;
         final index = episode.episode >= 0 ? episode.episode : i;
         final slot = slots[index];
         if (slot == null) {
@@ -36,13 +37,11 @@ class PlaybackCatalog {
             episode.name,
             episode.episodeId,
             sourceIndex,
+            sources.length,
           );
-        } else if (slot.lastSourceIndex == sourceIndex) {
-          slot.lines.last = episode.episodeId;
-          if (slot.titleSourceIndex == sourceIndex) slot.title = episode.name;
         } else {
-          slot.lines.add(episode.episodeId);
-          slot.lastSourceIndex = sourceIndex;
+          slot.lines[sourceIndex] = episode.episodeId;
+          if (slot.titleSourceIndex == sourceIndex) slot.title = episode.name;
         }
       }
     }
@@ -64,13 +63,13 @@ class PlaybackCatalog {
 }
 
 class _EpisodeSlot {
-  _EpisodeSlot(this.title, String line, int sourceIndex)
+  _EpisodeSlot(this.title, String line, int sourceIndex, int sourceCount)
     : titleSourceIndex = sourceIndex,
-      lastSourceIndex = sourceIndex,
-      lines = [line];
+      lines = List.filled(sourceCount, '') {
+    lines[sourceIndex] = line;
+  }
 
   String title;
   final int titleSourceIndex;
-  int lastSourceIndex;
   final List<String> lines;
 }

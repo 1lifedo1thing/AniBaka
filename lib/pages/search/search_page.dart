@@ -1,3 +1,5 @@
+import 'package:baka/source/models/source_search_result.dart';
+import 'package:baka/services/source/source_repository.dart';
 import 'dart:async';
 
 import 'package:baka/instance.dart';
@@ -22,6 +24,14 @@ class _SearchPageState extends State<SearchPage> {
   final _searchController = TextEditingController();
   late final AnimeSearchController _searchService;
   Timer? _debounce;
+  late final _sourceChanges = Listenable.merge([
+    _searchService.sourceLabelsNotifier,
+    _searchService.selectedSourceIndexNotifier,
+  ]);
+  late final _resultChanges = Listenable.merge([
+    _searchService.isLoadingNotifier,
+    _searchService.resultsNotifier,
+  ]);
 
   bool get _isWindows => Instances.isDesktopPlatform;
 
@@ -115,12 +125,14 @@ class _SearchPageState extends State<SearchPage> {
                           child: ValueListenableBuilder<bool>(
                             valueListenable: _searchService.showResultsNotifier,
                             builder: (context, showResults, _) {
-                              if (!showResults) {
-                                return ValueListenableBuilder<List<String>>(
-                                  valueListenable:
-                                      _searchService.searchHistoryNotifier,
-                                  builder: (context, history, _) {
-                                    return CustomScrollView(
+                              if (showResults) {
+                                return _buildResultsArea(isVertical: true);
+                              }
+                              return ValueListenableBuilder<List<String>>(
+                                valueListenable:
+                                    _searchService.searchHistoryNotifier,
+                                builder: (context, history, _) =>
+                                    CustomScrollView(
                                       physics: const BouncingScrollPhysics(),
                                       slivers: [
                                         _buildHistory(
@@ -128,42 +140,7 @@ class _SearchPageState extends State<SearchPage> {
                                           isVertical: true,
                                         ),
                                       ],
-                                    );
-                                  },
-                                );
-                              }
-
-                              return ValueListenableBuilder<bool>(
-                                valueListenable:
-                                    _searchService.isLoadingNotifier,
-                                builder: (context, isLoading, _) {
-                                  if (isLoading) {
-                                    return const Center(
-                                      child: CircularProgressIndicator(),
-                                    );
-                                  }
-
-                                  return ValueListenableBuilder<
-                                    List<Map<String, dynamic>>
-                                  >(
-                                    valueListenable:
-                                        _searchService.resultsNotifier,
-                                    builder: (context, results, _) {
-                                      return CustomScrollView(
-                                        physics: const BouncingScrollPhysics(),
-                                        slivers: [
-                                          _buildResults(
-                                            results,
-                                            isVertical: true,
-                                          ),
-                                          const SliverToBoxAdapter(
-                                            child: SizedBox(height: 40),
-                                          ),
-                                        ],
-                                      );
-                                    },
-                                  );
-                                },
+                                    ),
                               );
                             },
                           ),
@@ -189,32 +166,8 @@ class _SearchPageState extends State<SearchPage> {
                             _buildHistory(history),
                       );
                     }
-
                     return SliverMainAxisGroup(
-                      slivers: [
-                        _buildSourceSelector(),
-                        ValueListenableBuilder<bool>(
-                          valueListenable: _searchService.isLoadingNotifier,
-                          builder: (context, isLoading, _) {
-                            if (isLoading) {
-                              return const SliverFillRemaining(
-                                hasScrollBody: false,
-                                child: Center(
-                                  child: CircularProgressIndicator(),
-                                ),
-                              );
-                            }
-
-                            return ValueListenableBuilder<
-                              List<Map<String, dynamic>>
-                            >(
-                              valueListenable: _searchService.resultsNotifier,
-                              builder: (context, results, _) =>
-                                  _buildResults(results),
-                            );
-                          },
-                        ),
-                      ],
+                      slivers: [_buildSourceSelector(), _buildResultsArea()],
                     );
                   },
                 ),
@@ -224,6 +177,41 @@ class _SearchPageState extends State<SearchPage> {
           },
         ),
       ),
+    );
+  }
+
+  Widget _buildResultsArea({bool isVertical = false}) {
+    return ListenableBuilder(
+      listenable: _resultChanges,
+      builder: (context, _) {
+        final isLoading = _searchService.isLoadingNotifier.value;
+        final items = _searchService.resultsNotifier.value;
+        if (isLoading && items.isEmpty) {
+          if (isVertical) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          return const SliverFillRemaining(
+            hasScrollBody: false,
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final results = SliverMainAxisGroup(
+          slivers: [
+            if (isLoading)
+              const SliverToBoxAdapter(child: LinearProgressIndicator()),
+            _buildResults(items, isVertical: isVertical),
+          ],
+        );
+        return isVertical
+            ? CustomScrollView(
+                physics: const BouncingScrollPhysics(),
+                slivers: [
+                  results,
+                  const SliverToBoxAdapter(child: SizedBox(height: 40)),
+                ],
+              )
+            : results;
+      },
     );
   }
 
@@ -368,108 +356,98 @@ class _SearchPageState extends State<SearchPage> {
     final theme = Theme.of(context);
     final sidebarWidth = _isWindows ? 120.0 : 96.0;
 
-    return ValueListenableBuilder<List<String>>(
-      valueListenable: _searchService.sourceLabelsNotifier,
-      builder: (context, sources, _) {
-        return ValueListenableBuilder<int>(
-          valueListenable: _searchService.selectedSourceIndexNotifier,
-          builder: (context, selectedSource, _) {
-            return Container(
-              width: sidebarWidth,
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainerLow.withValues(
-                  alpha: 0.4,
-                ),
-                border: Border(
-                  right: BorderSide(
-                    color: theme.dividerColor.withValues(alpha: 0.08),
-                  ),
-                ),
+    return ListenableBuilder(
+      listenable: _sourceChanges,
+      builder: (context, _) {
+        final sources = _searchService.sourceLabelsNotifier.value;
+        final selectedSource = _searchService.selectedSourceIndexNotifier.value;
+        return Container(
+          width: sidebarWidth,
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerLow.withValues(alpha: 0.4),
+            border: Border(
+              right: BorderSide(
+                color: theme.dividerColor.withValues(alpha: 0.08),
               ),
-              child: ListView.builder(
-                physics: const BouncingScrollPhysics(),
-                padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-                itemCount: sources.length,
-                itemBuilder: (context, index) {
-                  final isSelected = selectedSource == index;
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 4),
-                    child: InkWell(
+            ),
+          ),
+          child: ListView.builder(
+            physics: const BouncingScrollPhysics(),
+            padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+            itemCount: sources.length,
+            itemBuilder: (context, index) {
+              final isSelected = selectedSource == index;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: () {
+                    if (_searchService.selectedSourceIndexNotifier.value ==
+                        index) {
+                      return;
+                    }
+                    _searchService.selectedSourceIndexNotifier.value = index;
+                    if (_searchService.keywordNotifier.value
+                        .trim()
+                        .isNotEmpty) {
+                      _search(_searchService.keywordNotifier.value);
+                    }
+                  },
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 7,
+                    ),
+                    decoration: BoxDecoration(
+                      color: isSelected
+                          ? theme.colorScheme.primaryContainer.withValues(
+                              alpha: 0.65,
+                            )
+                          : Colors.transparent,
                       borderRadius: BorderRadius.circular(8),
-                      onTap: () {
-                        if (_searchService.selectedSourceIndexNotifier.value ==
-                            index) {
-                          return;
-                        }
-                        _searchService.selectedSourceIndexNotifier.value =
-                            index;
-                        if (_searchService.keywordNotifier.value
-                            .trim()
-                            .isNotEmpty) {
-                          _search(_searchService.keywordNotifier.value);
-                        }
-                      },
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 180),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 7,
-                        ),
-                        decoration: BoxDecoration(
-                          color: isSelected
-                              ? theme.colorScheme.primaryContainer.withValues(
-                                  alpha: 0.65,
-                                )
-                              : Colors.transparent,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: isSelected
-                                ? theme.colorScheme.primary.withValues(
-                                    alpha: 0.35,
-                                  )
-                                : Colors.transparent,
-                            width: 1,
-                          ),
-                        ),
-                        child: Row(
-                          children: [
-                            AnimatedContainer(
-                              duration: const Duration(milliseconds: 180),
-                              width: 3,
-                              height: isSelected ? 14 : 0,
-                              margin: EdgeInsets.only(
-                                right: isSelected ? 5 : 0,
-                              ),
-                              decoration: BoxDecoration(
-                                color: theme.colorScheme.primary,
-                                borderRadius: BorderRadius.circular(1.5),
-                              ),
-                            ),
-                            Expanded(
-                              child: Text(
-                                sources[index],
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: isSelected
-                                      ? FontWeight.w600
-                                      : FontWeight.normal,
-                                  color: isSelected
-                                      ? theme.colorScheme.primary
-                                      : theme.textTheme.bodyMedium?.color,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
+                      border: Border.all(
+                        color: isSelected
+                            ? theme.colorScheme.primary.withValues(alpha: 0.35)
+                            : Colors.transparent,
+                        width: 1,
                       ),
                     ),
-                  );
-                },
-              ),
-            );
-          },
+                    child: Row(
+                      children: [
+                        AnimatedContainer(
+                          duration: const Duration(milliseconds: 180),
+                          width: 3,
+                          height: isSelected ? 14 : 0,
+                          margin: EdgeInsets.only(right: isSelected ? 5 : 0),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.primary,
+                            borderRadius: BorderRadius.circular(1.5),
+                          ),
+                        ),
+                        Expanded(
+                          child: Text(
+                            sources[index],
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: isSelected
+                                  ? FontWeight.w600
+                                  : FontWeight.normal,
+                              color: isSelected
+                                  ? theme.colorScheme.primary
+                                  : theme.textTheme.bodyMedium?.color,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
         );
       },
     );
@@ -481,55 +459,51 @@ class _SearchPageState extends State<SearchPage> {
       delegate: _PinnedHeaderDelegate(
         height: 56,
         backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-        child: ValueListenableBuilder<List<String>>(
-          valueListenable: _searchService.sourceLabelsNotifier,
-          builder: (context, sources, _) {
-            return ValueListenableBuilder<int>(
-              valueListenable: _searchService.selectedSourceIndexNotifier,
-              builder: (context, selectedSource, _) {
-                return ListView.builder(
-                  scrollDirection: Axis.horizontal,
-                  physics: const BouncingScrollPhysics(),
-                  padding: EdgeInsets.symmetric(
-                    horizontal: _isWindows ? 24 : 16,
-                  ),
-                  itemCount: sources.length + 2,
-                  itemBuilder: (context, index) {
-                    if (index < sources.length) {
-                      return Center(
-                        child: Padding(
-                          padding: const EdgeInsets.only(right: 8),
-                          child: ChoiceChip(
-                            label: Text(sources[index]),
-                            selected: selectedSource == index,
-                            showCheckmark: false,
-                            onSelected: (selected) {
-                              if (!selected) return;
-                              _searchService.selectedSourceIndexNotifier.value =
-                                  index;
-                              if (_searchService.keywordNotifier.value
-                                  .trim()
-                                  .isNotEmpty) {
-                                _search(_searchService.keywordNotifier.value);
-                              }
-                            },
-                          ),
-                        ),
-                      );
-                    }
-                    if (index == sources.length) {
-                      return IconButton(
-                        tooltip: '管理搜索源',
-                        icon: const Icon(Icons.settings_outlined, size: 19),
-                        onPressed: _openSourceManagement,
-                      );
-                    }
-                    return IconButton(
-                      tooltip: '切换为竖向源列表',
-                      icon: const Icon(Icons.view_sidebar_outlined, size: 19),
-                      onPressed: () => _searchService.isVerticalLayout = true,
-                    );
-                  },
+        child: ListenableBuilder(
+          listenable: _sourceChanges,
+          builder: (context, _) {
+            final sources = _searchService.sourceLabelsNotifier.value;
+            final selectedSource =
+                _searchService.selectedSourceIndexNotifier.value;
+            return ListView.builder(
+              scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
+              padding: EdgeInsets.symmetric(horizontal: _isWindows ? 24 : 16),
+              itemCount: sources.length + 2,
+              itemBuilder: (context, index) {
+                if (index < sources.length) {
+                  return Center(
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        label: Text(sources[index]),
+                        selected: selectedSource == index,
+                        showCheckmark: false,
+                        onSelected: (selected) {
+                          if (!selected) return;
+                          _searchService.selectedSourceIndexNotifier.value =
+                              index;
+                          if (_searchService.keywordNotifier.value
+                              .trim()
+                              .isNotEmpty) {
+                            _search(_searchService.keywordNotifier.value);
+                          }
+                        },
+                      ),
+                    ),
+                  );
+                }
+                if (index == sources.length) {
+                  return IconButton(
+                    tooltip: '管理搜索源',
+                    icon: const Icon(Icons.settings_outlined, size: 19),
+                    onPressed: _openSourceManagement,
+                  );
+                }
+                return IconButton(
+                  tooltip: '切换为竖向源列表',
+                  icon: const Icon(Icons.view_sidebar_outlined, size: 19),
+                  onPressed: () => _searchService.isVerticalLayout = true,
                 );
               },
             );
@@ -691,10 +665,12 @@ class _SearchPageState extends State<SearchPage> {
         '';
 
     try {
-      final playerData = await _searchService.buildPlayerData(item);
+      final playerData = await sourceRepository.buildPlaybackRequest(
+        SourceSearchResult.fromLegacy(item),
+      );
       if (!mounted) return;
       if (playerData != null) {
-        NavigationService.toPlayer(context, playerData, autoMatch: false);
+        NavigationService.toPlayback(context, playerData, autoMatch: false);
         return;
       }
 

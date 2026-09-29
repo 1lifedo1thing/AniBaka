@@ -1,0 +1,69 @@
+import 'package:baka/models/bgm.dart';
+import 'package:baka/models/playback_episode.dart';
+import 'package:baka/source/models/series.dart';
+
+/// A source result retains its Series. Only the legacy internal API needs a map.
+class SourceSearchResult {
+  const SourceSearchResult(
+    this.series, {
+    required this.source,
+    required this.displayName,
+    this.fallbackDescription = '',
+  }) : internalData = null;
+
+  SourceSearchResult.internal(this.internalData)
+    : series = null,
+      source = 'internal',
+      displayName = '站内',
+      fallbackDescription = '';
+
+  final Series? series;
+  final Map<String, dynamic>? internalData;
+  final String source, displayName, fallbackDescription;
+  String get title => series?.name ?? internalData!['title'] as String? ?? '';
+  String get id => series?.seriesId ?? '${internalData!['id']}';
+  String get key => '$source|$id';
+  String get description => series?.description ?? fallbackDescription;
+  String get cover =>
+      series?.image ?? resolveCoverImage(internalData ?? const {}) ?? '';
+  int? get episodeCount {
+    final data = internalData;
+    if (data == null) return null;
+    final count = PlaybackEpisodeCatalog.countFrom(data);
+    return count > 0 ? count : null;
+  }
+
+  Map<String, dynamic> toLegacyMap() =>
+      internalData ??
+      {
+        'title': title,
+        'seriesId': id,
+        'source': source,
+        'sourceDisplayName': displayName,
+        'tag': displayName,
+        'description': description,
+        'subtitle': description,
+        'image': cover,
+        'content': cover,
+        if (series?.bgmId != null) 'bgmId': series!.bgmId,
+        if (series?.score != null) 'score': series!.score,
+        if (cover.isNotEmpty) 'bgmImageUrl': cover,
+      };
+
+  /// Old search pages cross this boundary once when opening playback.
+  factory SourceSearchResult.fromLegacy(Map<String, dynamic> data) {
+    if (data['source'] == 'internal') return SourceSearchResult.internal(data);
+    return SourceSearchResult(
+      Series(
+        data['seriesId'] as String,
+        data['title'] as String? ?? '',
+        description: data['description'] as String?,
+        image: data['image'] as String?,
+        bgmId: data['bgmId'] as int?,
+        score: (data['score'] as num?)?.toDouble(),
+      ),
+      source: data['source'] as String,
+      displayName: data['sourceDisplayName'] as String? ?? '',
+    );
+  }
+}

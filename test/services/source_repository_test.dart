@@ -9,6 +9,7 @@ import 'package:baka/models/rule_hub.dart';
 import 'package:baka/services/source/rule_repository_service.dart';
 import 'package:baka/services/source/source_repository.dart';
 import 'package:baka/source/source_registry.dart';
+import 'package:baka/source/runtime/request_scheduler.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -43,71 +44,158 @@ void main() {
       await hiveDirectory.delete(recursive: true);
     });
 
-    test('rule hub uses the GitHub mirror by default', () async {
-      expect(
-        RuleRepositoryService.defaultSubscription,
-        RuleRepositoryService.mirrorSubscription,
-      );
-      expect(
-        RuleRepositoryService.resolveRuleUrl(
-          RuleRepositoryService.defaultSubscription,
-          'rules/example.json',
-        ),
-        '${RuleRepositoryService.githubMirrorPrefix}'
-        'https://raw.githubusercontent.com/AniBakaBaka/AniBakaRule/main/'
-        'rules/example.json',
-      );
+    test(
+      'LRU protects playing and running adapters until their owners release',
+      () async {
+        CustomSourceConfig config(int index) => CustomSourceConfig(
+          id: 'lru-$index',
+          name: 'LRU $index',
+          baseUrl: 'https://example.test',
+          pipeline: const {'search': [], 'detail': [], 'play': []},
+          createdAt: DateTime.utc(2026),
+          updatedAt: DateTime.utc(2026),
+        );
+        final owner = Object();
+        final running = Completer<void>();
+        addTearDown(() async {
+          if (!running.isCompleted) running.complete();
+          service.releasePlayback(owner);
+          for (var i = 0; i < 28; i++) {
+            await catalog.deleteCustomSource('lru-$i');
+          }
+        });
+        await catalog.addCustomSource(config(0));
+        await catalog.addCustomSource(config(1));
+        final playing = service.adapterFor(
+          AdapterRegistry.customSourceKey('lru-0'),
+        )!;
+        final busy = service.adapterFor(
+          AdapterRegistry.customSourceKey('lru-1'),
+        )!;
+        service.retainPlayback(owner, playing);
+        final work = busy.runOperation(() => running.future);
+        for (var i = 2; i < 28; i++) {
+          await catalog.addCustomSource(config(i));
+          service.adapterFor(AdapterRegistry.customSourceKey('lru-$i'));
+        }
+        expect(
+          service.adapterFor(AdapterRegistry.customSourceKey('lru-0')),
+          same(playing),
+        );
+        expect(
+          service.adapterFor(AdapterRegistry.customSourceKey('lru-1')),
+          same(busy),
+        );
+        await catalog.updateCustomSource(config(0).copyWith(name: 'Revised'));
+        expect(
+          service.adapterFor(AdapterRegistry.customSourceKey('lru-0')),
+          isNot(same(playing)),
+        );
+        await playing.runOperation(() async {});
+        service.releasePlayback(owner);
+        await expectLater(
+          playing.runOperation(() async {}),
+          throwsA(isA<RequestCancelledException>()),
+        );
+        running.complete();
+        await work;
+      },
+    );
 
+    test(
+      'typed search hands off a new playback request without changing the result',
+      () async {
+        final overrides = HttpOverrides.current;
+        HttpOverrides.global = null;
+        addTearDown(() => HttpOverrides.global = overrides);
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        final origin = 'http://127.0.0.1:${server.port}';
+        server.listen((request) async {
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(
+            jsonEncode(
+              request.uri.path == '/search'
+                  ? {
+                      'list': [
+                        {'id': 'one', 'name': 'Fixture'},
+                      ],
+                    }
+                  : {
+                      'episodes': [
+                        {'id': '$origin/video.mp4', 'name': 'Episode 1'},
+                      ],
+                    },
+            ),
+          );
+          await request.response.close();
+        });
+        addTearDown(() async {
+          await catalog.deleteCustomSource('typed-result');
+          await server.close(force: true);
+        });
+        await catalog.addCustomSource(
+          CustomSourceConfig(
+            id: 'typed-result',
+            name: 'Typed result',
+            baseUrl: origin,
+            pipeline: const {
+              'directConnection': true,
+              'search': [
+                {'op': 'fetch', 'url': '/search'},
+                {
+                  'op': 'jsonSeries',
+                  'listPath': 'list',
+                  'detailUrlTemplate': '/detail/{id}',
+                },
+              ],
+              'detail': [
+                {'op': 'follow'},
+                {
+                  'op': 'jsonEpisodes',
+                  'episodesPath': 'episodes',
+                  'episodeNameKey': 'name',
+                  'episodeIdTemplate': '{id:raw}',
+                  'sourceName': 'Line 1',
+                },
+              ],
+              'play': [],
+            },
+          ),
+        );
+        final result = (await service.search(
+          AdapterRegistry.customSourceKey('typed-result'),
+          'Fixture',
+          skipBgmEnhancement: true,
+        )).single;
+        final series = result.series;
+        final request = (await service.buildPlaybackRequest(result))!;
+        expect(result.series, same(series));
+        expect(result.id, '$origin/detail/one');
+        expect(result.internalData, isNull);
+        expect(result.title, 'Fixture');
+        expect(request.source, result.source);
+        expect(request.episodes.single.lines, ['$origin/video.mp4']);
+        expect(request.sourceNames, ['Line 1']);
+        expect(request.metadata.containsKey('videoList'), isFalse);
+        expect(result.toLegacyMap().containsKey('videoList'), isFalse);
+      },
+    );
+
+    test('rule hub subscriptions normalize legacy entries and persist', () async {
+      await Instances.sp.remove('rule_hub_subscriptions');
       await Instances.sp.setStringList('rule_hub_subscriptions', const [
         RuleRepositoryService.directSubscription,
       ]);
       expect(ruleRepository.subscriptions, const [
         RuleRepositoryService.mirrorSubscription,
       ]);
-      await Instances.sp.remove('rule_hub_subscriptions');
-    });
 
-    test('rule hub subscriptions can be added and removed', () async {
-      await Instances.sp.remove('rule_hub_subscriptions');
       const custom = 'https://example.test/rules/index.json';
 
       expect(await ruleRepository.addSubscription(custom), isTrue);
       expect(ruleRepository.subscriptions, contains(custom));
       expect(await ruleRepository.removeSubscription(custom), isTrue);
       expect(ruleRepository.subscriptions, isNot(contains(custom)));
-    });
-
-    test('custom adapter cache follows the current rule revision', () async {
-      final source = CustomSourceConfig(
-        id: 'cache-test',
-        name: 'Cache Test',
-        baseUrl: 'https://example.com',
-        pipeline: const {
-          'search': <Map<String, dynamic>>[],
-          'detail': <Map<String, dynamic>>[],
-          'play': <Map<String, dynamic>>[],
-        },
-        createdAt: DateTime.utc(2026),
-        updatedAt: DateTime.utc(2026),
-      );
-      expect(await catalog.addCustomSource(source), isTrue);
-
-      final first = service.adapterFor(
-        AdapterRegistry.customSourceKey(source.id),
-      );
-      expect(first, isNotNull);
-
-      final updated = source.copyWith(name: 'Updated Cache Test');
-      expect(await catalog.updateCustomSource(updated), isTrue);
-
-      final second = service.adapterFor(
-        AdapterRegistry.customSourceKey(source.id),
-      );
-      expect(second, isNotNull);
-      expect(second, isNot(same(first)));
-      expect(second!.name, 'Updated Cache Test');
-
-      expect(await catalog.deleteCustomSource(source.id), isTrue);
     });
 
     test('rule hub matches official entries by their stable key', () async {
@@ -184,15 +272,15 @@ void main() {
         );
         expect(
           sourceCatalog.builtinSourceById('akianime')?.baseUrl,
-          'https://www.moefun.cc/',
+          'https://www.akianime.cc/',
         );
         expect(
           sourceCatalog.builtinSourceById('akianime')?.iconUrl,
-          'https://www.moefun.cc/template/dsn2/static/img/ico.png',
+          'https://www.akianime.cc/template/dsn2/static/img/ico.png',
         );
         final updatedAdapter = service.adapterFor('akianime');
         expect(updatedAdapter, isNot(same(previousAdapter)));
-        expect(updatedAdapter?.baseUrl, 'https://www.moefun.cc/');
+        expect(updatedAdapter?.baseUrl, 'https://www.akianime.cc/');
         expect(
           ruleRepository.inspectItems(const [newer])[newer]!.status,
           InstallStatus.upToDate,

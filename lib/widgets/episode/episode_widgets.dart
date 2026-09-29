@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'package:baka/services/playback/playback_content.dart';
+import 'package:baka/services/playback/history_repository.dart';
 import 'package:baka/models/playback_episode.dart';
 import 'package:baka/utils/date_util.dart';
 import 'package:baka/utils/reg_utils.dart';
@@ -170,43 +170,46 @@ String? _episodeInfo(int count, String? delayInfo, String? updateTime) {
       : '$count | 更$formatted';
 }
 
-/// 桌面端选集网格。
+/// 宽屏选集网格，和简介共用滚动视口，只构建可见剧集。
 Widget buildWindowsEpisodeList({
   required BuildContext context,
   required List<PlaybackEpisode> videoList,
-  required List<int> visibleIndexes,
+  required bool ascending,
   required int currPlayIndex,
   required Function(int) onEpisodeChanged,
 }) {
-  return Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          const Text(
-            '选集列表',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-          ),
-          Text(
-            '${currPlayIndex + 1}/${videoList.length}',
-            style: const TextStyle(fontSize: 13),
-          ),
-        ],
+  return SliverMainAxisGroup(
+    slivers: [
+      SliverToBoxAdapter(
+        child: Column(
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  '选集列表',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  '${currPlayIndex + 1}/${videoList.length}',
+                  style: const TextStyle(fontSize: 13),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+          ],
+        ),
       ),
-      const SizedBox(height: 10),
-      GridView.builder(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
+      SliverGrid.builder(
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: 3,
           childAspectRatio: 2.4,
           crossAxisSpacing: 8,
           mainAxisSpacing: 8,
         ),
-        itemCount: visibleIndexes.length,
+        itemCount: videoList.length,
         itemBuilder: (context, i) {
-          final index = visibleIndexes[i];
+          final index = ascending ? i : videoList.length - 1 - i;
           return EpisodeItem(
             index: index,
             rawTitle: videoList[index].title,
@@ -223,7 +226,7 @@ Widget buildWindowsEpisodeList({
 Widget buildHorizontalEpisodeList({
   required BuildContext context,
   required List<PlaybackEpisode> videoList,
-  required List<int> filteredList,
+  required bool ascending,
   required int currPlayIndex,
   required String videoId,
   required Function(int) onEpisodeChanged,
@@ -232,17 +235,17 @@ Widget buildHorizontalEpisodeList({
     height: 52,
     child: ListView.separated(
       scrollDirection: Axis.horizontal,
-      itemCount: filteredList.length,
+      itemCount: videoList.length,
       separatorBuilder: (_, _) => const SizedBox(width: 10),
       itemBuilder: (context, i) {
-        final index = filteredList[i];
+        final index = ascending ? i : videoList.length - 1 - i;
         return SizedBox(
           width: 120,
           child: EpisodeItem(
             index: index,
             rawTitle: videoList[index].title,
             isSelected: index == currPlayIndex,
-            isWatched: PlaybackContent.isEpisodeWatched(videoId, index),
+            isWatched: HistoryRepository.isEpisodeWatched(videoId, index),
             onTap: () => onEpisodeChanged(index),
           ),
         );

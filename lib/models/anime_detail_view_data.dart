@@ -1,3 +1,5 @@
+import 'package:baka/models/bgm.dart';
+import 'package:baka/utils/json_values.dart';
 import 'package:baka/utils/bgm_utils.dart';
 
 class AnimeDetailViewData {
@@ -72,13 +74,13 @@ class AnimeDetailViewData {
     List<Map<String, dynamic>> characters = const [],
   }) {
     final titles = anibaka?['title'] as Map<String, dynamic>?;
-    final cnTitle = BgmUtils.trimmed(titles?['cn']);
-    final nativeTitle = BgmUtils.trimmed(titles?['native']);
-    final enTitle = BgmUtils.trimmed(titles?['en']);
+    final cnTitle = trimmed(titles?['cn']);
+    final nativeTitle = trimmed(titles?['native']);
+    final enTitle = trimmed(titles?['en']);
     final fallbackTitle =
-        BgmUtils.trimmed(bgm?['name_cn']) ??
-        BgmUtils.trimmed(bgm?['name']) ??
-        BgmUtils.trimmed(source['title']) ??
+        trimmed(bgm?['name_cn']) ??
+        trimmed(bgm?['name']) ??
+        trimmed(source['title']) ??
         '番剧详情';
     final title = cnTitle ?? nativeTitle ?? enTitle ?? fallbackTitle;
 
@@ -91,11 +93,13 @@ class AnimeDetailViewData {
     final backdrops = _imageUrls(images?['backdrops']);
     final logoUrl = resolveLogoUrl(anibaka);
     final cover =
-        BgmUtils.resolveCoverImage(source, bgmInfo: bgmInfo) ??
+        resolveCoverImage(source, bgmInfo: bgmInfo) ??
         (posters.isNotEmpty ? posters.first : '');
 
     final rawGenres = anibaka?['genres'];
-    final genres = rawGenres is List ? rawGenres.cast<String>() : const <String>[];
+    final genres = rawGenres is List
+        ? rawGenres.cast<String>()
+        : const <String>[];
 
     final rawTags = <String>[];
     rawTags.addAll(genres);
@@ -118,32 +122,23 @@ class AnimeDetailViewData {
     final anibakaRating = ratings?['bgm'] as Map<String, dynamic>?;
     final bgmRating = bgm?['rating'] as Map<String, dynamic>?;
     final score =
-        BgmUtils.toDouble(anibakaRating?['score']) ??
+        toDouble(anibakaRating?['score']) ??
         BgmUtils.extractScore(bgm?['rating']) ??
         bgmInfo.score;
     final scoreCount =
-        BgmUtils.toInt(anibakaRating?['total']) ??
-        BgmUtils.toInt(bgmRating?['total']) ??
-        0;
-    final rank =
-        BgmUtils.toInt(anibakaRating?['rank']) ??
-        BgmUtils.toInt(bgmRating?['rank']);
+        toInt(anibakaRating?['total']) ?? toInt(bgmRating?['total']) ?? 0;
+    final rank = toInt(anibakaRating?['rank']) ?? toInt(bgmRating?['rank']);
 
     final scoreCountMap = bgmRating?['count'] as Map?;
     final scoreDistribution = _parseScoreDistribution(scoreCountMap);
 
     final ids = anibaka?['ids'] as Map<String, dynamic>?;
-    final imdbId = BgmUtils.trimmed(ids?['imdb_id']);
-    final tmdbId = BgmUtils.trimmed(ids?['tmdb_id']);
-    final tvdbId = BgmUtils.trimmed(ids?['tvdb_id']);
+    final imdbId = trimmed(ids?['imdb_id']);
+    final tmdbId = trimmed(ids?['tmdb_id']);
+    final tvdbId = trimmed(ids?['tvdb_id']);
     final bgmId =
-        BgmUtils.toInt(ids?['bgm_id']) ??
-        BgmUtils.toInt(bgm?['id']) ??
-        BgmUtils.toInt(source['bgmId']);
-    final bgmTitle =
-        BgmUtils.trimmed(bgm?['name_cn']) ??
-        BgmUtils.trimmed(bgm?['name']) ??
-        title;
+        toInt(ids?['bgm_id']) ?? toInt(bgm?['id']) ?? toInt(source['bgmId']);
+    final bgmTitle = trimmed(bgm?['name_cn']) ?? trimmed(bgm?['name']) ?? title;
     final collection = bgm?['collection'] as Map<String, dynamic>?;
 
     return AnimeDetailViewData(
@@ -151,9 +146,9 @@ class AnimeDetailViewData {
       bgmTitle: bgmTitle,
       alias: alias,
       summary:
-          BgmUtils.trimmed(anibaka?['overview']) ??
-          BgmUtils.trimmed(bgm?['summary']) ??
-          BgmUtils.trimmed(source['content']) ??
+          trimmed(anibaka?['overview']) ??
+          trimmed(bgm?['summary']) ??
+          trimmed(source['content']) ??
           '暂无简介',
       coverUrl: cover,
       backgroundUrl: backdrops.isNotEmpty ? backdrops.first : cover,
@@ -168,21 +163,41 @@ class AnimeDetailViewData {
       rank: rank,
       backdrops: backdrops,
       posters: posters,
-      status: BgmUtils.trimmed(anibaka?['status']) ?? '',
-      airDate:
-          BgmUtils.trimmed(bgm?['date']) ?? BgmUtils.trimmed(anibaka?['date']),
+      status: trimmed(anibaka?['status']) ?? '',
+      airDate: trimmed(bgm?['date']) ?? trimmed(anibaka?['date']),
       episodeCount:
-          BgmUtils.toInt(anibaka?['episodes']) ??
-          BgmUtils.toInt(bgm?['total_episodes']) ??
-          BgmUtils.toInt(bgm?['eps']),
-      collectCount: BgmUtils.toInt(collection?['collect']) ?? 0,
-      doingCount: BgmUtils.toInt(collection?['doing']) ?? 0,
-      wishCount: BgmUtils.toInt(collection?['wish']) ?? 0,
+          toInt(anibaka?['episodes']) ??
+          toInt(bgm?['total_episodes']) ??
+          toInt(bgm?['eps']),
+      collectCount: toInt(collection?['collect']) ?? 0,
+      doingCount: toInt(collection?['doing']) ?? 0,
+      wishCount: toInt(collection?['wish']) ?? 0,
       imdbId: imdbId,
       tmdbId: tmdbId,
       tvdbId: tvdbId,
       bgmId: bgmId,
     );
+  }
+
+  /// Picks the backdrop supplied by AniBaka's TMDB image source.
+  ///
+  /// Prefer a Chinese backdrop when the API provides multiple TMDB variants.
+  static String? pickTmdbBackdrop(Map<String, dynamic>? detail) {
+    final images = detail?['images'];
+    if (images is! Map) return null;
+    final candidates = images['backdrops'];
+    if (candidates is! List) return null;
+    Map<String, dynamic>? fallback;
+
+    for (final candidate in candidates.cast<Map<String, dynamic>>()) {
+      if (trimmed(candidate['source'])?.toLowerCase() != 'tmdb') continue;
+      fallback ??= candidate;
+      if (trimmed(candidate['lang'])?.toLowerCase() == 'zh') {
+        return trimmed(candidate['url']) ?? trimmed(candidate['thumbnail']);
+      }
+    }
+
+    return trimmed(fallback?['url']) ?? trimmed(fallback?['thumbnail']);
   }
 
   static List<int> _parseScoreDistribution(Map? countMap) {
@@ -191,7 +206,7 @@ class AnimeDetailViewData {
     }
     return List<int>.generate(10, (i) {
       final key = '${i + 1}';
-      return BgmUtils.toInt(countMap[key]) ?? 0;
+      return toInt(countMap[key]) ?? 0;
     }, growable: false);
   }
 
@@ -199,15 +214,13 @@ class AnimeDetailViewData {
   /// 顶层的 `logoUrl` / `logo`（播放数据里由 [resolveLogoUrl] 回填）。
   static String resolveLogoUrl(Map<String, dynamic>? detail) {
     if (detail == null) return '';
-    final rawLogos = BgmUtils.asMap(detail['images'])?['logos'];
+    final rawLogos = asMap(detail['images'])?['logos'];
     if (rawLogos is List && rawLogos.isNotEmpty) {
       String? zhLogo;
       String? firstLogo;
       for (final item in rawLogos) {
         if (item is! Map) continue;
-        final url =
-            BgmUtils.trimmed(item['url']) ??
-            BgmUtils.trimmed(item['thumbnail']);
+        final url = trimmed(item['url']) ?? trimmed(item['thumbnail']);
         if (url == null) continue;
         firstLogo ??= url;
         final lang = item['lang']?.toString().toLowerCase();
@@ -220,9 +233,7 @@ class AnimeDetailViewData {
       if (chosen != null && chosen.isNotEmpty) return chosen;
     }
 
-    return BgmUtils.trimmed(detail['logoUrl']) ??
-        BgmUtils.trimmed(detail['logo']) ??
-        '';
+    return trimmed(detail['logoUrl']) ?? trimmed(detail['logo']) ?? '';
   }
 
   /// AniBaka 的 `posters / backdrops` 是 `{url, thumbnail, source, lang?}` 数组。
@@ -232,8 +243,7 @@ class AnimeDetailViewData {
     final seen = <String>{};
     for (final item in value) {
       if (item is! Map) continue;
-      final url =
-          BgmUtils.trimmed(item['url']) ?? BgmUtils.trimmed(item['thumbnail']);
+      final url = trimmed(item['url']) ?? trimmed(item['thumbnail']);
       if (url != null && seen.add(url)) urls.add(url);
     }
     return urls;
@@ -249,7 +259,7 @@ class AnimeDetailViewData {
     final keys = <String>{};
 
     void add(String key, dynamic value) {
-      final text = BgmUtils.trimmed(value);
+      final text = trimmed(value);
       if (text != null && keys.add(key)) {
         result.add({'key': key, 'value': text});
       }
@@ -257,20 +267,22 @@ class AnimeDetailViewData {
 
     add('状态', anibaka?['status']);
     add('播出日期', anibaka?['date']);
-    final episodeCount = BgmUtils.toInt(anibaka?['episodes']);
+    final episodeCount = toInt(anibaka?['episodes']);
     if (episodeCount != null && episodeCount > 0) add('集数', '$episodeCount 话');
     final ratings = anibaka?['ratings'] as Map<String, dynamic>?;
     final rating = ratings?['bgm'] as Map<String, dynamic>?;
-    final rank = BgmUtils.toInt(rating?['rank']);
+    final rank = toInt(rating?['rank']);
     if (rank != null && rank > 0) add('排名', '#$rank');
-    if (englishTitle != null && englishTitle.isNotEmpty && englishTitle != title) {
+    if (englishTitle != null &&
+        englishTitle.isNotEmpty &&
+        englishTitle != title) {
       add('英文名', englishTitle);
     }
 
     if (bgm?['infobox'] is List) {
       for (final item in bgm!['infobox']) {
         if (item is Map<String, dynamic>) {
-          final key = BgmUtils.trimmed(item['key']);
+          final key = trimmed(item['key']);
           if (key != null && keys.add(key)) {
             result.add(item);
           }

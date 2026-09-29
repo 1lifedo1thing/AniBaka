@@ -1,5 +1,9 @@
+import 'package:baka/source/runtime/source_operation.dart';
+import 'package:baka/source/runtime/request_scheduler.dart';
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
@@ -21,6 +25,28 @@ abstract class AdapterBase {
 
   String get baseUrl;
 
+  final SourceOperation _lifetime = SourceOperation();
+  bool _disposed = false;
+  int _activeOperations = 0;
+  bool get hasActiveOperations => _activeOperations > 0;
+  VoidCallback? onIdle;
+  Future<T> runOperation<T>(
+    Future<T> Function() action, {
+    SourceOperation? operation,
+  }) async {
+    if (_disposed) throw const RequestCancelledException();
+    final scope = SourceOperation(parent: operation ?? SourceOperation.current);
+    final detach = _lifetime.token.onCancel(scope.cancel);
+    _activeOperations++;
+    try {
+      return await scope.run(action);
+    } finally {
+      detach();
+      scope.close();
+      if (--_activeOperations == 0) onIdle?.call();
+    }
+  }
+
   Dio? _dio;
   AdapterBase(this.name);
 
@@ -28,7 +54,11 @@ abstract class AdapterBase {
   /// must use the same direct network exit.
   bool get useSystemProxy => true;
 
-  Dio get dio => _dio ??= createDio();
+  Dio get dio {
+    if (_disposed) throw const RequestCancelledException();
+    SourceOperation.check();
+    return _dio ??= createDio();
+  }
 
   Dio createDio({Map<String, String>? extraHeaders}) {
     final dio = Dio(
@@ -63,6 +93,9 @@ abstract class AdapterBase {
 
   /// Releases source-scoped background work when its owning service closes.
   void dispose() {
+    _disposed = true;
+    _lifetime.cancel();
+    _cache.removeWhere((key, _) => identical(key.$1, this));
     _dio?.close(force: true);
     _dio = null;
   }
@@ -74,7 +107,8 @@ abstract class AdapterBase {
 
   static const Duration _cacheTtl = Duration(minutes: 10);
   static const int _cacheLimit = 128;
-  static final Map<String, ({String url, int expiresAt})> _cache = {};
+  static final Map<(AdapterBase, String), ({String url, int expiresAt})>
+  _cache = {};
 
   /// 可达性探测结果缓存（含负缓存），避免同一死链在匹配/换线时反复拖超时。
   static const Duration _reachCacheTtl = Duration(minutes: 3);
@@ -99,8 +133,28 @@ abstract class AdapterBase {
     bool skipValidation = false,
     int maxAttempts = 2,
     Duration? reachTimeout,
+    SourceOperation? operation,
+  }) => runOperation(
+    () => _resolveDownloadUrl(
+      episodeId,
+      forceRefresh: forceRefresh,
+      skipValidation: skipValidation,
+      maxAttempts: maxAttempts,
+      reachTimeout: reachTimeout,
+    ),
+    operation: operation,
+  );
+
+  Future<String> _resolveDownloadUrl(
+    String episodeId, {
+    bool forceRefresh = false,
+    bool skipValidation = false,
+    int maxAttempts = 2,
+    Duration? reachTimeout,
   }) async {
-    final key = '$name|$episodeId';
+    if (_disposed) throw const RequestCancelledException();
+    SourceOperation.check();
+    final key = (this, episodeId);
     if (!forceRefresh) {
       final cached = _cache[key];
       if (cached != null) {
@@ -134,6 +188,8 @@ abstract class AdapterBase {
       }
     }
 
+    SourceOperation.check();
+    if (_disposed) throw const RequestCancelledException();
     if (_cache.length >= _cacheLimit) _cache.remove(_cache.keys.first);
     _cache[key] = (
       url: url,
@@ -143,10 +199,16 @@ abstract class AdapterBase {
     return url;
   }
 
+  void invalidateDownloadUrl(String episodeId) =>
+      _cache.remove((this, episodeId));
+
   /// 探测媒体 URL 是否真正可拉取（自动匹配认领前必须通过）。
-  Future<bool> isPlaybackUrlReachable(String url, {Duration? timeout}) async =>
-      await probeMediaReachability(url, timeout: timeout) !=
-      MediaReachabilityVerdict.rejected;
+  Future<bool> isPlaybackUrlReachable(String url, {Duration? timeout}) =>
+      runOperation(
+        () async =>
+            await probeMediaReachability(url, timeout: timeout) !=
+            MediaReachabilityVerdict.rejected,
+      );
 
   /// 探测结论版的可达性检查，供需要区分「被拒」与「未知」的调用方使用。
   @protected
@@ -221,9 +283,13 @@ abstract class AdapterBase {
     final attempts = maxAttempts < 1 ? 1 : maxAttempts;
     Object? lastError;
     for (var attempt = 0; attempt < attempts; attempt++) {
+      SourceOperation.check();
       try {
         return await getDownloadUrl(episodeId);
+      } on RequestCancelledException {
+        rethrow;
       } catch (e) {
+        SourceOperation.check();
         lastError = e;
       }
     }
@@ -292,9 +358,13 @@ abstract class AdapterBase {
     Duration timeout, {
     required Map<String, String> headers,
     String method = 'GET',
-    ResponseType responseType = ResponseType.stream,
+    bool readPlaylist = false,
   }) {
+    SourceOperation.check();
     final cancelToken = CancelToken();
+    final detach = SourceOperation.current?.token.onCancel(
+      () => cancelToken.cancel('source cancelled'),
+    );
     return _probeDio
         .request(
           url,
@@ -302,19 +372,65 @@ abstract class AdapterBase {
           options: Options(
             method: method,
             headers: headers,
-            responseType: responseType,
+            responseType: ResponseType.stream,
             receiveTimeout: timeout,
             sendTimeout: timeout,
           ),
         )
         .then((response) async {
           if (response.data case final ResponseBody body) {
-            await body.stream.listen(null, onError: (Object _) {}).cancel();
+            if (readPlaylist &&
+                (response.statusCode == 200 || response.statusCode == 206)) {
+              response.data = await _readPlaylistPrefix(body, cancelToken);
+            } else {
+              await body.stream.listen(null, onError: (Object _) {}).cancel();
+              if (readPlaylist) response.data = (text: '', truncated: false);
+            }
           }
           return response;
         })
         .timeout(timeout)
-        .whenComplete(() => cancelToken.cancel('media probe complete'));
+        .whenComplete(() {
+          detach?.call();
+          cancelToken.cancel('media probe complete');
+        });
+  }
+
+  static Future<({String text, bool truncated})> _readPlaylistPrefix(
+    ResponseBody body,
+    CancelToken cancelToken,
+  ) async {
+    const limit = 2048;
+    final bytes = BytesBuilder(copy: false);
+    var text = '';
+    await for (final chunk in body.stream) {
+      final remaining = limit - bytes.length;
+      bytes.add(
+        chunk.length <= remaining
+            ? chunk
+            : Uint8List.sublistView(chunk, 0, remaining),
+      );
+      text = utf8.decode(bytes.toBytes(), allowMalformed: true);
+      if (_playlistLooksAlive(200, text) || _playlistLooksRejected(text)) {
+        cancelToken.cancel('playlist prefix complete');
+        return (text: text, truncated: false);
+      }
+      if (bytes.length == limit) {
+        cancelToken.cancel('playlist prefix limit');
+        return (text: text, truncated: true);
+      }
+    }
+    return (text: text, truncated: false);
+  }
+
+  static bool _playlistLooksRejected(String text) {
+    final value = text.trimLeft();
+    final upper = (value.length > 128 ? value.substring(0, 128) : value)
+        .toUpperCase();
+    return upper.startsWith('<!DOCTYPE') ||
+        upper.contains('<HTML') ||
+        upper.startsWith('{') ||
+        upper.startsWith('[');
   }
 
   Future<MediaReachabilityVerdict> _probeDirectUrl(
@@ -349,11 +465,16 @@ abstract class AdapterBase {
             'Range': 'bytes=0-2047',
             'Accept': 'application/vnd.apple.mpegurl,application/x-mpegURL,*/*',
           },
-          responseType: ResponseType.plain,
+          readPlaylist: true,
         );
-        if (_playlistLooksAlive(resp.statusCode, resp.data?.toString())) {
+        final prefix = resp.data as ({String text, bool truncated});
+        if (_playlistLooksAlive(resp.statusCode, prefix.text)) {
           return MediaReachabilityVerdict.reachable;
         }
+        if (_playlistLooksRejected(prefix.text)) {
+          return MediaReachabilityVerdict.rejected;
+        }
+        if (prefix.truncated) return MediaReachabilityVerdict.unknown;
         // 临时媒体上的播放列表同样可能尚未生成或本次未放行：保留待播放器验证。
         if (VideoUrlExtractor.isOnDemandMediaPath(url) &&
             _shouldKeepEphemeralOnReject(
@@ -409,6 +530,7 @@ abstract class AdapterBase {
       }
       return MediaReachabilityVerdict.unknown;
     } catch (_) {
+      SourceOperation.check();
       // A timeout or transport failure does not establish a dead URL.
       return MediaReachabilityVerdict.unknown;
     }
@@ -419,15 +541,10 @@ abstract class AdapterBase {
     if (code != 200 && code != 206) return false;
     final text = body?.trimLeft() ?? '';
     if (text.isEmpty) return false;
+    if (_playlistLooksRejected(text)) return false;
     final head = text.length > 128 ? text.substring(0, 128) : text;
     final upper = head.toUpperCase();
     if (upper.contains('#EXT')) return true;
-    if (upper.startsWith('<!DOCTYPE') ||
-        upper.startsWith('<HTML') ||
-        upper.startsWith('{') ||
-        upper.contains('<HTML')) {
-      return false;
-    }
     return text.contains('#EXT');
   }
 

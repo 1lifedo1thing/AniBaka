@@ -2,75 +2,75 @@ import 'package:baka/models/playback_request.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:baka/utils/format_utils.dart';
 import 'package:flutter/material.dart';
-import 'package:get/get.dart' hide ContextExtensionss;
 
 import 'package:baka/models/download_task.dart';
 import 'package:baka/pages/player/player_page.dart';
 import 'package:baka/services/download/download_manager.dart';
 
-class DownloadManagerController extends GetxController {
-  final service = downloads;
-  final revision = 0.obs;
+class DownloadManagerPage extends StatefulWidget {
+  final bool embedded;
 
-  late final VoidCallback _listener;
-
-  @override
-  void onInit() {
-    super.onInit();
-    service.init();
-    _listener = () => revision.value++;
-    service.tasksListenable.addListener(_listener);
-  }
-
-  @override
-  void onClose() {
-    service.tasksListenable.removeListener(_listener);
-    super.onClose();
-  }
-
-  ({List<DownloadTask> active, Map<String, List<DownloadTask>> completed})
-  buildView() {
-    final active = <DownloadTask>[];
-    final grouped = <String, List<DownloadTask>>{};
-    for (final task in service.tasks.reversed) {
-      if (task.status != DownloadStatus.completed) {
-        active.add(task);
-      } else {
-        (grouped[task.title] ??= <DownloadTask>[]).add(task);
-      }
-    }
-    return (active: active, completed: grouped);
-  }
-
-  void pauseAll() => service.pauseAll();
-  void resumeAll() => service.resumeAll();
-  void clearCompleted() => service.clearCompleted();
-}
-
-class DownloadManagerPage extends StatelessWidget {
-  const DownloadManagerPage({super.key});
+  const DownloadManagerPage({super.key, this.embedded = false});
 
   static void show(BuildContext context) {
-    downloads.init();
     Navigator.of(
       context,
     ).push(MaterialPageRoute(builder: (_) => const DownloadManagerPage()));
   }
 
   @override
+  State<DownloadManagerPage> createState() => _DownloadManagerPageState();
+}
+
+class _DownloadManagerPageState extends State<DownloadManagerPage> {
+  final _service = downloads;
+  List<DownloadTask> _active = [];
+  List<MapEntry<String, List<DownloadTask>>> _completed = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _readTasks();
+    _service.tasksListenable.addListener(_onTasksChanged);
+    _service.init();
+  }
+
+  @override
+  void dispose() {
+    _service.tasksListenable.removeListener(_onTasksChanged);
+    super.dispose();
+  }
+
+  void _onTasksChanged() => setState(_readTasks);
+
+  void _readTasks() {
+    final active = <DownloadTask>[];
+    final grouped = <String, List<DownloadTask>>{};
+    for (final task in _service.tasks.reversed) {
+      if (task.status != DownloadStatus.completed) {
+        active.add(task);
+      } else {
+        (grouped[task.title] ??= <DownloadTask>[]).add(task);
+      }
+    }
+    _active = active;
+    _completed = grouped.entries.toList(growable: false);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final c = Get.put(DownloadManagerController());
     final theme = Theme.of(context);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('缓存'),
+        automaticallyImplyLeading: !widget.embedded,
+        title: Text(widget.embedded ? '下载管理' : '缓存'),
         actions: [
           PopupMenuButton<String>(
             onSelected: (val) {
-              if (val == 'pause_all') c.pauseAll();
-              if (val == 'resume_all') c.resumeAll();
-              if (val == 'clear_completed') c.clearCompleted();
+              if (val == 'pause_all') _service.pauseAll();
+              if (val == 'resume_all') _service.resumeAll();
+              if (val == 'clear_completed') _service.clearCompleted();
             },
             itemBuilder: (context) => const [
               PopupMenuItem(value: 'pause_all', child: Text('全部暂停')),
@@ -80,54 +80,71 @@ class DownloadManagerPage extends StatelessWidget {
           ),
         ],
       ),
-      body: Obx(() {
-        c.revision.value;
-        final view = c.buildView();
-        final active = view.active;
-        final groups = view.completed.entries;
-
-        if (c.service.tasks.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.download_done_rounded,
-                  size: 48,
-                  color: theme.disabledColor,
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  '暂时没有任何下载',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
+      body: _active.isEmpty && _completed.isEmpty
+          ? Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.download_done_rounded,
+                    size: 48,
+                    color: theme.disabledColor,
                   ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        return ListView(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
-          children: [
-            if (active.isNotEmpty) ...[
-              _sectionTitle(theme, '下载中 · ${active.length}'),
-              for (final task in active)
-                _TaskCard(key: ValueKey(task.id), task: task),
-            ],
-            if (groups.isNotEmpty) ...[
-              _sectionTitle(theme, '已完成 · ${groups.length}'),
-              for (final group in groups)
-                _AnimeGroupCard(
+                  const SizedBox(height: 12),
+                  Text(
+                    '暂时没有任何下载',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            )
+          : ListView.builder(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
+              itemCount:
+                  _active.length +
+                  _completed.length +
+                  (_active.isEmpty ? 0 : 1) +
+                  (_completed.isEmpty ? 0 : 1),
+              findChildIndexCallback: (key) {
+                if (key is! ValueKey<String>) return null;
+                final activeIndex = _active.indexWhere(
+                  (task) => task.id == key.value,
+                );
+                if (activeIndex >= 0) return activeIndex + 1;
+                final groupIndex = _completed.indexWhere(
+                  (group) => 'group_${group.key}' == key.value,
+                );
+                return groupIndex < 0
+                    ? null
+                    : (_active.isEmpty ? 0 : _active.length + 1) +
+                          groupIndex +
+                          1;
+              },
+              itemBuilder: (context, index) {
+                if (_active.isNotEmpty) {
+                  if (index == 0) {
+                    return _sectionTitle(theme, '下载中 · ${_active.length}');
+                  }
+                  index--;
+                  if (index < _active.length) {
+                    final task = _active[index];
+                    return _TaskCard(key: ValueKey(task.id), task: task);
+                  }
+                  index -= _active.length;
+                }
+                if (index == 0) {
+                  return _sectionTitle(theme, '已完成 · ${_completed.length}');
+                }
+                final group = _completed[index - 1];
+                return _AnimeGroupCard(
                   key: ValueKey('group_${group.key}'),
                   title: group.key,
                   tasks: group.value,
-                ),
-            ],
-          ],
-        );
-      }),
+                );
+              },
+            ),
     );
   }
 
@@ -449,39 +466,61 @@ class _AnimeGroupCard extends StatelessWidget {
   }
 }
 
-class _AnimeGroupPage extends StatelessWidget {
+class _AnimeGroupPage extends StatefulWidget {
   final String title;
 
   const _AnimeGroupPage({required this.title});
 
   @override
+  State<_AnimeGroupPage> createState() => _AnimeGroupPageState();
+}
+
+class _AnimeGroupPageState extends State<_AnimeGroupPage> {
+  final _service = downloads;
+  List<DownloadTask> _tasks = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _readTasks();
+    _service.tasksListenable.addListener(_onTasksChanged);
+  }
+
+  @override
+  void dispose() {
+    _service.tasksListenable.removeListener(_onTasksChanged);
+    super.dispose();
+  }
+
+  void _readTasks() {
+    _tasks = [
+      for (final task in _service.tasks.reversed)
+        if (task.title == widget.title) task,
+    ];
+  }
+
+  void _onTasksChanged() => setState(_readTasks);
+
+  @override
   Widget build(BuildContext context) {
-    final c = Get.find<DownloadManagerController>();
-
-    return Scaffold(
-      appBar: AppBar(title: Text(title)),
-      body: Obx(() {
-        c.revision.value;
-        final groupTasks = c.service.tasks.reversed
-            .where((t) => t.title == title)
-            .toList();
-
-        if (groupTasks.isEmpty) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (Navigator.of(context).canPop()) {
-              Navigator.of(context).pop();
-            }
-          });
-          return const SizedBox.shrink();
+    if (_tasks.isEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted &&
+            ModalRoute.of(context)?.isCurrent == true &&
+            _tasks.isEmpty &&
+            Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
         }
-
-        return ListView.builder(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-          itemCount: groupTasks.length,
-          itemBuilder: (context, i) =>
-              _TaskCard(key: ValueKey(groupTasks[i].id), task: groupTasks[i]),
-        );
-      }),
+      });
+    }
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.title)),
+      body: ListView.builder(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+        itemCount: _tasks.length,
+        itemBuilder: (context, i) =>
+            _TaskCard(key: ValueKey(_tasks[i].id), task: _tasks[i]),
+      ),
     );
   }
 }

@@ -69,6 +69,52 @@ void main() {
       configureTestServices();
     });
     test(
+      'session owns selection and metadata without mutating the handoff',
+      () async {
+        final legacy = <String, dynamic>{
+          'source': '_local',
+          'title': 'One',
+          'videoList': ['First\$first.mp4', 'Second\$second.mp4'],
+          'currPlayIndex': 0,
+          'currUrl': 1,
+        };
+        final handoff = PlaybackRequest.fromMap(legacy);
+        final content = PlaybackContent(
+          request: handoff,
+          sources: sourceRepository,
+          collections: collections,
+          history: historyRepository,
+        );
+        addTearDown(content.dispose);
+        content.applySelection((episodeIndex: 1, lineIndex: 1));
+        expect(content.videoList, same(handoff.episodes));
+        expect(content.currPlayIndex, 1);
+        expect(handoff.episodeIndex, 0);
+        expect(legacy['currPlayIndex'], 0);
+        expect(content.data.containsKey('videoList'), isFalse);
+        expect(content.data.containsKey('currPlayIndex'), isFalse);
+        expect(
+          () => content.data['title'] = 'mutation',
+          throwsUnsupportedError,
+        );
+        final projection = content.buildLegacyData()..['title'] = 'view only';
+        expect(projection['currPlayIndex'], 1);
+        expect(content.title, 'One');
+        content.adoptPlaybackRequest(
+          PlaybackRequest(
+            source: '_local',
+            metadata: const {'title': 'Two'},
+            episodes: const [
+              PlaybackEpisode(title: 'New', lines: ['new.mp4']),
+            ],
+          ),
+        );
+        expect(content.localFilePath, 'new.mp4');
+        expect(content.title, 'Two');
+        expect(content.request.prefetched, isNull);
+      },
+    );
+    test(
       'local serialized catalog keeps every episode after loading',
       () async {
         final content = PlaybackContent(
@@ -115,11 +161,16 @@ void main() {
         );
         addTearDown(content.dispose);
         expect((await content.fetchDanmakuData(0)).single.text, 'explicit');
-        data['localFilePath'] = 'https://example.test/episode.mp4';
+        content.adoptPlaybackRequest(
+          PlaybackRequest.fromMap({
+            ...data,
+            'localFilePath': 'https://example.test/episode.mp4',
+          }),
+        );
         expect((await content.fetchDanmakuData(0)).single.text, 'explicit');
         await explicit.delete();
         expect(await content.fetchDanmakuData(0), isEmpty);
-        data['localFilePath'] = video;
+        content.adoptPlaybackRequest(PlaybackRequest.fromMap(data));
         expect((await content.fetchDanmakuData(0)).single.text, 'sidecar');
         await sidecar.delete();
         expect(await content.fetchDanmakuData(0), isEmpty);
@@ -128,12 +179,14 @@ void main() {
     test(
       'prefetched media is reused and invalidated by selection and source',
       () async {
-        final data = <String, dynamic>{'source': 'fixture', 'title': 'Example'};
+        final request = PlaybackRequest(
+          source: 'fixture',
+          metadata: {'title': 'Example'},
+        );
         final episodes = [
           const PlaybackEpisode(title: 'Episode', lines: ['first', 'second']),
         ];
-        PlaybackContent.storePrefetchedPlaybackMedia(
-          data,
+        request.storePrefetched(
           episodeIndex: 0,
           lineIndex: 1,
           episodeId: 'first',
@@ -144,7 +197,7 @@ void main() {
           sources: sourceRepository,
           collections: collections,
           history: historyRepository,
-          request: PlaybackRequest.fromMap(data),
+          request: request,
         );
         service.syncVideoData(episodes);
         final adapter = _KeepAliveAdapter();
@@ -155,17 +208,18 @@ void main() {
         expect(media.url, 'https://fixture.test/prefetched.mp4');
         expect(media.httpHeaders['Referer'], 'https://fixture.test');
         service.applySelection((episodeIndex: 0, lineIndex: 2));
-        expect(data.containsKey('_prefetchedPlayback'), isFalse);
-        PlaybackContent.storePrefetchedPlaybackMedia(
-          data,
+        expect(service.request.prefetched, isNull);
+        request.storePrefetched(
           episodeIndex: 0,
           lineIndex: 2,
           episodeId: 'second',
           url: 'https://fixture.test/prefetched.mp4',
           httpHeaders: const {},
         );
-        service.adoptPlaybackData({'source': 'another', 'videoList': episodes});
-        expect(data.containsKey('_prefetchedPlayback'), isFalse);
+        service.adoptPlaybackRequest(
+          PlaybackRequest(source: 'another', episodes: episodes),
+        );
+        expect(service.request.prefetched, isNull);
       },
     );
 
@@ -224,34 +278,69 @@ void main() {
       expect(service.currentEpisodeId, 'c');
     });
 
-    test('episodeAt parses only the requested episode', () {
+    test('legacy catalog parses line selection and skips blank entries', () {
       final data = <String, dynamic>{
         'videos': 'ep1\$a1\$a2\nep2\$first\$second\$third\n\nep3\$c1',
       };
 
       expect(PlaybackEpisodeCatalog.countFrom(data), 3);
 
-      final episode = PlaybackEpisodeCatalog.episodeAt(data, 1);
-      expect(episode, isNotNull);
-      expect(episode!.title, 'ep2');
+      final episodes = PlaybackEpisodeCatalog.episodesOf(data);
+      expect(episodes, hasLength(3));
+      final episode = episodes[1];
+      expect(episode.title, 'ep2');
       expect(episode.lineCount, 3);
       expect(episode.lineAt(1), 'first');
       expect(episode.lineAt(2), 'second');
       expect(episode.lineAt(3), 'third');
       expect(episode.lineAt(4), isNull);
-
-      expect(PlaybackEpisodeCatalog.episodeAt(data, 3), isNull);
     });
 
-    test('episodeAt skips blank videoList entries like rawEpisodesOf', () {
-      final data = <String, dynamic>{
-        'videoList': ['', 'ep1\$a', '   ', 'ep2\$b'],
-      };
+    test(
+      'typed episode selection reuses objects and mixed lists skip blanks',
+      () {
+        const first = PlaybackEpisode(title: 'First', lines: ['a', 'b']);
+        const second = PlaybackEpisode(title: 'Second', lines: ['c']);
+        final data = {
+          'videoList': [first, second],
+        };
+        expect(
+          PlaybackEpisodeCatalog.episodesOf(data),
+          same(data['videoList']),
+        );
+        final mixed = {
+          'videoList': <Object>[' ', first, 7, 'Second\$c'],
+        };
+        final parsed = PlaybackEpisodeCatalog.episodesOf(mixed);
+        expect(parsed, hasLength(2));
+        expect(parsed[0], same(first));
+        expect(parsed[1].lines, ['c']);
+        final merged = PlaybackEpisodeCatalog.parse([
+          '1 Same\$a',
+          '2 Same\$b',
+          '3 Same\$c',
+        ], mergeDuplicateTitles: true);
+        expect(merged.single.title, '1 Same');
+        expect(merged.single.lines, ['a', 'b', 'c']);
+      },
+    );
 
-      expect(PlaybackEpisodeCatalog.countFrom(data), 2);
-      expect(PlaybackEpisodeCatalog.rawEpisodesOf(data), ['ep1\$a', 'ep2\$b']);
-      expect(PlaybackEpisodeCatalog.episodeAt(data, 1)?.title, 'ep2');
-    });
+    test(
+      'blank legacy lists fall back to videos; typed lists stay authoritative',
+      () {
+        final data = <String, dynamic>{
+          'videoList': ['', 'ep1\$a', '   ', 'ep2\$b'],
+        };
+
+        expect(PlaybackEpisodeCatalog.countFrom(data), 2);
+        expect(PlaybackEpisodeCatalog.episodesOf(data).last.title, 'ep2');
+        data['videoList'] = [' ', 7];
+        data['videos'] = 'ep3\$c';
+        expect(PlaybackEpisodeCatalog.episodesOf(data).single.title, 'ep3');
+        data['videoList'] = <PlaybackEpisode>[];
+        expect(PlaybackEpisodeCatalog.episodesOf(data), isEmpty);
+      },
+    );
 
     test('playback keep-alive follows the active media lifecycle', () async {
       final service = PlaybackContent(

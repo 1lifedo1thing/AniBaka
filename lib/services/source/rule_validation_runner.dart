@@ -14,21 +14,32 @@ class RuleValidationRunner {
     : _mediaClient =
           mediaClient ??
           (Dio(
-            BaseOptions(
-              connectTimeout: const Duration(seconds: 8),
-              receiveTimeout: const Duration(seconds: 12),
-              sendTimeout: const Duration(seconds: 8),
-              followRedirects: true,
-              maxRedirects: 4,
-              validateStatus: (_) => true,
-            ),
-          )..httpClientAdapter = IOHttpClientAdapter(
-            createHttpClient: SystemProxyService.createHttpClient,
-          ));
+              BaseOptions(
+                connectTimeout: const Duration(seconds: 8),
+                receiveTimeout: const Duration(seconds: 12),
+                sendTimeout: const Duration(seconds: 8),
+                followRedirects: true,
+                maxRedirects: 4,
+                validateStatus: (_) => true,
+              ),
+            )
+            ..httpClientAdapter = IOHttpClientAdapter(
+              createHttpClient: SystemProxyService.createHttpClient,
+            ));
 
   final Dio _mediaClient;
 
-  void dispose() => _mediaClient.close(force: true);
+  bool _disposed = false;
+  final Set<PipelineSourceAdapter> _activeAdapters = {};
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    for (final adapter in _activeAdapters) {
+      adapter.dispose();
+    }
+    _activeAdapters.clear();
+    _mediaClient.close(force: true);
+  }
 
   Future<RuleValidationReport> validate(
     CustomSourceConfig config, {
@@ -36,7 +47,8 @@ class RuleValidationRunner {
     String? preferredSeriesId,
     String? preferredEpisodeId,
   }) async {
-    if (config.pipeline == null) {
+    if (_disposed) throw StateError('RuleValidationRunner is disposed');
+    if (!config.hasPipeline) {
       return const RuleValidationReport(
         success: false,
         stage: 'static',
@@ -46,7 +58,7 @@ class RuleValidationRunner {
 
     late final PipelineSourceAdapter adapter;
     try {
-      final rule = config.toSourceRule();
+      final rule = config.rule;
       final staticValidation = RuleValidator.validate(rule);
       if (!staticValidation.isValid) {
         return RuleValidationReport(
@@ -56,6 +68,7 @@ class RuleValidationRunner {
         );
       }
       adapter = PipelineSourceAdapter(rule);
+      _activeAdapters.add(adapter);
     } catch (error) {
       return RuleValidationReport(
         success: false,
@@ -164,6 +177,7 @@ class RuleValidationRunner {
         episodeCount: episodeCount,
       );
     } finally {
+      _activeAdapters.remove(adapter);
       adapter.dispose();
     }
   }
@@ -268,4 +282,3 @@ class RuleValidationRunner {
     return 'play/media';
   }
 }
-

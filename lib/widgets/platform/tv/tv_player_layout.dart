@@ -1,3 +1,4 @@
+import 'package:baka/utils/json_values.dart';
 import 'package:baka/widgets/platform/tv/tv_theme_util.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -5,10 +6,9 @@ import 'package:flutter/services.dart';
 import 'package:baka/models/playback_state.dart';
 import 'package:baka/models/playback_episode.dart';
 import 'package:baka/instance.dart';
-import 'package:baka/utils/app_logger.dart';
+import 'package:baka/core/app_logger.dart';
 import 'package:baka/widgets/baka_player/index.dart';
 import 'package:baka/services/playback/danmaku_controller.dart';
-import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/widgets/platform/tv/tv_focusable.dart';
 import 'package:baka/widgets/platform/tv/tv_episode_selector.dart';
 import 'package:baka/widgets/platform/tv/tv_settings_panel.dart';
@@ -308,10 +308,8 @@ class _TvPlayerLayoutState extends State<TvPlayerLayout> {
         currentIndex: widget.currPlayIndex,
         currUrl: widget.currUrl,
         sourceNames: widget.sourceNames,
-        bgmId:
-            BgmUtils.toInt(widget.data['bgmId']) ??
-            BgmUtils.toInt(widget.data['id']),
-        tmdbId: BgmUtils.toInt(widget.data['tmdbId']),
+        bgmId: toInt(widget.data['bgmId']) ?? toInt(widget.data['id']),
+        tmdbId: toInt(widget.data['tmdbId']),
         tvdbId: widget.data['tvdbId']?.toString(),
         onEpisodeSelected: (index) {
           widget.onEpisodeChanged(index);
