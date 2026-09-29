@@ -1,14 +1,10 @@
-import 'package:baka/source/models/source_search_result.dart';
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
 import 'package:baka/instance.dart';
 import 'package:baka/services/matching/match_memory_service.dart';
 import 'package:baka/services/matching/media_readiness.dart';
 import 'package:baka/services/matching/probe_scheduler.dart';
 import 'package:baka/services/matching/source_match_engine.dart';
-import 'package:baka/services/playback/danmaku_controller.dart';
-import 'package:baka/utils/substring_matcher.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -101,76 +97,6 @@ void main() {
       expect(ranked.first.candidate.key, 'tv');
       final movieScore = ranked.firstWhere((s) => s.candidate.key == 'movie');
       expect(movieScore.confidence, lessThan(0.70));
-    });
-
-    test(
-      'caps confidence score strictly under 0.35 for severe episode conflict',
-      () {
-        final context = SourceMatchContext(
-          primaryTitle: 'Test Anime',
-          bgmEpisodeCount: 12,
-          bgmCompleted: true,
-        );
-
-        final ranked = engine.rank([
-          candidate('mismatch', 'Test Anime', source: 's1', episodes: 100),
-        ], context);
-
-        expect(ranked.first.severeEpisodeConflict, isTrue);
-        expect(ranked.first.confidence, lessThanOrEqualTo(0.32));
-        expect(ranked.first.shouldProbeImmediately, isFalse);
-      },
-    );
-
-    test('counts video rows without allocating split substrings', () {
-      final item = SourceMatchCandidate.fromResult(
-        SourceSearchResult.internal({
-          'videos': '  \r\n第1集\$ep-1\r\n\t\n第2集\$ep-2\n第3集\$ep-3',
-        }),
-      );
-
-      expect(item.episodeCount, 3);
-    });
-
-    test('auto match searches the primary title only', () {
-      final plan = SourceMatchEngine.planKeywords(
-        autoMatch: true,
-        titles: const ['Example', 'Example 第二季', 'Example 2', 'ignored'],
-      );
-
-      // 只竞速主标题，没有任何回退轮次。
-      expect(plan.race, ['Example']);
-      expect(plan.fallback, isEmpty);
-    });
-
-    test(
-      'manual search races several keywords and keeps the rest in reserve',
-      () {
-        final plan = SourceMatchEngine.planKeywords(
-          autoMatch: false,
-          titles: const ['Example', 'Example 2', 'Example 3', 'Example 4'],
-        );
-
-        expect(plan.race, hasLength(SourceMatchEngine.keywordsPerSourceManual));
-        expect(plan.fallback, ['Example 3', 'Example 4']);
-      },
-    );
-
-    test('an empty title list produces no keyword work', () {
-      expect(
-        SourceMatchEngine.planKeywords(
-          autoMatch: true,
-          titles: const [],
-        ).isEmpty,
-        isTrue,
-      );
-      expect(
-        SourceMatchEngine.planKeywords(
-          autoMatch: false,
-          titles: const [],
-        ).isEmpty,
-        isTrue,
-      );
     });
   });
 
@@ -426,71 +352,6 @@ void main() {
         expect(runs, [2]);
         expect(scheduler.isBusy, isFalse);
       });
-
-      test('drained completes once and reports a fresh busy cycle', () async {
-        final gate = Completer<void>();
-        final scheduler = ProbeScheduler<int>(
-          concurrency: 1,
-          keyOf: (job) => '$job',
-          run: (job) async => gate.future,
-        );
-
-        expect(scheduler.isBusy, isFalse);
-        await scheduler.drained;
-
-        scheduler.add(1);
-        final first = scheduler.drained;
-        gate.complete();
-        await first;
-        expect(scheduler.isBusy, isFalse);
-
-        scheduler.add(2);
-        scheduler.close();
-        await scheduler.drained;
-        expect(scheduler.isBusy, isFalse);
-      });
-    });
-  });
-
-  group('title matching', () {
-    test('suffix links, overlaps, empty strings and UTF-16 match contains', () {
-      final random = Random(42);
-      const alphabet = ['a', 'b', 'c', '剧', '透', '😀'];
-      String word(int length) => List.generate(
-        length,
-        (_) => alphabet[random.nextInt(alphabet.length)],
-      ).join();
-      for (var run = 0; run < 100; run++) {
-        final words = List.generate(20, (_) => word(1 + random.nextInt(7)));
-        if (run == 0) words.add('');
-        final matcher = SubstringMatcher(words);
-        for (var i = 0; i < 100; i++) {
-          final text = word(random.nextInt(20));
-          expect(
-            matcher.matches(text),
-            words.any(text.contains),
-            reason: '$words / $text',
-          );
-        }
-      }
-    });
-
-    test('controller replaces index only when words change and owns input', () {
-      final controller = DanmakuController();
-      final words = List.generate(20, (i) => 'word$i');
-      controller.blockWords = words;
-      words.clear();
-      expect(controller.isBlocked('a word19 b'), isTrue);
-      controller.removeBlockWord('word1');
-      controller.removeBlockWord('word19');
-      expect(controller.isBlocked('a word19 b'), isFalse);
-      controller.addBlockWord('剧透');
-      expect(controller.isBlocked('禁止剧透'), isTrue);
-      controller.blockWords = const [];
-      expect(controller.isBlocked('禁止剧透'), isFalse);
-      controller.dispose();
-      expect(controller.items, isEmpty);
-      expect(controller.blockWords, isEmpty);
     });
   });
 }

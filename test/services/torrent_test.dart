@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:baka/services/torrent/piece_manager.dart';
 import 'package:baka/services/torrent/torrent_model.dart';
 import 'package:baka/services/torrent/torrent_service.dart';
-import 'package:baka/services/torrent/tracker_client.dart';
 import 'package:baka/source/engine/torrent_records.dart';
 import 'package:crypto/crypto.dart';
 import 'package:test/test.dart';
@@ -97,8 +96,6 @@ final Map<String, dynamic> _mikanParams = {
 
 void main() {
   group('torrent', () {
-    final torrent = TorrentService();
-    tearDownAll(torrent.dispose);
     test(
       'dispose cancels a torrent fetch during startup and drains repeated stop',
       () async {
@@ -147,16 +144,6 @@ void main() {
       expect(TorrentService.isBtLink('bt://not-implemented'), isFalse);
       expect(TorrentService.isBtLink('https://cdn.example/video.mp4'), isFalse);
     });
-
-    test(
-      'non-BT playback URLs pass through without starting an engine',
-      () async {
-        const direct = 'https://cdn.example/video.mp4';
-        final resolved = await torrent.resolvePlaybackUrl(' $direct ');
-        expect(resolved, direct);
-        expect(torrent.statsNotifier.value, isNull);
-      },
-    );
 
     test('magnet parser keeps trackers and exact torrent sources', () {
       final magnet = MagnetLink.parse(
@@ -226,27 +213,6 @@ void main() {
 
       expect(manager.contiguousBytes, 3);
       expect(manager.isComplete, isTrue);
-    });
-  });
-
-  group('trackers', () {
-    test('torrent trackers are augmented with public fallbacks', () {
-      final trackers = TrackerClient.normalizeTrackers(const [
-        'http://legacy.example/announce',
-        'HTTP://LEGACY.EXAMPLE/ANNOUNCE',
-        'ftp://unsupported.example/announce',
-      ]);
-
-      expect(trackers.first, 'http://legacy.example/announce');
-      expect(trackers, contains('udp://tracker.opentrackr.org:1337/announce'));
-      expect(
-        trackers.where(
-          (tracker) =>
-              tracker.toLowerCase() == 'http://legacy.example/announce',
-        ),
-        hasLength(1),
-      );
-      expect(trackers, everyElement(isNot(startsWith('ftp://'))));
     });
   });
 

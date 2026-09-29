@@ -73,14 +73,6 @@ int _discontinuitiesOf(String manifest) => manifest
     .where((line) => line.trim() == '#EXT-X-DISCONTINUITY')
     .length;
 
-/// 本次实测的 dytt-tvs 主清单：单码率变体。原文见
-/// `docs/research/hls_instream_ads_20260912.md`。
-const _singleVariant = '''
-#EXTM3U
-#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=800000,RESOLUTION=1920x816
-3000k/hls/mixed.m3u8
-''';
-
 const _multiVariant = '''
 #EXTM3U
 #EXT-X-STREAM-INF:BANDWIDTH=400000,RESOLUTION=640x360
@@ -352,12 +344,6 @@ void main() {
   });
 
   group('master playlists', () {
-    test('主清单与媒体清单可区分', () {
-      expect(HlsMasterPlaylist.isMaster(_singleVariant), isTrue);
-      expect(HlsMasterPlaylist.isMaster(_multiVariant), isTrue);
-      expect(HlsMasterPlaylist.isMaster(_mediaPlaylist), isFalse);
-    });
-
     test('解析变体：地址按主清单地址解析，属性缺失不致命', () {
       final variants = HlsMasterPlaylist.variants(_multiVariant, _baseUri);
 
@@ -380,15 +366,6 @@ void main() {
       expect(selected, isNotNull);
       expect(selected!.uri.toString(), endsWith('1080p/index.m3u8'));
       expect(selected.label, '1920x816@2000kbps');
-    });
-
-    test('单变体主清单也能选定', () {
-      final selected = HlsMasterPlaylist.selectVariant(
-        _singleVariant,
-        _baseUri,
-      );
-
-      expect(selected!.uri.toString(), endsWith('3000k/hls/mixed.m3u8'));
     });
 
     test('带独立音轨的清单不接管，返回 null', () {

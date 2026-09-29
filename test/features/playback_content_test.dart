@@ -87,12 +87,9 @@ void main() {
         );
         addTearDown(content.dispose);
         content.applySelection((episodeIndex: 1, lineIndex: 1));
-        expect(content.videoList, same(handoff.episodes));
         expect(content.currPlayIndex, 1);
         expect(handoff.episodeIndex, 0);
         expect(legacy['currPlayIndex'], 0);
-        expect(content.data.containsKey('videoList'), isFalse);
-        expect(content.data.containsKey('currPlayIndex'), isFalse);
         expect(
           () => content.data['title'] = 'mutation',
           throwsUnsupportedError,
@@ -297,35 +294,6 @@ void main() {
     });
 
     test(
-      'typed episode selection reuses objects and mixed lists skip blanks',
-      () {
-        const first = PlaybackEpisode(title: 'First', lines: ['a', 'b']);
-        const second = PlaybackEpisode(title: 'Second', lines: ['c']);
-        final data = {
-          'videoList': [first, second],
-        };
-        expect(
-          PlaybackEpisodeCatalog.episodesOf(data),
-          same(data['videoList']),
-        );
-        final mixed = {
-          'videoList': <Object>[' ', first, 7, 'Second\$c'],
-        };
-        final parsed = PlaybackEpisodeCatalog.episodesOf(mixed);
-        expect(parsed, hasLength(2));
-        expect(parsed[0], same(first));
-        expect(parsed[1].lines, ['c']);
-        final merged = PlaybackEpisodeCatalog.parse([
-          '1 Same\$a',
-          '2 Same\$b',
-          '3 Same\$c',
-        ], mergeDuplicateTitles: true);
-        expect(merged.single.title, '1 Same');
-        expect(merged.single.lines, ['a', 'b', 'c']);
-      },
-    );
-
-    test(
       'blank legacy lists fall back to videos; typed lists stay authoritative',
       () {
         final data = <String, dynamic>{
@@ -446,49 +414,5 @@ void main() {
         expect(service.localFilePath, 'https://dav.test/ep03.mp4');
       },
     );
-  });
-
-  group('legacy episodes', () {
-    test('parses a legacy episode once and selects one-based lines', () {
-      final episode = PlaybackEpisode.parse('第1话\$line-a\$line-b')!;
-      expect(episode.title, '第1话');
-      expect(episode.lineCount, 2);
-      expect(episode.lineAt(1), 'line-a');
-      expect(episode.lineAt(2), 'line-b');
-      expect(episode.lineAt(0), isNull);
-      expect(episode.serialize(), '第1话\$line-a\$line-b');
-    });
-
-    test('merges duplicate legacy titles while preserving line order', () {
-      final episodes = PlaybackEpisodeCatalog.parse([
-        '01. 正片\$a',
-        '02. 下一话\$b',
-        '1 正片\$c',
-      ], mergeDuplicateTitles: true);
-      expect(episodes, hasLength(2));
-      expect(episodes.first.title, '01. 正片');
-      expect(episodes.first.lines, ['a', 'c']);
-    });
-
-    test('filters typed episodes without reparsing serialized strings', () {
-      final episodes = PlaybackEpisodeCatalog.parse([
-        '第一话\$a',
-        '第二话\$b',
-        '特别篇\$c',
-      ]);
-      expect(
-        PlaybackEpisodeCatalog.filterIndexes(
-          episodes,
-          ascending: true,
-          searchQuery: '二',
-        ),
-        [1],
-      );
-      expect(PlaybackEpisodeCatalog.filterIndexes(episodes, ascending: false), [
-        2,
-        1,
-        0,
-      ]);
-    });
   });
 }

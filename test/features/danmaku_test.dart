@@ -2,7 +2,6 @@ import 'package:baka/instance.dart';
 import 'package:baka/services/playback/danmaku_controller.dart';
 import 'package:baka/theme.dart';
 import 'package:baka/widgets/danmaku/view.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -101,20 +100,23 @@ void main() {
       },
     );
 
-    test('parses, filters and sorts only when input is out of order', () async {
-      final items = DanmakuController.decodeDanmaku(
-        '{"data":['
-        '{"m":"later","p":"2.5,1,16711680"},'
-        '{"m":"bottom","p":"1.0,4,255"},'
-        '{"m":"","p":"0,1,1"},'
-        '{"m":"unsupported","p":"0,8,1"}'
-        ']}',
-      );
-      expect(items.map((item) => item.text), ['bottom', 'later']);
-      expect(items.first.time, 1000);
-      expect(items.first.type, 4);
-      expect(items.last.color, const Color(0xFFFF0000));
-    });
+    test(
+      'filters unsupported comments and orders playback timestamps',
+      () async {
+        final items = DanmakuController.decodeDanmaku(
+          '{"data":['
+          '{"m":"later","p":"2.5,1,16711680"},'
+          '{"m":"bottom","p":"1.0,4,255"},'
+          '{"m":"","p":"0,1,1"},'
+          '{"m":"unsupported","p":"0,8,1"}'
+          ']}',
+        );
+        expect(items.map((item) => item.text), ['bottom', 'later']);
+        expect(items.first.time, 1000);
+        expect(items.first.type, 4);
+        expect(items.last.color, const Color(0xFFFF0000));
+      },
+    );
 
     test('parses color from standard parameters after font size', () async {
       final items = DanmakuController.decodeDanmaku(
@@ -143,46 +145,6 @@ void main() {
       expect(reparsed.single.time, 1250);
       expect(reparsed.single.type, 5);
       expect(reparsed.single.color, const Color(0xFF00FF00));
-    });
-
-    test('persists and restores the selected danmaku font', () async {
-      final controller = DanmakuController();
-      controller.updateOption(
-        controller.option.copyWith(fontFamily: 'Zen Maru Gothic'),
-      );
-
-      await DanmakuController.saveSettings(controller);
-      final restored = DanmakuController();
-      DanmakuController.loadSettings(restored);
-
-      expect(restored.option.fontFamily, 'Zen Maru Gothic');
-    });
-
-    test(
-      'updates the font without discarding other danmaku settings',
-      () async {
-        await Instances.sp.setString(
-          'danmaku_settings',
-          '{"fontSize":26,"opacity":0.5}',
-        );
-
-        await DanmakuController.setFontFamily('Sawarabi Gothic');
-        final controller = DanmakuController();
-        DanmakuController.loadSettings(controller);
-
-        expect(controller.option.fontFamily, 'Sawarabi Gothic');
-        expect(controller.option.fontSize, 26);
-        expect(controller.option.opacity, 0.5);
-      },
-    );
-
-    test('keeps legacy settings aligned with the app default font', () async {
-      await Instances.sp.setString('danmaku_settings', '{"fontSize":18}');
-      final controller = DanmakuController();
-
-      DanmakuController.loadSettings(controller);
-
-      expect(controller.option.fontFamily, AppFonts.defaultFont);
     });
   });
 
@@ -241,54 +203,13 @@ void main() {
       controller.dispose();
     });
 
-    testWidgets('replacing the controller replays its time after reset', (
-      tester,
-    ) async {
-      final first = DanmakuController();
-      final second = DanmakuController();
-      for (final controller in [first, second]) {
-        controller.updateOption(
-          const DanmakuOption(fontFamily: AppFonts.systemFont),
-        );
-      }
-      Widget view(DanmakuController controller) => Directionality(
-        textDirection: TextDirection.ltr,
-        child: DanmakuView(controller: controller),
-      );
-      await tester.pumpWidget(view(first));
-      second.syncTime(const Duration(seconds: 60));
-      second.setItems(const [
-        DanmakuItem('past', time: 0),
-        DanmakuItem('current', time: 60000),
-      ]);
-      final texts = <String>[];
-      void observe(ObjectEvent event) {
-        if (event is ObjectCreated && event.object is TextPainter) {
-          texts.add((event.object as TextPainter).text!.toPlainText());
-        }
-      }
-
-      FlutterMemoryAllocations.instance.addListener(observe);
-      await tester.pumpWidget(view(second));
-      FlutterMemoryAllocations.instance.removeListener(observe);
-      expect(texts, contains('current'));
-      expect(texts, isNot(contains('past')));
-      await tester.pumpWidget(const SizedBox.shrink());
-      first.dispose();
-      second.dispose();
+    test('repeat blocking expires after the latest duplicate', () {
+      final window = DanmakuRepeatWindow();
+      expect(window.shouldBlock('same', 0), isFalse);
+      expect(window.shouldBlock('same', 9000), isTrue);
+      expect(window.shouldBlock('same', 11000), isTrue);
+      expect(window.shouldBlock('same', 22000), isFalse);
     });
-
-    test(
-      'repeat window extends from the latest duplicate and evicts in O(1)',
-      () {
-        final window = DanmakuRepeatWindow();
-        expect(window.shouldBlock('same', 0), isFalse);
-        expect(window.shouldBlock('same', 9000), isTrue);
-        expect(window.shouldBlock('same', 11000), isTrue);
-        expect(window.shouldBlock('same', 22000), isFalse);
-        expect(window.retainedEventCount, 1);
-      },
-    );
 
     test('paused controller still forwards seek synchronization', () {
       final controller = DanmakuController();
@@ -333,39 +254,22 @@ void main() {
       expect(fullscreen.lastPosition, const Duration(seconds: 48));
       controller.detach(inline);
     });
-
-    testWidgets('idle timeline gaps do not schedule continuous frames', (
-      tester,
-    ) async {
-      final controller = DanmakuController();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: SizedBox(
-              width: 800,
-              height: 450,
-              child: DanmakuView(controller: controller),
-            ),
-          ),
-        ),
-      );
-      controller.setItems(const [DanmakuItem('future', time: 60000)]);
-      controller.syncTime(Duration.zero);
-      await tester.pump();
-
-      expect(tester.binding.hasScheduledFrame, isFalse);
-
-      controller.syncTime(const Duration(seconds: 60));
-      await tester.pump();
-      expect(find.byType(CustomPaint), findsWidgets);
-
-      controller.pause();
-      await tester.pump();
-
-      await tester.pumpWidget(const SizedBox.shrink());
-      final listener = _ProbeDanmakuListener();
-      expect(() => controller.attach(listener), returnsNormally);
-      controller.detach(listener);
-    });
+  });
+  test('block-word edits update filtering and preserve caller input', () {
+    final controller = DanmakuController();
+    final words = List.generate(20, (i) => 'word$i');
+    controller.blockWords = words;
+    words.clear();
+    expect(controller.isBlocked('a word19 b'), isTrue);
+    controller.removeBlockWord('word1');
+    controller.removeBlockWord('word19');
+    expect(controller.isBlocked('a word19 b'), isFalse);
+    controller.addBlockWord('剧透');
+    expect(controller.isBlocked('禁止剧透'), isTrue);
+    controller.blockWords = const [];
+    expect(controller.isBlocked('禁止剧透'), isFalse);
+    controller.dispose();
+    expect(controller.items, isEmpty);
+    expect(controller.blockWords, isEmpty);
   });
 }

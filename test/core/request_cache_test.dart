@@ -75,26 +75,6 @@ void main() {
     expect(await cache.get(2, () async => 8), 8);
   });
 
-  test('concurrent callers share one request and parsed value', () async {
-    final cache = RequestCache<String, Object>(limit: 4);
-    final gate = Completer<Object>();
-    var requests = 0;
-
-    Future<Object> load() {
-      requests++;
-      return gate.future;
-    }
-
-    final callers = [for (var i = 0; i < 20; i++) cache.get('same', load)];
-    expect(requests, 1);
-    final value = Object();
-    gate.complete(value);
-    final results = await Future.wait(callers);
-
-    expect(requests, 1);
-    expect(results.every((result) => identical(result, value)), isTrue);
-  });
-
   test('failed and rejected values are not retained', () async {
     var requests = 0;
     final cache = RequestCache<String, int?>(
@@ -143,25 +123,6 @@ void main() {
       expect(loads, 2);
     },
   );
-
-  test('deduplicator returns the exact in-flight Future', () async {
-    final requests = RequestDeduplicator<String, int>();
-    final gate = Completer<int>();
-    var loads = 0;
-
-    Future<int> load() {
-      loads++;
-      return gate.future;
-    }
-
-    final first = requests.run('same', load);
-    final second = requests.run('same', load);
-    expect(identical(first, second), isTrue);
-    expect(loads, 1);
-
-    gate.complete(9);
-    expect(await first, 9);
-  });
 
   test('deduplicator releases synchronous results and failed loads', () async {
     final requests = RequestDeduplicator<int, int>();

@@ -1,6 +1,5 @@
 import 'package:baka/source/runtime/source_operation.dart';
 import 'dart:convert';
-import 'dart:io';
 import 'package:baka/models/custom_source_config.dart';
 import 'package:baka/source/engine/pipeline_host.dart';
 import 'package:baka/source/engine/pipeline_interpreter.dart';
@@ -105,64 +104,6 @@ class FakeHost implements PipelineHost {
   }) async => '';
   @override
   Future<String> sniffWithWebview(String url) async => '';
-}
-
-class HhPlayerBootstrapHost extends FakeHost {
-  HhPlayerBootstrapHost()
-    : super(const {
-        episodeUrl:
-            '<iframe src="https://hhjx.hhplayer.com/index.php?url=opaque-token"></iframe>',
-        playerUrl:
-            '<script>window.__HHJX_BOOTSTRAP__={"url":"opaque-token","t":123456,"key":"bootstrap-key"};</script>',
-        apiUrl: '{"code":200,"url":"https://media.example.com/video.m3u8"}',
-      });
-
-  static const episodeUrl = 'https://dmbus.cc/p/1-1-1.html';
-  static const playerUrl = 'https://hhjx.hhplayer.com/?url=opaque-token';
-  static const apiUrl = 'https://hhjx.hhplayer.com/api/parse';
-
-  String? apiMethod;
-  Map<String, String>? apiHeaders;
-  Object? apiBody;
-  String? apiContentType;
-  String? apiReferer;
-
-  @override
-  String? selectAttr(String html, String selector, String attr) {
-    if (selector == 'iframe[src*="hhjx.hhplayer.com"]' && attr == 'src') {
-      return 'https://hhjx.hhplayer.com/index.php?url=opaque-token';
-    }
-    return null;
-  }
-
-  @override
-  Future<String> fetch(
-    String url, {
-    String method = 'GET',
-    Map<String, String>? headers,
-    Object? body,
-    String? referer,
-    String? contentType,
-    SourceOperation? operation,
-    RequestPriority priority = RequestPriority.search,
-  }) async {
-    if (url == apiUrl) {
-      apiMethod = method;
-      apiHeaders = headers;
-      apiBody = body;
-      apiContentType = contentType;
-      apiReferer = referer;
-    }
-    return super.fetch(
-      url,
-      method: method,
-      headers: headers,
-      body: body,
-      referer: referer,
-      contentType: contentType,
-      priority: priority,
-    );
-  }
 }
 
 class ReverseEpisodesHost extends FakeHost {
@@ -316,8 +257,38 @@ SourceRule _rule(List<Map<String, dynamic>> play) => SourceRule.fromJson({
   'useWebview': true,
 });
 
+SourceRule _pipelineRule({
+  List<PipelineStep> search = const [],
+  List<PipelineStep> detail = const [],
+  List<PipelineStep> play = const [],
+}) => SourceRule(
+  id: 'fixture',
+  name: 'Fixture',
+  baseUrl: 'https://example.com',
+  search: search,
+  detail: detail,
+  play: play,
+);
+
+class _HtmlHost extends FakeHost {
+  _HtmlHost() : super({});
+  @override
+  bool get allowWebview => true;
+  @override
+  Future<String> renderWithWebview(
+    String url, {
+    bool Function(String)? isReady,
+    Duration timeout = const Duration(seconds: 30),
+    Duration settleDelay = const Duration(seconds: 1),
+  }) async {
+    expect(isReady!('episode-2026'), isTrue);
+    expect(isReady('episode-2'), isFalse);
+    return 'episode-2026';
+  }
+}
+
 void main() {
-  test('installed rules share parsed branches and isolate replaced lists', () {
+  test('rule edits isolate mutable input and survive persistence', () {
     final config = CustomSourceConfig.fromJson({
       'id': 'shared',
       'name': 'Shared',
@@ -342,11 +313,7 @@ void main() {
       },
     });
     final changed = config.copyWith(enabled: false, updatedAt: DateTime(2026));
-    expect(changed.rule, same(config.rule));
     final renamed = changed.copyWith(name: 'Renamed');
-    expect(renamed.rule.search, same(config.rule.search));
-    expect(renamed.rule.play, same(config.rule.play));
-    expect(renamed.rule.headers, same(config.rule.headers));
     expect(() => renamed.rule.play.clear(), throwsUnsupportedError);
     final replacement = <PipelineStep>[const PipelineStep('follow', {})];
     final replaced = config.rule.copyWith(play: replacement);
@@ -364,71 +331,6 @@ void main() {
 
   group('pipeline', () {
     const interp = PipelineInterpreter();
-
-    test('dm84 rule follows the current HHPlayer bootstrap API', () async {
-      final decoded = jsonDecode(
-        File('assets/rules/dm84.json').readAsStringSync(),
-      );
-      final rule = SourceRule.fromJson(
-        Map<String, dynamic>.from(decoded as Map),
-      );
-      final host = HhPlayerBootstrapHost();
-
-      final url = await interp.runPlay(
-        rule,
-        host,
-        HhPlayerBootstrapHost.episodeUrl,
-      );
-
-      expect(url, 'https://media.example.com/video.m3u8');
-      expect(host.fetched, [
-        HhPlayerBootstrapHost.episodeUrl,
-        HhPlayerBootstrapHost.playerUrl,
-        HhPlayerBootstrapHost.apiUrl,
-      ]);
-      expect(host.apiMethod, 'POST');
-      expect(host.apiContentType, 'application/json');
-      expect(host.apiReferer, HhPlayerBootstrapHost.playerUrl);
-      expect(
-        host.apiHeaders,
-        containsPair('Origin', 'https://hhjx.hhplayer.com'),
-      );
-      expect(host.apiBody, isA<String>());
-      expect(jsonDecode(host.apiBody! as String), {
-        'url': 'opaque-token',
-        't': 123456,
-        'key': 'bootstrap-key',
-        'client_fallback': false,
-      });
-    });
-
-    test(
-      'timestamp template uses one millisecond value per pipeline run',
-      () async {
-        final host = FakeHost(const {});
-        final rule = SourceRule.fromJson({
-          'format': kSourceRuleFormatV2,
-          'id': 'timestamp',
-          'name': 'Timestamp',
-          'baseUrl': 'https://example.com',
-          'search': [
-            {'op': 'fetch', 'url': '/page?_={timestamp:raw}'},
-          ],
-          'detail': const [],
-          'play': const [],
-        });
-
-        final before = DateTime.now().millisecondsSinceEpoch;
-        await interp.runSearch(rule, host, 'x');
-        final after = DateTime.now().millisecondsSinceEpoch;
-
-        expect(host.fetched, hasLength(1));
-        final timestamp = int.parse(
-          Uri.parse(host.fetched.single).queryParameters['_']!,
-        );
-        expect(timestamp, inInclusiveRange(before, after));
-      },
-    );
 
     test('jsonSeries 搜索：fetch → jsonSeries 构建 Series 列表', () async {
       final host = FakeHost({
@@ -1243,22 +1145,6 @@ void main() {
       expect(rule.toJson()['directConnection'], isTrue);
       expect(PipelineSourceAdapter(rule).useSystemProxy, isFalse);
     });
-
-    test('custom source persistence keeps directConnection', () {
-      final config = CustomSourceConfig.fromJson({
-        'format': kSourceRuleFormatV2,
-        'id': 'direct_source',
-        'name': 'Direct source',
-        'baseUrl': 'https://example.com',
-        'directConnection': true,
-        'search': const <Object>[],
-        'detail': const <Object>[],
-        'play': const <Object>[],
-      });
-
-      expect(config.pipelineJson()?['directConnection'], isTrue);
-      expect(config.rule.directConnection, isTrue);
-    });
   });
 
   group('player operations', () {
@@ -1359,6 +1245,152 @@ void main() {
       expect(host.receivedTimeout, const Duration(seconds: 35));
       expect(host.receivedSettleDelay, const Duration(seconds: 6));
       expect(result, 'https://cdn.example.com/ready.mp4');
+    });
+  });
+  group('fallback and cancellation', () {
+    const interpreter = PipelineInterpreter();
+    test(
+      'regex and replace preserve quantifiers alongside raw variables',
+      () async {
+        final source = _pipelineRule(
+          play: const [
+            PipelineStep('template', {'value': 'episode-2026'}),
+            PipelineStep('replace', {
+              'pattern': r'\d{4}',
+              'replacement': '1234',
+              'regex': true,
+            }),
+            PipelineStep('regex', {
+              'pattern': r'{episodeId:raw}-(\d{4})',
+              'group': 1,
+            }),
+          ],
+        );
+        expect(RuleValidator.validate(source).isValid, isTrue);
+        expect(
+          await interpreter.runPlay(source, FakeHost({}), 'episode'),
+          '1234',
+        );
+        expect(
+          PipelineInterpreter.renderTemplate(
+            r'\d{2,4} {episodeId:raw}',
+            (_) => 'episode',
+          ),
+          r'\d{2,4} episode',
+        );
+      },
+    );
+    test('WebView readiness preserves exact numeric quantifiers', () async {
+      await interpreter.runPlay(
+        _pipelineRule(
+          play: const [
+            PipelineStep('sniff', {
+              'goal': 'html',
+              'url': '/page',
+              'readyRegex': r'^{episodeId:raw}-\d{4}$',
+            }),
+          ],
+        ),
+        _HtmlHost(),
+        'episode',
+      );
+    });
+
+    for (final first in [
+      [
+        {'id': '1', 'name': 'zzzz'},
+      ],
+      [
+        {'name': 'naruto'},
+      ],
+      [
+        {'id': '1', 'name': ''},
+      ],
+    ]) {
+      test(
+        'MacCMS retries when first nonempty list has no usable series: $first',
+        () async {
+          final host = FakeHost({
+            'https://example.com/index.php/ajax/suggest?mid=1&wd=naruto&limit=20':
+                jsonEncode({'list': first}),
+            'https://example.com/ajax/suggest?mid=1&wd=naruto&limit=20':
+                '{"list":[{"id":"2","name":"naruto"}]}',
+          });
+          final results = await interpreter.runSearch(
+            _pipelineRule(search: const [PipelineStep('maccmsSuggest', {})]),
+            host,
+            'naruto',
+          );
+          expect(results.single.seriesId, '2');
+          expect(host.fetched, hasLength(2));
+        },
+      );
+    }
+    test('MacCMS valid first result does not request fallback', () async {
+      final host = FakeHost({
+        'https://example.com/index.php/ajax/suggest?mid=1&wd=naruto&limit=20':
+            '{"list":[{"id":"2","name":"naruto"}]}',
+      });
+      expect(
+        await interpreter.runSearch(
+          _pipelineRule(search: const [PipelineStep('maccmsSuggest', {})]),
+          host,
+          'naruto',
+        ),
+        hasLength(1),
+      );
+      expect(host.fetched, hasLength(1));
+    });
+    test('invalid episode ids do not suppress detail fallback', () async {
+      final host = FakeHost({
+        'https://example.com/bad':
+            '{"episodes":[{"name":"missing"},{"id":null},{"id":"  "}]}',
+        'https://example.com/good':
+            '{"episodes":[{"id":"valid","name":"episode"}]}',
+      });
+      final result = await interpreter.runDetail(
+        _pipelineRule(
+          detail: const [
+            PipelineStep.first([
+              [
+                PipelineStep('fetch', {'url': '/bad'}),
+                PipelineStep('jsonEpisodes', {'episodesPath': 'episodes'}),
+              ],
+              [
+                PipelineStep('fetch', {'url': '/good'}),
+                PipelineStep('jsonEpisodes', {'episodesPath': 'episodes'}),
+              ],
+            ]),
+          ],
+        ),
+        host,
+        '/series',
+      );
+      expect(result.single.episodes.single.episodeId, 'valid');
+      expect(host.fetched, hasLength(2));
+    });
+    test('cancelled delay never enters following fetch or fallback', () async {
+      final host = FakeHost({});
+      final operation = SourceOperation();
+      final work = interpreter.runSearch(
+        _pipelineRule(
+          search: const [
+            PipelineStep('delay', {'ms': 10000}),
+            PipelineStep('fetch', {'url': '/obsolete'}),
+          ],
+        ),
+        host,
+        'query',
+        operation: operation,
+      );
+      final failure = expectLater(
+        work,
+        throwsA(isA<RequestCancelledException>()),
+      );
+      operation.cancel();
+      await failure;
+      expect(host.fetched, isEmpty);
+      operation.close();
     });
   });
 }

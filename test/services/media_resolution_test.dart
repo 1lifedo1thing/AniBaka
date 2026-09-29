@@ -30,7 +30,45 @@ class _DirectUrlAdapter extends AdapterBase {
   }) async => const [];
 }
 
+class _CachedUrlAdapter extends PipelineSourceAdapter {
+  _CachedUrlAdapter(String id, this.url)
+    : super(
+        SourceRule(
+          id: id,
+          name: 'Same name',
+          baseUrl: 'https://fixture.invalid',
+        ),
+      );
+  String url;
+  int calls = 0;
+  @override
+  Future<String> getDownloadUrl(String id) async {
+    calls++;
+    return url;
+  }
+}
+
 void main() {
+  test('episode invalidation forces one fresh parse, then caches it', () async {
+    final adapter = _CachedUrlAdapter(
+      'refresh',
+      'https://fixture.invalid/old.mp4',
+    );
+    addTearDown(adapter.dispose);
+    await adapter.resolveDownloadUrl('1', skipValidation: true);
+    adapter.url = 'https://fixture.invalid/new.mp4';
+    adapter.invalidateDownloadUrl('1');
+    expect(
+      await adapter.resolveDownloadUrl('1', skipValidation: true),
+      adapter.url,
+    );
+    expect(
+      await adapter.resolveDownloadUrl('1', skipValidation: true),
+      adapter.url,
+    );
+    expect(adapter.calls, 2);
+  });
+
   group('validation', () {
     test('fast playback resolution skips media probing', () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);

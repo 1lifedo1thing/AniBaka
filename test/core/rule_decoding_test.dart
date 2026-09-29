@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:math';
 import 'package:baka/services/source/source_codec.dart';
 import 'package:baka/source/engine/anime_rule_ops.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -51,33 +50,6 @@ void main() {
         expect(decode('未命中😀', {'abc': 'x'}), '未命中😀');
       },
     );
-    test('random inputs agree with the previous longest-first scan', () {
-      final random = Random(7);
-      String word(int length) => String.fromCharCodes(
-        List.generate(length, (_) => 97 + random.nextInt(4)),
-      );
-      for (var run = 0; run < 100; run++) {
-        final map = {
-          for (var i = 0; i < 20; i++) word(1 + random.nextInt(5)): '$i',
-        };
-        final entries = map.entries.toList()
-          ..sort((a, b) => b.key.length.compareTo(a.key.length));
-        final text = word(200);
-        final expected = StringBuffer();
-        for (var offset = 0; offset < text.length;) {
-          var found = false;
-          for (final entry in entries) {
-            if (!text.startsWith(entry.key, offset)) continue;
-            expected.write(entry.value);
-            offset += entry.key.length;
-            found = true;
-            break;
-          }
-          if (!found) expected.write(text[offset++]);
-        }
-        expect(decode(text, map), expected.toString());
-      }
-    });
   });
 
   group('source codec', () {

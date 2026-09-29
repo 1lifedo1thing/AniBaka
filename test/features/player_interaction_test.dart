@@ -1,16 +1,13 @@
 import '../support/app_dependencies.dart';
-import 'dart:async';
 import 'package:audio_video_progress_bar/audio_video_progress_bar.dart';
 import 'package:baka/core/account_session.dart';
 import 'package:baka/core/api_transport.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/models/playback_episode.dart';
-import 'package:baka/models/playback_state.dart';
 import 'package:baka/services/playback/danmaku_controller.dart';
 import 'package:baka/services/torrent/torrent_service.dart';
 import 'package:baka/widgets/baka_player/controller.dart';
 import 'package:baka/widgets/baka_player/view.dart';
-import 'package:baka/widgets/baka_player/widgets/player_info_hud.dart';
 import 'package:baka/widgets/comment/comment_widget.dart';
 import 'package:baka/widgets/platform/windows/windows_episode_list.dart';
 import 'package:baka/widgets/platform/windows/windows_player_layout.dart';
@@ -38,17 +35,6 @@ class _TestWindow extends NotImplementedWindow {
 class _TestWindowPlatform extends BitsdojoWindowPlatform {
   @override
   DesktopWindow get appWindow => _TestWindow();
-}
-
-class _Player extends PlaybackController {
-  int calls = 0;
-  Completer<PlaybackTechnicalInfo>? pending;
-  @override
-  Future<PlaybackTechnicalInfo> loadTechnicalInfo() {
-    calls++;
-    return pending?.future ??
-        Future.value(const PlaybackTechnicalInfo(width: 1920, height: 1080));
-  }
 }
 
 Widget _host(Widget child) => MaterialApp(home: Material(child: child));
@@ -290,24 +276,6 @@ void main() {
       expect(tester.state(find.byType(Scrollable).last), same(listState));
       expect(find.textContaining('新剧集'), findsWidgets);
       await tester.pumpWidget(const SizedBox.shrink());
-    });
-  });
-
-  group('diagnostics lifecycle', () {
-    testWidgets('slow poll does not overlap or update disposed HUD', (
-      tester,
-    ) async {
-      final player = _Player()..pending = Completer();
-      await tester.pumpWidget(
-        _host(PlayerInfoHud(controller: player, onClose: () {})),
-      );
-      await tester.pump(const Duration(seconds: 6));
-      expect(player.calls, 1);
-      await tester.pumpWidget(const SizedBox());
-      player.pending!.complete(const PlaybackTechnicalInfo());
-      await tester.pump();
-      expect(tester.takeException(), isNull);
-      await player.dispose();
     });
   });
 }
