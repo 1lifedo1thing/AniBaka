@@ -3,12 +3,15 @@ import 'package:baka/utils/json_values.dart';
 import 'package:baka/source/runtime/source_operation.dart';
 import 'package:baka/services/source/source_repository.dart';
 import 'package:baka/services/playback/history_repository.dart';
+import 'package:baka/services/playback/playback_progress.dart';
 import 'package:baka/services/collection/collection_repository.dart';
 import 'package:baka/models/playback_request.dart';
 import 'package:baka/app/app_runtime.dart';
 import 'package:baka/services/playback/media_session.dart';
 import 'package:get/get.dart' hide ContextExtensionss;
 import 'dart:async';
+import 'package:baka/models/skip_segment.dart';
+import 'package:baka/api/bgm.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -60,7 +63,8 @@ class PlayerPage extends StatefulWidget {
   State<StatefulWidget> createState() => _PlayerPageState();
 }
 
-class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
+class _PlayerPageState extends State<PlayerPage>
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   static const _immersiveStatusBarStyle = SystemUiOverlayStyle(
     statusBarColor: Colors.black,
     statusBarIconBrightness: Brightness.light,
@@ -88,6 +92,8 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
   late final TabController _tabController;
   StreamSubscription<void>? _completedSubscription;
   StreamSubscription<Duration>? _seekSubscription;
+  PlaybackProgress? _progress;
+  bool _wasPlaying = false;
   Future<void>? _playerReady;
   Future<void> _hlsFilterReload = Future<void>.value();
   List<String> _cachedTags = const [];
@@ -146,35 +152,29 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
   VideoSourceSearchController? _autoMatchController;
   VideoSourceSearchController? _sourceSearchController;
 
-  Future<void> _saveProgress() {
-    final position = ctr.timeline.value.position;
-    if (!ctr.preferences.value.rememberLastPosition) return Future.value();
-    return historyRepository.saveProgress(_svc.videoKey, position);
-  }
-
-  Future<void> _saveHistory() {
-    final timeline = ctr.timeline.value;
-    if (_svc.isLocalSource) return Future.value();
-    return historyRepository.saveHistory(
-      request: _svc.request,
-      bgmId: _svc.bgmInfo.subjectId,
-      cover: _svc.coverImageUrl,
-      episodeIndex: currPlayIndex,
-      urlIndex: currUrl,
-      positionMs: timeline.position.inMilliseconds,
-      durationMs: timeline.duration.inMilliseconds,
-    );
+  Future<void> _savePlayback({bool seeked = false}) async {
+    try {
+      await _progress?.save(
+        ctr.timeline.value,
+        rememberPosition: ctr.preferences.value.rememberLastPosition,
+        seeked: seeked,
+      );
+    } catch (error) {
+      debugPrint('保存播放进度失败: $error');
+    }
   }
 
   Future<void> _saveAndResetForSwitch() async {
-    await _saveProgress();
-    await _saveHistory();
+    final saving = _savePlayback();
+    _progress = null;
+    await saving;
     danmakuController.reset();
   }
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _svc = PlaybackContent(
       sources: sourceRepository,
       collections: collections,
@@ -318,7 +318,13 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) unawaited(_savePlayback());
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _sourceOperation?.cancel();
     _sourceOperation?.close();
     ctr.onHlsAdFilterChanged = null;
@@ -332,8 +338,8 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
     _mediaSession.detach(ctr);
     _watchParty.detachPlayer(ctr);
     ctr.detachDanmaku();
-    unawaited(_saveProgress());
-    unawaited(_saveHistory());
+    unawaited(_savePlayback());
+    _progress = null;
     unawaited(ctr.dispose());
     unawaited(_svc.dispose());
     _tabController.dispose();
@@ -378,7 +384,7 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
     if (!mounted) return;
     _completedSubscription = ctr.completed.listen((_) => _playNextEpisode());
     _seekSubscription = ctr.seekEvents.listen(
-      (_) => unawaited(_saveProgress()),
+      (_) => unawaited(_savePlayback(seeked: true)),
     );
     _mediaSession.attach(
       ctr,
@@ -404,6 +410,10 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
           final playing = ctr.core.value.playing;
           final rate = ctr.core.value.playbackRate;
           // 先停止旧清单请求，再替换本地代理，避免旧连接断开触发自动换线。
+          final saving = _savePlayback();
+          _progress = null;
+          await saving;
+          if (_isStale(requestId)) return;
           await ctr.stop();
           if (_isStale(requestId)) return;
           await initVideoController(
@@ -450,12 +460,35 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
         });
   }
 
+  Future<void> _bindSkipEpisode(
+    int requestId,
+    SkipContext context,
+    String title,
+  ) async {
+    try {
+      final subjectId = context.subjectId;
+      if (subjectId == null || _isStale(requestId)) return;
+      final episodes = await getBgmEpisodes(subjectId);
+      if (_isStale(requestId)) return;
+      final episodeId = matchSkipEpisode(title, episodes);
+      if (episodeId != null) {
+        ctr.setSkipContext(context.bind(subjectId, episodeId));
+      }
+    } catch (_) {
+      /* Local annotations remain available without metadata. */
+    }
+  }
+
   Future<void> _initVideoController(
     int requestId, {
     Duration? resumeAt,
     bool autoplay = true,
     bool? filterHlsAds,
   }) async {
+    if (_isStale(requestId)) return;
+    final saving = _savePlayback();
+    _progress = null;
+    await saving;
     if (_isStale(requestId)) return;
     if (_terminalFailure != null) {
       _terminalFailure = null;
@@ -464,7 +497,8 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
     _lastPlaybackOpenSucceeded = false;
     _lastPlaybackFailure = null;
     _resolvedUrl = '';
-    Duration? resumePosition;
+    ctr.setSkipContext(null);
+    var skipTimeline = 'original';
     int? keepAliveGeneration;
     try {
       final localPath = _isLocalSource ? _svc.localFilePath : null;
@@ -475,10 +509,6 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
       ctr.setMediaInfo(_svc.currentMediaInfo);
       await (_playerReady ??= _initializePlayer());
       if (_isStale(requestId)) return;
-      if (!inited && ctr.preferences.value.rememberLastPosition) {
-        final position = HistoryRepository.readProgress(_svc.videoKey);
-        if (position.inSeconds > 10) resumePosition = position;
-      }
 
       var videoUrl = localPath;
       var headers = localPath == null ? null : _svc.localHttpHeaders;
@@ -506,6 +536,7 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
         final playbackMedia = await adapter.preparePlaybackMedia(
           media,
           filterHlsAds: filterHlsAds,
+          onTimelinePrepared: (key) => skipTimeline = key,
           onHlsAdFilterStatus: (message) {
             if (!_isStale(requestId)) showSnackBar(message);
           },
@@ -525,15 +556,57 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
         }
         _resolvedUrl = videoUrl;
       }
+      final start =
+          resumeAt ??
+          (ctr.preferences.value.rememberLastPosition
+              ? historyRepository.getResumePosition(
+                  videoKey: _svc.videoKey,
+                  request: _svc.request,
+                  bgmId: _svc.bgmInfo.subjectId,
+                )
+              : Duration.zero);
+      final progress = PlaybackProgress(
+        history: historyRepository,
+        request: _svc.request,
+        videoKey: _svc.videoKey,
+        start: start,
+        bgmId: _svc.bgmInfo.subjectId,
+        cover: _svc.coverImageUrl,
+      );
       await ctr.open(
         videoUrl!,
         autoplay: autoplay,
         httpHeaders: headers,
-        start: resumeAt,
+        start: start > Duration.zero ? start : null,
       );
 
       if (_isStale(requestId)) return;
+      _progress = progress;
       _lastPlaybackOpenSucceeded = true;
+      final skipSource = SkipContext.sourceIdentity([
+        _svc.request.source,
+        _svc.request.contentId,
+        _svc.currentVideoItem?.lineAt(currUrl),
+        _sourceNames != null && currUrl <= _sourceNames!.length
+            ? _sourceNames![currUrl - 1]
+            : currUrl,
+      ]);
+      final skipContext = SkipContext(
+        sourceKey: skipSource,
+        timelineKey: skipTimeline,
+        episodeNumber:
+            skipEpisodeNumber(_currentEpisodeTitle) ??
+            (currPlayIndex + 1).toDouble(),
+        seriesKey: SkipContext.sourceIdentity([
+          _svc.request.source,
+          _svc.request.contentId,
+        ]),
+        // Display metadata may come from fuzzy title search; only an explicit
+        // playback identity (or a saved personal binding) can drive a seek.
+        subjectId: BgmInfo.fromData(_svc.data).subjectId,
+      );
+      ctr.setSkipContext(skipContext);
+      unawaited(_bindSkipEpisode(requestId, skipContext, _currentEpisodeTitle));
       _lastPlaybackFailure = null;
       if (!_svc.isLocalSource && videoList.isNotEmpty) {
         await historyRepository.rememberEpisode(
@@ -549,10 +622,6 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
         _terminalFailure = null;
         _bumpPageData();
       }
-      if (resumePosition != null) {
-        ctr.showJumpToPositionPrompt(resumePosition);
-      }
-
       if (resumeAt == null) {
         final episodeIndex = currPlayIndex;
         final danmaku = await _svc.fetchDanmakuData(episodeIndex);
@@ -581,6 +650,9 @@ class _PlayerPageState extends State<PlayerPage> with TickerProviderStateMixin {
   bool _isAutoSwitchingSource = false;
 
   void _onPlaybackCoreChanged() {
+    final playing = ctr.core.value.playing;
+    if (_wasPlaying && !playing) unawaited(_savePlayback());
+    _wasPlaying = playing;
     if (!mounted || _isAutoSwitchingSource) return;
     if (ctr.core.value.failed) {
       final msg = ctr.core.value.errorMessage;

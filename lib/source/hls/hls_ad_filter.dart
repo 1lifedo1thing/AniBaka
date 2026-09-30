@@ -1,5 +1,7 @@
 import 'package:baka/source/runtime/source_operation.dart';
 import 'dart:async';
+import 'dart:convert';
+import 'package:crypto/crypto.dart';
 
 import 'package:baka/source/hls/mpeg_ts_fingerprint.dart';
 
@@ -15,9 +17,11 @@ class HlsAdFilterOutcome {
     required this.removedSegments,
     required this.removedSeconds,
     required this.detail,
+    this.timelineKey = 'original',
   });
 
   final String manifest;
+  final String timelineKey;
   final int removedSegments;
   final double removedSeconds;
 
@@ -335,6 +339,10 @@ abstract final class HlsAdFilter {
 
     return HlsAdFilterOutcome(
       manifest: filtered,
+      timelineKey:
+          'hls:${sha256.convert(utf8.encode(jsonEncode([
+            for (var i = 0; i < segments.length; i++) [(segments[i].duration * 1000).round(), drop.contains(i)],
+          ])))}',
       removedSegments: ordered.length,
       removedSeconds: removedSeconds,
       detail:

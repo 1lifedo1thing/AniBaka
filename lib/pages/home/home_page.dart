@@ -176,7 +176,7 @@ class _HomePageState extends State<HomePage>
       elevation: 0,
       toolbarHeight: 64,
       centerTitle: true,
-      title: content,
+      title: RepaintBoundary(child: content),
     );
   }
 
@@ -368,11 +368,13 @@ class _HomePageState extends State<HomePage>
               horizontal: horizontalPadding,
               vertical: 8,
             ),
-            child: ClipRRect(
-              borderRadius: radius,
-              child: AspectRatio(
-                aspectRatio: isTablet ? 24 / 9 : 16 / 9.5,
-                child: SwiperBanner(swiperData: swipers),
+            child: RepaintBoundary(
+              child: ClipRRect(
+                borderRadius: radius,
+                child: AspectRatio(
+                  aspectRatio: isTablet ? 24 / 9 : 16 / 9.5,
+                  child: SwiperBanner(swiperData: swipers),
+                ),
               ),
             ),
           ),
@@ -385,7 +387,7 @@ class _HomePageState extends State<HomePage>
     return SliverToBoxAdapter(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
-        child: KeyedSubtree(
+        child: RepaintBoundary(
           key: _rankSectionKey,
           child: ValueListenableBuilder<int>(
             valueListenable: _svc.rankIndex,

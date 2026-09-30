@@ -1,5 +1,6 @@
 import 'package:baka/instance.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 
 class AppShimmer extends StatefulWidget {
@@ -77,33 +78,58 @@ class _AppShimmerState extends State<AppShimmer> {
     final baseColor = widget.baseColor ?? AppShimmer.defaultBaseColor(theme);
     final highlightColor =
         widget.highlightColor ?? AppShimmer.defaultHighlightColor(theme);
+    final colors = [baseColor, highlightColor, baseColor];
+    final durationMicros = widget.duration.inMicroseconds;
 
-    return ValueListenableBuilder<Duration>(
-      valueListenable: _ShimmerClock.instance.elapsed,
-      child: widget.child,
-      builder: (context, elapsed, child) {
-        final durationMicros = widget.duration.inMicroseconds;
-        final progress = durationMicros <= 0
-            ? 1.0
-            : (elapsed.inMicroseconds % durationMicros) / durationMicros;
-        return RepaintBoundary(
-          child: ShaderMask(
-            blendMode: BlendMode.srcATop,
-            shaderCallback: (bounds) => LinearGradient(
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
-              colors: [baseColor, highlightColor, baseColor],
-              stops: const [0.1, 0.5, 0.9],
-              transform: _ShimmerGradientTransform(progress),
-            ).createShader(bounds),
-            child: child,
-          ),
-        );
-      },
+    return RepaintBoundary(
+      child: _ShimmerMask(
+        shaderCallback: (bounds) {
+          final elapsedMicros =
+              _ShimmerClock.instance.elapsed.value.inMicroseconds;
+          final progress = durationMicros <= 0
+              ? 1.0
+              : (elapsedMicros % durationMicros) / durationMicros;
+          return LinearGradient(
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+            colors: colors,
+            stops: const [0.1, 0.5, 0.9],
+            transform: _ShimmerGradientTransform(progress),
+          ).createShader(bounds);
+        },
+        child: widget.child,
+      ),
     );
   }
 }
 
+class _ShimmerMask extends ShaderMask {
+  const _ShimmerMask({required super.shaderCallback, required super.child})
+    : super(blendMode: BlendMode.srcATop);
+
+  @override
+  RenderShaderMask createRenderObject(BuildContext context) {
+    return _RenderShimmerMask(shaderCallback: shaderCallback);
+  }
+}
+
+class _RenderShimmerMask extends RenderShaderMask {
+  _RenderShimmerMask({required super.shaderCallback})
+    : super(blendMode: BlendMode.srcATop);
+
+  @override
+  void attach(PipelineOwner owner) {
+    super.attach(owner);
+    // Clock ticks only invalidate paint; the widget subtree stays unchanged.
+    _ShimmerClock.instance.elapsed.addListener(markNeedsPaint);
+  }
+
+  @override
+  void detach() {
+    _ShimmerClock.instance.elapsed.removeListener(markNeedsPaint);
+    super.detach();
+  }
+}
 
 class _ShimmerClock {
   _ShimmerClock._();
@@ -143,7 +169,7 @@ class _ShimmerClock {
     if (_users == 0) return;
     final startedAt = _startedAt ??= timestamp;
     elapsed.value = timestamp - startedAt;
-    _scheduleFrame();
+    if (_users > 0) _scheduleFrame();
   }
 }
 

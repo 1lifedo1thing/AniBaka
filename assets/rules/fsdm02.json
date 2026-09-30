@@ -70,7 +70,8 @@
     },
     {
       "op": "maccmsApiEpisodes",
-      "preferHls": true
+      "preferHls": true,
+      "directOnly": true
     }
   ],
   "play": [

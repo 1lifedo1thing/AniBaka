@@ -1,5 +1,6 @@
 import 'package:baka/instance.dart';
 import 'package:baka/models/playback_state.dart';
+import 'package:baka/models/skip_segment.dart';
 import 'package:baka/services/playback/danmaku_controller.dart';
 import 'package:baka/services/playback/media_session.dart';
 import 'package:baka/widgets/baka_player/controller.dart';
@@ -34,6 +35,44 @@ class _DanmakuSyncCounter implements DanmakuListener {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test(
+    'OP/ED seek broadcasts and undo restores the exact prior position',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      Instances.sp = await SharedPreferences.getInstance();
+      final controller = PlaybackController();
+      controller.timeline.value = controller.timeline.value.copyWith(
+        position: const Duration(milliseconds: 12456),
+        duration: const Duration(minutes: 24),
+      );
+      const segment = SkipSegment(
+        id: 'op',
+        type: 'op',
+        startMs: 10000,
+        endMs: 100000,
+        durationMs: 1440000,
+        origin: 'community',
+        automatic: true,
+      );
+      final nextSeek = controller.seekEvents.first;
+      controller.previewSkipSegment(segment);
+      expect(await nextSeek, const Duration(milliseconds: 100000));
+      controller.timeline.value = controller.timeline.value.copyWith(
+        position: const Duration(seconds: 102),
+      );
+      final undo = controller.seekEvents.first;
+      controller.cancelSkipOpEd();
+      expect(await undo, const Duration(milliseconds: 12456));
+      await controller.configureWatchParty(connected: true, canControl: false);
+      controller.previewSkipSegment(segment);
+      expect(
+        controller.timeline.value.position,
+        const Duration(milliseconds: 12456),
+      );
+      await controller.dispose();
+    },
+  );
 
   group('controls', () {
     setUp(() async {

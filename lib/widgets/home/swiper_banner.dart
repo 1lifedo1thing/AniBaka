@@ -5,6 +5,7 @@ import 'package:baka/app/navigation.dart';
 import 'package:baka/widgets/dialog/input_dialog.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderSliver;
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
@@ -141,6 +142,12 @@ class _SwiperBannerState extends State<SwiperBanner> {
 
     _timer = Timer.periodic(const Duration(seconds: 6), (_) {
       if (_isInteracting || !_carouselController.hasClients) return;
+      // 外层首页滚动或横幅离屏时，不再发起轮播布局和图片切换。
+      // 只在定时器触发时读取现有状态，避免为每一帧增加滚动监听。
+      final pageScroll = Scrollable.maybeOf(context, axis: Axis.vertical);
+      if (pageScroll?.position.isScrollingNotifier.value ?? false) return;
+      final sliver = context.findAncestorRenderObjectOfType<RenderSliver>();
+      if (sliver?.geometry?.visible == false) return;
       unawaited(
         _carouselController.animateToItem(
           (_currentIndexNotifier.value + 1) % widget.swiperData.length,

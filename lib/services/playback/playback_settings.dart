@@ -34,8 +34,6 @@ class PlaybackSettingsService {
   static const _doubleTapActionKey = 'player_doubleTapAction';
   static const _doubleTapSeekDurationKey = 'player_doubleTapSeekDuration';
   static const _showSystemTimeKey = 'player_showSystemTime';
-  static const _skipOpWaitTimeKey = 'player_skipOpWaitTime';
-  static const _skipOpDurationKey = 'player_skipOpDuration';
   static const _videoEnhancementModeKey = 'player_videoEnhancementMode';
   static const _lastVideoEnhancementModeKey = 'player_lastVideoEnhancementMode';
   static const _showSubtitleKey = 'player_showSubtitle';
@@ -225,8 +223,6 @@ class PlaybackSettingsService {
       doubleTapAction: sp.getString(_doubleTapActionKey) ?? 'play_pause',
       doubleTapSeekDuration: sp.getInt(_doubleTapSeekDurationKey) ?? 10,
       showSystemTime: sp.getBool(_showSystemTimeKey) ?? false,
-      skipOpWaitTime: (sp.getInt(_skipOpWaitTimeKey) ?? 105).clamp(30, 300),
-      skipOpDuration: (sp.getInt(_skipOpDurationKey) ?? 85).clamp(30, 300),
       videoEnhancementMode: enhancementMode,
       lastVideoEnhancementMode: lastEnhancementMode,
       showSubtitle: sp.getBool(_showSubtitleKey) ?? true,
@@ -272,8 +268,6 @@ class PlaybackSettingsService {
     write(_doubleTapActionKey, previous.doubleTapAction, next.doubleTapAction);
     write(_doubleTapSeekDurationKey, previous.doubleTapSeekDuration, next.doubleTapSeekDuration);
     write(_showSystemTimeKey, previous.showSystemTime, next.showSystemTime);
-    write(_skipOpWaitTimeKey, previous.skipOpWaitTime, next.skipOpWaitTime);
-    write(_skipOpDurationKey, previous.skipOpDuration, next.skipOpDuration);
     write(_videoEnhancementModeKey, previous.videoEnhancementMode.storageValue, next.videoEnhancementMode.storageValue);
     write(_lastVideoEnhancementModeKey, previous.lastVideoEnhancementMode.storageValue, next.lastVideoEnhancementMode.storageValue);
     write(_showSubtitleKey, previous.showSubtitle, next.showSubtitle);

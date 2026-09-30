@@ -1,7 +1,7 @@
 import 'package:baka/models/subtitle_config.dart';
 import 'package:flutter/material.dart';
 
-enum SkipState { idle, waiting, showingCancel }
+enum SkipState { idle, waiting, showingCancel, ending }
 
 @immutable
 class PlaybackCoreState {
@@ -85,6 +85,9 @@ class PlayerOverlayState {
     this.showDanmaku = true,
     this.showDanmakuInput = false,
     this.skipState = SkipState.idle,
+    this.skipLabel = '片头',
+    this.skipWasAutomatic = false,
+    this.showSkipSuggestion = false,
     this.showJumpPrompt = false,
     this.jumpPosition = Duration.zero,
     this.jumpPromptText = '',
@@ -99,6 +102,9 @@ class PlayerOverlayState {
   final bool showDanmaku;
   final bool showDanmakuInput;
   final SkipState skipState;
+  final String skipLabel;
+  final bool skipWasAutomatic;
+  final bool showSkipSuggestion;
   final bool showJumpPrompt;
   final Duration jumpPosition;
   final String jumpPromptText;
@@ -113,6 +119,9 @@ class PlayerOverlayState {
     bool? showDanmaku,
     bool? showDanmakuInput,
     SkipState? skipState,
+    String? skipLabel,
+    bool? skipWasAutomatic,
+    bool? showSkipSuggestion,
     bool? showJumpPrompt,
     Duration? jumpPosition,
     String? jumpPromptText,
@@ -126,6 +135,9 @@ class PlayerOverlayState {
     showDanmaku: showDanmaku ?? this.showDanmaku,
     showDanmakuInput: showDanmakuInput ?? this.showDanmakuInput,
     skipState: skipState ?? this.skipState,
+    skipLabel: skipLabel ?? this.skipLabel,
+    skipWasAutomatic: skipWasAutomatic ?? this.skipWasAutomatic,
+    showSkipSuggestion: showSkipSuggestion ?? this.showSkipSuggestion,
     showJumpPrompt: showJumpPrompt ?? this.showJumpPrompt,
     jumpPosition: jumpPosition ?? this.jumpPosition,
     jumpPromptText: jumpPromptText ?? this.jumpPromptText,
@@ -219,8 +231,6 @@ class PlaybackPreferences {
     this.doubleTapAction = 'play_pause',
     this.doubleTapSeekDuration = 10,
     this.showSystemTime = false,
-    this.skipOpWaitTime = 105,
-    this.skipOpDuration = 85,
     this.videoEnhancementMode = VideoEnhancementMode.off,
     this.lastVideoEnhancementMode = VideoEnhancementMode.medium,
     this.showSubtitle = true,
@@ -243,8 +253,6 @@ class PlaybackPreferences {
   final String doubleTapAction;
   final int doubleTapSeekDuration;
   final bool showSystemTime;
-  final int skipOpWaitTime;
-  final int skipOpDuration;
   final VideoEnhancementMode videoEnhancementMode;
   final VideoEnhancementMode lastVideoEnhancementMode;
   final bool showSubtitle;
@@ -267,8 +275,6 @@ class PlaybackPreferences {
     String? doubleTapAction,
     int? doubleTapSeekDuration,
     bool? showSystemTime,
-    int? skipOpWaitTime,
-    int? skipOpDuration,
     VideoEnhancementMode? videoEnhancementMode,
     VideoEnhancementMode? lastVideoEnhancementMode,
     bool? showSubtitle,
@@ -285,15 +291,11 @@ class PlaybackPreferences {
     defaultDanmakuOff: defaultDanmakuOff ?? this.defaultDanmakuOff,
     defaultPlaybackSpeed: defaultPlaybackSpeed ?? this.defaultPlaybackSpeed,
     longPressSpeed: longPressSpeed ?? this.longPressSpeed,
-    showNextEpisodeButton:
-        showNextEpisodeButton ?? this.showNextEpisodeButton,
+    showNextEpisodeButton: showNextEpisodeButton ?? this.showNextEpisodeButton,
     enableDoubleTap: enableDoubleTap ?? this.enableDoubleTap,
     doubleTapAction: doubleTapAction ?? this.doubleTapAction,
-    doubleTapSeekDuration:
-        doubleTapSeekDuration ?? this.doubleTapSeekDuration,
+    doubleTapSeekDuration: doubleTapSeekDuration ?? this.doubleTapSeekDuration,
     showSystemTime: showSystemTime ?? this.showSystemTime,
-    skipOpWaitTime: skipOpWaitTime ?? this.skipOpWaitTime,
-    skipOpDuration: skipOpDuration ?? this.skipOpDuration,
     videoEnhancementMode: videoEnhancementMode ?? this.videoEnhancementMode,
     lastVideoEnhancementMode:
         lastVideoEnhancementMode ?? this.lastVideoEnhancementMode,
@@ -321,8 +323,6 @@ class PlaybackPreferences {
           doubleTapAction == other.doubleTapAction &&
           doubleTapSeekDuration == other.doubleTapSeekDuration &&
           showSystemTime == other.showSystemTime &&
-          skipOpWaitTime == other.skipOpWaitTime &&
-          skipOpDuration == other.skipOpDuration &&
           videoEnhancementMode == other.videoEnhancementMode &&
           lastVideoEnhancementMode == other.lastVideoEnhancementMode &&
           showSubtitle == other.showSubtitle &&
@@ -346,8 +346,6 @@ class PlaybackPreferences {
     doubleTapAction,
     doubleTapSeekDuration,
     showSystemTime,
-    skipOpWaitTime,
-    skipOpDuration,
     videoEnhancementMode,
     lastVideoEnhancementMode,
     showSubtitle,
@@ -443,13 +441,16 @@ class PlaybackTechnicalInfo {
 
   String? get resolution =>
       (width != null && height != null && width! > 0 && height! > 0)
-          ? '$width × $height'
-          : null;
+      ? '$width × $height'
+      : null;
 
   String? get outputResolution =>
-      (outputWidth != null && outputHeight != null && outputWidth! > 0 && outputHeight! > 0)
-          ? '$outputWidth × $outputHeight'
-          : null;
+      (outputWidth != null &&
+          outputHeight != null &&
+          outputWidth! > 0 &&
+          outputHeight! > 0)
+      ? '$outputWidth × $outputHeight'
+      : null;
 
   String? get qualityLabel {
     if (width == null || height == null || width! <= 0 || height! <= 0) {

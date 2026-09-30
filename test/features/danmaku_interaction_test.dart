@@ -63,6 +63,14 @@ void main() {
       'danmaku types remain independent and persist, blocking words stay editable',
       (tester) async {
         final controller = await openPanel(tester, const Size(1440, 1024));
+        await tester.tap(find.text('搜索弹幕'));
+        await tester.pumpAndSettle();
+        expect(find.byType(DanmakuListSheet), findsOneWidget);
+        expect(find.byType(DanmakuSettingsPage), findsNothing);
+        expect(find.byType(Dialog), findsOneWidget);
+        await tester.tap(find.byTooltip('返回上一级'));
+        await tester.pumpAndSettle();
+        expect(find.byType(DanmakuSettingsPage), findsOneWidget);
         await tester.drag(find.byType(Slider).first, const Offset(-160, 0));
         await tester.pumpAndSettle();
         expect(controller.option.area, lessThan(1));
@@ -198,24 +206,29 @@ void main() {
         );
         await tester.pump();
         expect(find.text('Old result'), findsNothing);
+        await tester.ensureVisible(find.text('Gamma'));
         await tester.tap(find.text('Gamma'));
         await tester.pump();
         episodes['91001']!.complete(
           http.Response('{"data":[{"sort":1},{"sort":2}]}', 200),
         );
         await tester.pump();
-        expect(find.text('E1'), findsNothing);
+        expect(find.text('01'), findsNothing);
         episodes['91002']!.complete(
           http.Response('{"data":[{"sort":3}]}', 200),
         );
-        await tester.pumpAndSettle();
-        expect(find.text('E3'), findsOneWidget);
-        await tester.tap(find.widgetWithText(ChoiceChip, 'Beta'));
-        await tester.pumpAndSettle();
-        expect(episodeCalls, {'91001': 1, '91002': 1});
-        await tester.tap(find.text('E1'));
         await tester.pump();
-        await tester.tap(find.text('E2'));
+        await tester.pump();
+        expect(find.text('03'), findsOneWidget);
+        await tester.ensureVisible(find.widgetWithText(ListTile, 'Beta'));
+        await tester.tap(find.widgetWithText(ListTile, 'Beta'));
+        await tester.pump();
+        await tester.pump();
+        expect(episodeCalls, {'91001': 1, '91002': 1});
+        await tester.ensureVisible(find.text('01'));
+        await tester.tap(find.text('01'));
+        await tester.pump();
+        await tester.tap(find.text('02'));
         await tester.pump();
         loads['2']!.complete(
           http.Response('[{"m":"latest","p":"1,1,16777215"}]', 200),
@@ -227,14 +240,16 @@ void main() {
         await tester.pumpAndSettle();
         expect(controller.items.single.text, 'latest');
         expect(notifications, 1);
+        expect(find.text('Beta · 第 02 话'), findsOneWidget);
         expect(find.text('手动检索'), findsOneWidget);
+        await tester.ensureVisible(find.text('+0.5s'));
         await tester.tap(find.text('+0.5s'));
         await tester.pumpAndSettle();
         expect(controller.timeOffset, 0.5);
-        expect(find.text('延迟 0.5s'), findsOneWidget);
+        expect(find.text('0.5s'), findsOneWidget);
         controller.setTimeOffset(-1);
         await tester.pump();
-        expect(find.text('延迟 -1.0s'), findsOneWidget);
+        expect(find.text('-1.0s'), findsOneWidget);
         await tester.tap(find.text('重置'));
         await tester.pump();
         expect(controller.timeOffset, 0);

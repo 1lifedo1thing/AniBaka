@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
-import 'package:flutter/scheduler.dart';
 
 typedef LoadMoreCallback = Future<bool> Function();
 
@@ -26,8 +25,7 @@ class RefreshWrapper extends StatefulWidget {
 
 class _RefreshWrapperState extends State<RefreshWrapper> {
   final _refreshIndicatorKey = GlobalKey<RefreshIndicatorState>();
-  Future<bool>? _loadMoreTask;
-  bool _isRefreshing = false;
+  bool _isLoading = false;
   bool _hasMore = true;
   int _loadMoreGeneration = 0;
 
@@ -36,7 +34,7 @@ class _RefreshWrapperState extends State<RefreshWrapper> {
     super.initState();
     widget.loadMoreResetListenable?.addListener(_resetLoadMore);
     if (!widget.showInitialIndicator) return;
-    SchedulerBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         _refreshIndicatorKey.currentState?.show();
       }
@@ -46,7 +44,10 @@ class _RefreshWrapperState extends State<RefreshWrapper> {
   @override
   void didUpdateWidget(covariant RefreshWrapper oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.loadMoreResetListenable == widget.loadMoreResetListenable) {
+    if (identical(
+      oldWidget.loadMoreResetListenable,
+      widget.loadMoreResetListenable,
+    )) {
       return;
     }
     oldWidget.loadMoreResetListenable?.removeListener(_resetLoadMore);
@@ -66,29 +67,28 @@ class _RefreshWrapperState extends State<RefreshWrapper> {
   }
 
   Future<void> _onLoadMore() async {
-    if (_isRefreshing || !_hasMore || _loadMoreTask != null) return;
+    if (!mounted || _isLoading || !_hasMore) return;
+    _isLoading = true;
     final generation = _loadMoreGeneration;
-    final task = widget.onLoadMore();
-    _loadMoreTask = task;
     try {
-      final hasMore = await task;
-      if (generation == _loadMoreGeneration) _hasMore = hasMore;
+      final hasMore = await widget.onLoadMore();
+      if (mounted && generation == _loadMoreGeneration) _hasMore = hasMore;
     } catch (e) {
       debugPrint('load more error: $e');
     } finally {
-      if (identical(_loadMoreTask, task)) _loadMoreTask = null;
+      _isLoading = false;
     }
   }
 
   Future<void> _onRefresh() async {
-    if (_isRefreshing || _loadMoreTask != null) return;
-    _isRefreshing = true;
+    if (!mounted || _isLoading) return;
+    _isLoading = true;
     _resetLoadMore();
 
     try {
       await widget.onRefresh();
     } finally {
-      _isRefreshing = false;
+      _isLoading = false;
     }
   }
 

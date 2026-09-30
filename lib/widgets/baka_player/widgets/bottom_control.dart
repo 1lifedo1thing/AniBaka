@@ -1,5 +1,6 @@
 import 'package:audio_video_progress_bar/audio_video_progress_bar.dart';
 import 'package:baka/models/playback_state.dart';
+import 'package:baka/widgets/player/skip_segment_track.dart';
 import 'package:baka/widgets/common/value_selector.dart';
 import '../controller.dart';
 import 'package:baka/utils/duration_utils.dart';
@@ -186,25 +187,33 @@ class BottomControl extends StatelessWidget {
         SizedBox(width: isWideScreen ? 12 : 8),
         Expanded(
           child: total > Duration.zero
-              ? ProgressBar(
-                  progress: progress,
-                  buffered: buffered,
-                  total: total,
-                  progressBarColor: colorTheme,
-                  baseBarColor: Colors.white.withValues(alpha: 0.25),
-                  bufferedBarColor: colorTheme.withValues(alpha: 0.4),
-                  timeLabelLocation: TimeLabelLocation.none,
-                  thumbColor: colorTheme,
+              ? SkipSegmentTrack(
+                  data: controller.skipData,
+                  duration: total,
+                  position: progress,
                   barHeight: isWideScreen ? 8 : 6,
                   thumbRadius: isWideScreen ? 9 : 7,
-                  thumbGlowRadius: isWideScreen ? 20 : 16,
-                  onDragStart: (_) => controller.beginSeekPreview(),
-                  onDragUpdate: (details) =>
-                      controller.updateSeekPreview(details.timeStamp),
-                  onSeek: (duration) {
-                    controller.endSeekPreview();
-                    controller.seek(duration, fromSlider: true);
-                  },
+                  trackInset: isWideScreen ? 4 : 3,
+                  child: ProgressBar(
+                    progress: progress,
+                    buffered: buffered,
+                    total: total,
+                    progressBarColor: colorTheme,
+                    baseBarColor: Colors.white.withValues(alpha: 0.25),
+                    bufferedBarColor: colorTheme.withValues(alpha: 0.4),
+                    timeLabelLocation: TimeLabelLocation.none,
+                    thumbColor: colorTheme,
+                    barHeight: isWideScreen ? 8 : 6,
+                    thumbRadius: isWideScreen ? 9 : 7,
+                    thumbGlowRadius: isWideScreen ? 20 : 16,
+                    onDragStart: (_) => controller.beginSeekPreview(),
+                    onDragUpdate: (details) =>
+                        controller.updateSeekPreview(details.timeStamp),
+                    onSeek: (duration) {
+                      controller.endSeekPreview();
+                      controller.seek(duration, fromSlider: true);
+                    },
+                  ),
                 )
               : Container(
                   height: isWideScreen ? 8 : 6,

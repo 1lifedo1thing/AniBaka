@@ -98,6 +98,118 @@ class CommentTile extends StatelessWidget {
   }
 }
 
+/// 评论加载时使用真正的占位块，避免渲染假评论和 Markdown。
+class CommentLoadingPlaceholder extends StatelessWidget {
+  const CommentLoadingPlaceholder({
+    this.itemCount = 3,
+    this.avatarSize = 40,
+    this.spacing = 14,
+    this.label = '正在加载评论',
+    super.key,
+  });
+
+  final int itemCount;
+  final double avatarSize;
+  final double spacing;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = AppShimmer.defaultBaseColor(Theme.of(context));
+
+    Widget bar(double widthFactor, double height) => FractionallySizedBox(
+      widthFactor: widthFactor,
+      alignment: Alignment.centerLeft,
+      child: Container(
+        height: height,
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(6),
+        ),
+      ),
+    );
+
+    return Semantics(
+      container: true,
+      label: label,
+      child: ExcludeSemantics(
+        child: IgnorePointer(
+          child: AppShimmer(
+            child: Column(
+              children: [
+                for (var index = 0; index < itemCount; index++)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: avatarSize,
+                          height: avatarSize,
+                          decoration: BoxDecoration(
+                            color: color,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        SizedBox(width: spacing),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const SizedBox(height: 4),
+                              bar(0.38, 12),
+                              const SizedBox(height: 12),
+                              bar(index.isEven ? 0.94 : 0.86, 10),
+                              const SizedBox(height: 8),
+                              bar(index.isEven ? 0.68 : 0.78, 10),
+                              const SizedBox(height: 12),
+                              bar(0.24, 8),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 初次显示和加载状态切换时淡入，保留 Sliver 的惰性构建和重建时的状态。
+class CommentLoadTransition extends StatelessWidget {
+  const CommentLoadTransition({
+    required this.loading,
+    required this.child,
+    this.asSliver = false,
+    super.key,
+  });
+
+  final bool loading;
+  final Widget child;
+  final bool asSliver;
+
+  @override
+  Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    return TweenAnimationBuilder<double>(
+      key: ValueKey(loading),
+      tween: Tween(begin: 0, end: 1),
+      duration: reduceMotion
+          ? Duration.zero
+          : const Duration(milliseconds: 240),
+      curve: Curves.easeOutCubic,
+      child: child,
+      builder: (context, value, child) => asSliver
+          ? SliverOpacity(opacity: reduceMotion ? 1 : value, sliver: child!)
+          : Opacity(opacity: reduceMotion ? 1 : value, child: child),
+    );
+  }
+}
+
 class CommentList extends StatefulWidget {
   const CommentList({
     required this.pid,
@@ -234,38 +346,23 @@ class CommentListState extends State<CommentList> {
     });
   }
 
-  static final Map<String, dynamic> _dummyComment = {
-    'uname': '用户名称占位符',
-    'time': '2026-08-06 12:00:00',
-    'content': '这是一条用于自动骨架遮罩的占位评论内容文本，展示真实的评论排版。',
-    'uqq': '',
-  };
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final comments = _effectiveComments;
 
+    Widget reveal(Widget child) => CommentLoadTransition(
+      loading: comments == null,
+      asSliver: widget.asSliver,
+      child: child,
+    );
+
     if (comments == null) {
       final loading =
-          widget.loadingPlaceholder ??
-          AppSkeletonizer(
-            enabled: true,
-            child: Column(
-              children: List.generate(
-                3,
-                (_) => Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: _CommentCard(
-                    comment: _dummyComment,
-                    markdownStyle: _markdownStyle,
-                    onReply: sendComment,
-                  ),
-                ),
-              ),
-            ),
-          );
-      return widget.asSliver ? SliverToBoxAdapter(child: loading) : loading;
+          widget.loadingPlaceholder ?? const CommentLoadingPlaceholder();
+      return reveal(
+        widget.asSliver ? SliverToBoxAdapter(child: loading) : loading,
+      );
     }
 
     if (comments.isEmpty) {
@@ -292,7 +389,7 @@ class CommentListState extends State<CommentList> {
           ],
         ),
       );
-      return widget.asSliver ? SliverToBoxAdapter(child: empty) : empty;
+      return reveal(widget.asSliver ? SliverToBoxAdapter(child: empty) : empty);
     }
 
     Widget buildComment(int index) => _CommentCard(
@@ -312,23 +409,27 @@ class CommentListState extends State<CommentList> {
     );
 
     if (widget.asSliver) {
-      return SliverList(
-        delegate: SliverChildBuilderDelegate(
-          (context, index) =>
-              index.isEven ? buildComment(index ~/ 2) : buildSeparator(),
-          childCount: comments.length * 2 - 1,
-          addAutomaticKeepAlives: false,
+      return reveal(
+        SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (context, index) =>
+                index.isEven ? buildComment(index ~/ 2) : buildSeparator(),
+            childCount: comments.length * 2 - 1,
+            addAutomaticKeepAlives: false,
+          ),
         ),
       );
     }
 
-    return ListView.separated(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      addAutomaticKeepAlives: false,
-      itemCount: comments.length,
-      itemBuilder: (_, index) => buildComment(index),
-      separatorBuilder: (_, _) => buildSeparator(),
+    return reveal(
+      ListView.separated(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        addAutomaticKeepAlives: false,
+        itemCount: comments.length,
+        itemBuilder: (_, index) => buildComment(index),
+        separatorBuilder: (_, _) => buildSeparator(),
+      ),
     );
   }
 

@@ -9,7 +9,7 @@ import 'package:baka/services/torrent/piece_manager.dart';
 class TorrentStreamServer {
   static const int _chunkSize = 64 * 1024;
   static const Duration _stallTimeout = Duration(seconds: 60);
-  static final RegExp _rangeRegex = RegExp(r'bytes=(\d*)-(\d*)');
+  static final RegExp _rangeRegex = RegExp(r'^bytes=(\d*)-(\d*)$');
   static const Map<String, String> _mimeTypes = {
     '.mkv': 'video/x-matroska',
     '.mp4': 'video/mp4',
@@ -57,10 +57,18 @@ class TorrentStreamServer {
     }
 
     final fileSize = pm.targetFile.length;
-    final (rangeStart, rangeEnd, isRange) = _parseRange(
-      request.headers.value('range'),
+    final range = _parseRange(
+      request.method == 'GET' ? request.headers.value('range') : null,
       fileSize,
     );
+    if (range == null) {
+      response.statusCode = HttpStatus.requestedRangeNotSatisfiable;
+      response.headers.set('Content-Range', 'bytes */$fileSize');
+      response.contentLength = 0;
+      await response.close();
+      return;
+    }
+    final (rangeStart, rangeEnd, isRange) = range;
     final contentLength = rangeEnd - rangeStart + 1;
 
     response.headers
@@ -78,7 +86,10 @@ class TorrentStreamServer {
     }
 
     try {
-      await _streamData(response, pm, rangeStart, contentLength);
+      if (request.method != 'HEAD') {
+        // addStream propagates socket backpressure to the piece reader.
+        await response.addStream(_readData(pm, rangeStart, contentLength));
+      }
     } catch (_) {
       // 客户端断开等正常错误
     } finally {
@@ -86,34 +97,37 @@ class TorrentStreamServer {
     }
   }
 
-  /// 解析 Range 头并夹紧到合法范围。
-  static (int start, int end, bool isRange) _parseRange(
+  /// Unsupported/malformed ranges are ignored; null means unsatisfiable.
+  static (int start, int end, bool isRange)? _parseRange(
     String? header,
     int fileSize,
   ) {
     if (header == null) return (0, fileSize - 1, false);
-    final m = _rangeRegex.firstMatch(header);
-    if (m == null) return (0, fileSize - 1, true);
+    final m = _rangeRegex.firstMatch(header.trim());
+    if (m == null) return (0, fileSize - 1, false);
 
-    final rawStart = m.group(1);
-    final rawEnd = m.group(2);
-    final start =
-        (rawStart == null || rawStart.isEmpty ? 0 : int.parse(rawStart)).clamp(
-          0,
-          fileSize - 1,
-        );
-    final end =
-        (rawEnd == null || rawEnd.isEmpty ? fileSize - 1 : int.parse(rawEnd))
-            .clamp(start, fileSize - 1);
-    return (start, end, true);
+    final rawStart = m.group(1)!;
+    final rawEnd = m.group(2)!;
+    if (rawStart.isEmpty && rawEnd.isEmpty) return (0, fileSize - 1, false);
+    if (fileSize == 0) return null;
+
+    // Only non-negative decimals match. Overflow can be saturated at fileSize:
+    // starts are unsatisfiable, while ends and suffix lengths cover the tail.
+    final end = int.tryParse(rawEnd) ?? fileSize;
+    if (rawStart.isEmpty) {
+      if (end == 0) return null;
+      return ((fileSize - end).clamp(0, fileSize), fileSize - 1, true);
+    }
+    final start = int.tryParse(rawStart) ?? fileSize;
+    if (start >= fileSize || end < start) return null;
+    return (start, end.clamp(start, fileSize - 1), true);
   }
 
-  Future<void> _streamData(
-    HttpResponse response,
+  Stream<List<int>> _readData(
     PieceManager pm,
     int fileOffset,
     int totalBytes,
-  ) async {
+  ) async* {
     var sent = 0;
     while (sent < totalBytes) {
       final toSend = (totalBytes - sent).clamp(1, _chunkSize);
@@ -126,7 +140,7 @@ class TorrentStreamServer {
         }
         data = pm.readFileData(fileOffset + sent, toSend);
       }
-      response.add(data);
+      yield data;
       sent += toSend;
     }
   }

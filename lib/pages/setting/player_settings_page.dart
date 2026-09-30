@@ -1,4 +1,8 @@
+import 'package:baka/widgets/player/skip_segments_panel.dart';
 import 'package:baka/models/playback_state.dart';
+import 'package:baka/models/skip_segment.dart';
+import 'package:baka/utils/duration_utils.dart';
+import 'package:baka/widgets/player/skip_segment_track.dart';
 import 'package:baka/services/playback/playback_settings.dart';
 import 'package:flutter/material.dart';
 import 'package:baka/widgets/baka_player/controller.dart';
@@ -40,6 +44,7 @@ class PlayerSettingsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compact = isCompactPlayerPanel(context);
     return ValueListenableBuilder<PlaybackPreferences>(
       valueListenable: controller.preferences,
       builder: (context, preferences, _) => PanelContainer(
@@ -48,7 +53,7 @@ class PlayerSettingsPage extends StatelessWidget {
           physics: const BouncingScrollPhysics(),
           slivers: [
             SliverPadding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+              padding: playerPanelContentPadding(context),
               sliver: SliverList(
                 delegate: SliverChildListDelegate([
                   const PanelSectionTitle('播放体验'),
@@ -56,7 +61,7 @@ class PlayerSettingsPage extends StatelessWidget {
                     children: [
                       PanelSwitchTile(
                         title: '记住播放位置',
-                        subtitle: '下次打开时继续从上次位置播放',
+                        subtitle: '再次打开时提示继续播放',
                         value: preferences.rememberLastPosition,
                         onChanged: (value) => _update(
                           (current) =>
@@ -73,6 +78,51 @@ class PlayerSettingsPage extends StatelessWidget {
                         ),
                       ),
                       const PanelDivider(),
+                    ],
+                  ),
+                  SizedBox(height: compact ? 12 : 24),
+                  const PanelSectionTitle('智能跳过'),
+                  PanelSettingsGroup(
+                    children: [
+                      PanelSwitchTile(
+                        title: '自动跳过片头片尾',
+                        subtitle: compact
+                            ? '匹配区间时跳过，第 1 集保留'
+                            : '有匹配区间时自动跳过，第 1 集始终保留',
+                        value: preferences.enableSkipOpEd,
+                        onChanged: (value) => _update(
+                          (current) => current.copyWith(enableSkipOpEd: value),
+                        ),
+                      ),
+                      const PanelDivider(),
+                      _SkipSummary(controller: controller),
+                      SizedBox(height: compact ? 6 : 12),
+                      FilledButton.tonal(
+                        onPressed: () =>
+                            SkipSegmentsPanel.show(context, controller),
+                        child: const Row(
+                          children: [
+                            Expanded(child: Text('查看与校正区间')),
+                            Icon(Icons.chevron_right_rounded),
+                          ],
+                        ),
+                      ),
+                      SizedBox(height: compact ? 6 : 12),
+                      const Text(
+                        '无匹配数据时保持正常播放',
+                        style: TextStyle(
+                          color: Color(0xFFD4DCE5),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  SizedBox(height: compact ? 12 : 24),
+
+                  const PanelSectionTitle('更多播放设置'),
+                  PanelSettingsGroup(
+                    children: [
                       PanelSwitchTile(
                         title: '显示系统时间',
                         subtitle: '在播放器顶部显示时间',
@@ -84,6 +134,7 @@ class PlayerSettingsPage extends StatelessWidget {
                       const PanelDivider(),
                       PanelSwitchTile(
                         title: '显示下一集按钮',
+                        subtitle: '在片尾提示中显示下一集操作',
                         value: preferences.showNextEpisodeButton,
                         onChanged: (value) => _update(
                           (current) =>
@@ -121,68 +172,7 @@ class PlayerSettingsPage extends StatelessWidget {
                     ],
                   ),
 
-                  const SizedBox(height: 24),
-
-                  const PanelSectionTitle('智能跳过'),
-                  PanelSettingsGroup(
-                    children: [
-                      PanelSwitchTile(
-                        title: '启用智能跳过',
-                        subtitle: '自动跳过片头片尾',
-                        value: preferences.enableSkipOpEd,
-                        onChanged: (value) => _update(
-                          (current) => current.copyWith(enableSkipOpEd: value),
-                        ),
-                      ),
-                      if (preferences.enableSkipOpEd)
-                        Column(
-                          children: [
-                            const PanelDivider(),
-                            PanelSliderTile(
-                              title: '等待操作',
-                              value: preferences.skipOpWaitTime.toDouble(),
-                              valueLabel: '${preferences.skipOpWaitTime}秒',
-                              min: 30,
-                              max: 300,
-                              divisions: 27,
-                              onChanged: (value) => _update(
-                                (current) => current.copyWith(
-                                  skipOpWaitTime: value.round(),
-                                ),
-                                persist: false,
-                              ),
-                              onChangeEnd: (value) => _update(
-                                (current) => current.copyWith(
-                                  skipOpWaitTime: value.round(),
-                                ),
-                              ),
-                            ),
-                            const PanelDivider(),
-                            PanelSliderTile(
-                              title: '跳过时长',
-                              value: preferences.skipOpDuration.toDouble(),
-                              valueLabel: '${preferences.skipOpDuration}秒',
-                              min: 30,
-                              max: 300,
-                              divisions: 27,
-                              onChanged: (value) => _update(
-                                (current) => current.copyWith(
-                                  skipOpDuration: value.round(),
-                                ),
-                                persist: false,
-                              ),
-                              onChangeEnd: (value) => _update(
-                                (current) => current.copyWith(
-                                  skipOpDuration: value.round(),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 24),
+                  SizedBox(height: compact ? 12 : 24),
 
                   const PanelSectionTitle('手势交互'),
                   PanelSettingsGroup(
@@ -255,10 +245,10 @@ class PlayerSettingsPage extends StatelessWidget {
                     ],
                   ),
 
-                  const SizedBox(height: 32),
+                  SizedBox(height: compact ? 16 : 32),
 
                   PanelResetButton(onPressed: _resetToDefaults),
-                  const SizedBox(height: 32),
+                  SizedBox(height: compact ? 16 : 32),
                 ]),
               ),
             ),
@@ -266,5 +256,68 @@ class PlayerSettingsPage extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+class _SkipSummary extends StatelessWidget {
+  const _SkipSummary({required this.controller});
+  final PlaybackController controller;
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<SkipData>(
+    valueListenable: controller.skipData,
+    builder: (context, data, _) => Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final type in ['op', 'ed'])
+          Padding(
+            padding: EdgeInsets.symmetric(
+              vertical: isCompactPlayerPanel(context) ? 4 : 10,
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: SkipSegmentColors.forType(type),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  type == 'op' ? '片头' : '片尾',
+                  style: const TextStyle(color: Colors.white, fontSize: 15),
+                ),
+                SizedBox(width: isCompactPlayerPanel(context) ? 12 : 20),
+                Expanded(
+                  child: Text(
+                    _range(data, type),
+                    style: const TextStyle(
+                      color: Color(0xFFD4DCE5),
+                      fontSize: 14,
+                      fontFeatures: [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        const SizedBox(height: 4),
+        Text(
+          data.context?.isFirstEpisode == true
+              ? '第 1 集保留片头片尾，仅标记区间'
+              : '仅当前剧集与片源 · 颜色对应进度条标记',
+          style: const TextStyle(color: Color(0xFFD4DCE5), fontSize: 12),
+        ),
+      ],
+    ),
+  );
+
+  String _range(SkipData data, String type) {
+    final segment = data.segments.where((s) => s.type == type).firstOrNull;
+    if (segment == null) return '暂无匹配区间';
+    return '${Duration(milliseconds: segment.startMs).toTimeString()} – '
+        '${Duration(milliseconds: segment.endMs).toTimeString()}';
   }
 }

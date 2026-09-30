@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <!-- Extend the illustration's cyan/blue background during launcher motion. -->
+    <gradient
+        android:angle="315"
+        android:startColor="#70F3F5"
+        android:endColor="#38A7F4" />
+</shape>

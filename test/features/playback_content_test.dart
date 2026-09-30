@@ -1,5 +1,7 @@
 import '../support/app_dependencies.dart';
+import 'dart:convert';
 import 'dart:io';
+import 'package:baka/core/api_transport.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/models/playback_episode.dart';
 import 'package:baka/models/playback_request.dart';
@@ -11,7 +13,35 @@ import 'package:baka/source/adapter_base.dart';
 import 'package:baka/source/models/series.dart';
 import 'package:baka/source/models/source.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+/// Replaces the shared transport with one that records request paths.
+List<String> _recordRequestPaths(
+  http.Response Function(http.Request request) respond,
+) {
+  final paths = <String>[];
+  final client = MockClient((request) async {
+    paths.add(request.url.path);
+    return respond(request);
+  });
+  apiTransport = ApiTransport(
+    session: apiTransport.session,
+    client: client,
+    version: 'test',
+    credentialOrigin: () => Uri.parse('https://www.anibaka.com'),
+  );
+  addTearDown(client.close);
+  return paths;
+}
+
+/// UTF-8 is explicit: `http.Response` encodes a plain string as latin1.
+http.Response _jsonResponse(Map<String, Object?> envelope) => http.Response(
+  jsonEncode(envelope),
+  200,
+  headers: const {'content-type': 'application/json; charset=utf-8'},
+);
 
 class _KeepAliveAdapter extends AdapterBase {
   _KeepAliveAdapter() : super('keep-alive-test');
@@ -111,6 +141,64 @@ void main() {
         expect(content.request.prefetched, isNull);
       },
     );
+    test(
+      'Bangumi subject ids are never queried as post ids',
+      () async {
+        final requested = _recordRequestPaths(
+          (_) => _jsonResponse(const {'code': 200, 'data': null}),
+        );
+        final service = PlaybackContent(
+          sources: sourceRepository,
+          collections: collections,
+          history: historyRepository,
+          request: PlaybackRequest.fromMap(<String, dynamic>{
+            'source': 'bgm',
+            'id': 1773,
+            'bgmId': 1773,
+            'title': '示例番剧',
+          }),
+        );
+        addTearDown(service.dispose);
+
+        await service.loadDetail();
+
+        expect(requested, isEmpty, reason: 'BGM 条目 id 不是贴文 id');
+        expect(service.validPostId, isNull);
+        expect(service.videoList, isEmpty);
+      },
+    );
+
+    test('site posts still load their catalog from the post detail', () async {
+      final requested = _recordRequestPaths((request) {
+        final data = request.url.path == '/post/42'
+            ? <String, dynamic>{
+                'id': 42,
+                'title': '站点贴文',
+                'videos': r'01. 正片$line-a',
+              }
+            : null;
+        return _jsonResponse({'code': 200, 'data': data});
+      });
+      final service = PlaybackContent(
+        sources: sourceRepository,
+        collections: collections,
+        history: historyRepository,
+        request: PlaybackRequest.fromMap(<String, dynamic>{
+          'id': 42,
+          'title': '加载中...',
+        }),
+      );
+      addTearDown(service.dispose);
+
+      await service.loadDetail();
+
+      expect(requested, contains('/post/42'));
+      expect(service.validPostId, 42);
+      expect(service.title, '站点贴文');
+      expect(service.videoList, hasLength(1));
+      expect(service.videoList.single.lines, ['line-a']);
+    });
+
     test(
       'local serialized catalog keeps every episode after loading',
       () async {

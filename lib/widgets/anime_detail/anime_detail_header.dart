@@ -50,6 +50,14 @@ class AnimeDetailHeader extends StatelessWidget {
         final coverWidth = isWide ? 270.0 : 130.0;
         final coverHeight = isWide ? 378.0 : 182.0;
         final hasScore = score != null && score > 0;
+        final cover = _CoverImage(
+          imageUrl: imageUrl,
+          heroTag: heroTag,
+          isDark: isDark,
+          enableEffects: enableCoverEffects,
+          width: coverWidth,
+          height: coverHeight,
+        );
         // 标签：优先完整分类 genres；桌面限高区域展示，移动端限数量。
         final categoryTags = detail.genres.isNotEmpty
             ? detail.genres
@@ -62,32 +70,24 @@ class AnimeDetailHeader extends StatelessWidget {
           // 移动端最多 5 个（另含更新时间/分类 pill 时仍截断 tags 本身）
           limit: isWide ? null : 5,
         );
-        Widget actionsRow({required bool expand}) => Row(
+        final collectionButton = collectionEnabled
+            ? _CollectionButton(collection: collection, onTap: onCollectionTap)
+            : null;
+        final searchCallback = onSearchTap;
+        final searchButton = searchCallback == null
+            ? null
+            : _SearchSourceButton(onTap: searchCallback);
+        final actionsRow = Row(
           children: [
-            if (collectionEnabled && expand)
-              Expanded(
-                child: _CollectionButton(
-                  collection: collection,
-                  onTap: onCollectionTap,
-                ),
-              )
-            else if (collectionEnabled)
-              SizedBox(
-                width: 160,
-                child: _CollectionButton(
-                  collection: collection,
-                  onTap: onCollectionTap,
-                ),
-              ),
-            if (onSearchTap != null) ...[
-              SizedBox(width: expand ? 12 : 16),
-              if (expand)
-                Expanded(child: _SearchSourceButton(onTap: onSearchTap))
-              else
-                SizedBox(
-                  width: 160,
-                  child: _SearchSourceButton(onTap: onSearchTap),
-                ),
+            if (collectionButton != null)
+              isWide
+                  ? SizedBox(width: 160, child: collectionButton)
+                  : Expanded(child: collectionButton),
+            if (searchButton != null) ...[
+              SizedBox(width: isWide ? 16 : 12),
+              isWide
+                  ? SizedBox(width: 160, child: searchButton)
+                  : Expanded(child: searchButton),
             ],
           ],
         );
@@ -99,14 +99,7 @@ class AnimeDetailHeader extends StatelessWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _CoverImage(
-                  imageUrl: imageUrl,
-                  heroTag: heroTag,
-                  isDark: isDark,
-                  enableEffects: enableCoverEffects,
-                  width: coverWidth,
-                  height: coverHeight,
-                ),
+                cover,
                 const SizedBox(width: 48),
                 Expanded(
                   child: Column(
@@ -145,7 +138,7 @@ class AnimeDetailHeader extends StatelessWidget {
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          actionsRow(expand: false),
+                          actionsRow,
                           const Spacer(),
                           _DesktopScoreCorner(
                             score: hasScore ? score : null,
@@ -193,14 +186,7 @@ class AnimeDetailHeader extends StatelessWidget {
         final intro = Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _CoverImage(
-              imageUrl: imageUrl,
-              heroTag: heroTag,
-              isDark: isDark,
-              enableEffects: enableCoverEffects,
-              width: coverWidth,
-              height: coverHeight,
-            ),
+            cover,
             const SizedBox(width: 20),
             Expanded(child: text),
           ],
@@ -213,7 +199,7 @@ class AnimeDetailHeader extends StatelessWidget {
             const SizedBox(height: 24),
             tagList,
             const SizedBox(height: 24),
-            actionsRow(expand: true),
+            actionsRow,
           ],
         );
       },
@@ -226,33 +212,7 @@ class AnimeDetailHeader extends StatelessWidget {
     bool isWide,
     bool isDark,
   ) {
-    if (logoUrl.isNotEmpty) {
-      return Container(
-        height: isWide ? 85 : 55,
-        alignment: Alignment.centerLeft,
-        child: CachedNetworkImage(
-          key: ValueKey(logoUrl),
-          imageUrl: logoUrl,
-          memCacheHeight: 170,
-          fit: BoxFit.contain,
-          alignment: Alignment.centerLeft,
-          errorWidget: (context, url, error) => Text(
-            title,
-            style: TextStyle(
-              fontSize: isWide ? 38 : 22,
-              fontWeight: FontWeight.w800,
-              letterSpacing: isWide ? -0.8 : -0.6,
-              height: 1.2,
-              color: isDark ? Colors.white : const Color(0xFF111111),
-            ),
-            maxLines: isWide ? 2 : 3,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-      );
-    }
-
-    return Text(
+    late final fallback = Text(
       title,
       style: TextStyle(
         fontSize: isWide ? 38 : 22,
@@ -264,6 +224,22 @@ class AnimeDetailHeader extends StatelessWidget {
       maxLines: isWide ? 2 : 3,
       overflow: TextOverflow.ellipsis,
     );
+    if (logoUrl.isNotEmpty) {
+      return Container(
+        height: isWide ? 85 : 55,
+        alignment: Alignment.centerLeft,
+        child: CachedNetworkImage(
+          key: ValueKey(logoUrl),
+          imageUrl: logoUrl,
+          memCacheHeight: 170,
+          fit: BoxFit.contain,
+          alignment: Alignment.centerLeft,
+          errorWidget: (context, url, error) => fallback,
+        ),
+      );
+    }
+
+    return fallback;
   }
 }
 
@@ -286,7 +262,7 @@ class _CoverImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final fallback = ColoredBox(
+    late final fallback = ColoredBox(
       color: isDark
           ? Colors.white.withValues(alpha: 0.06)
           : const Color(0xFFF2F2F7),
@@ -305,7 +281,7 @@ class _CoverImage extends StatelessWidget {
         width: width,
         height: height,
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: const BorderRadius.all(Radius.circular(12)),
           border: Border.all(
             color: isDark
                 ? Colors.white.withValues(alpha: 0.08)
@@ -323,7 +299,7 @@ class _CoverImage extends StatelessWidget {
               : null,
         ),
         child: ClipRRect(
-          borderRadius: BorderRadius.circular(11.5),
+          borderRadius: const BorderRadius.all(Radius.circular(11.5)),
           child: imageUrl.isEmpty
               ? fallback
               : CachedNetworkImage(
@@ -415,6 +391,7 @@ class _DesktopScoreCorner extends StatelessWidget {
     if (!hasChart && !hasScore) return const SizedBox.shrink();
 
     final subColor = isDark ? Colors.white38 : const Color(0xFF8E8E93);
+    final hasRank = rank != null && rank! > 0;
     final scoreCol = hasScore
         ? Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -442,13 +419,14 @@ class _DesktopScoreCorner extends StatelessWidget {
                   ),
                 ],
               ),
-              if ((rank != null && rank! > 0) || scoreCount > 0) ...[
+              if (hasRank || scoreCount > 0) ...[
                 const SizedBox(height: 6),
                 Text(
-                  [
-                    if (rank != null && rank! > 0) '#$rank',
-                    if (scoreCount > 0) '$scoreCount 人评价',
-                  ].join(' · '),
+                  hasRank
+                      ? scoreCount > 0
+                            ? '#$rank · $scoreCount 人评价'
+                            : '#$rank'
+                      : '$scoreCount 人评价',
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w500,
@@ -500,43 +478,41 @@ class _TagsWrap extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final limited = limit;
-    final shown = limited == null ? tags : tags.take(limited);
-    final overflow = limited != null && tags.length > limited
-        ? tags.length - limited
-        : 0;
+    final shownCount = limited == null || limited > tags.length
+        ? tags.length
+        : limited;
+    final overflow = tags.length - shownCount;
+    final trimmedCategory = category?.trim();
+    late final decoration = BoxDecoration(
+      color: isDark
+          ? Colors.white.withValues(alpha: 0.08)
+          : const Color(0xFFF2F2F7),
+      borderRadius: const BorderRadius.all(Radius.circular(6)),
+    );
+    late final style = TextStyle(
+      fontSize: 11,
+      fontWeight: FontWeight.w600,
+      letterSpacing: 0.2,
+      color: isDark ? Colors.white70 : const Color(0xFF3A3A3C),
+    );
+    Widget buildPill(String text) => Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: decoration,
+      child: Text(text, style: style),
+    );
 
     final allPills = <Widget>[
       if (updateTime != null && updateTime!.trim().isNotEmpty)
-        _buildPill(BgmUtils.formatTimeString(updateTime!, '更新于')),
-      if (category?.trim().isNotEmpty == true) _buildPill(category!.trim()),
-      ...shown.map(_buildPill),
-      if (overflow > 0) _buildPill('+$overflow'),
+        buildPill(BgmUtils.formatTimeString(updateTime!, '更新于')),
+      if (trimmedCategory != null && trimmedCategory.isNotEmpty)
+        buildPill(trimmedCategory),
+      for (var i = 0; i < shownCount; i++) buildPill(tags[i]),
+      if (overflow > 0) buildPill('+$overflow'),
     ];
 
     if (allPills.isEmpty) return const SizedBox.shrink();
 
     return Wrap(spacing: 6, runSpacing: 6, children: allPills);
-  }
-
-  Widget _buildPill(String text) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: isDark
-            ? Colors.white.withValues(alpha: 0.08)
-            : const Color(0xFFF2F2F7),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w600,
-          letterSpacing: 0.2,
-          color: isDark ? Colors.white70 : const Color(0xFF3A3A3C),
-        ),
-      ),
-    );
   }
 }
 
@@ -581,25 +557,23 @@ class _CollectionButton extends StatelessWidget {
         height: 44,
         decoration: BoxDecoration(
           color: bgColor,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: const BorderRadius.all(Radius.circular(12)),
         ),
-        child: Center(
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 18, color: textColor),
-              const SizedBox(width: 6),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.5,
-                  color: textColor,
-                ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 18, color: textColor),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.5,
+                color: textColor,
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -607,9 +581,9 @@ class _CollectionButton extends StatelessWidget {
 }
 
 class _SearchSourceButton extends StatelessWidget {
-  final VoidCallback? onTap;
+  final VoidCallback onTap;
 
-  const _SearchSourceButton({this.onTap});
+  const _SearchSourceButton({required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -620,13 +594,13 @@ class _SearchSourceButton extends StatelessWidget {
     return ScaleButton(
       onTap: () {
         HapticFeedback.lightImpact();
-        onTap?.call();
+        onTap();
       },
       child: Container(
         height: 44,
         decoration: BoxDecoration(
           color: bgColor,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: const BorderRadius.all(Radius.circular(12)),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,

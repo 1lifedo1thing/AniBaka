@@ -13,6 +13,7 @@ import 'package:baka/widgets/platform/tv/tv_focusable.dart';
 import 'package:baka/widgets/platform/tv/tv_episode_selector.dart';
 import 'package:baka/widgets/platform/tv/tv_settings_panel.dart';
 import 'package:baka/widgets/common/value_selector.dart';
+import 'package:baka/widgets/player/skip_segment_track.dart';
 
 enum _Panel { none, episodes, settings }
 
@@ -359,6 +360,7 @@ class _TvPlayerLayoutState extends State<TvPlayerLayout> {
           controller: ctr,
           full: true,
           focusNode: _playerFocusNode,
+          showPrompts: _panel == _Panel.none,
           hasNextEpisode: widget.currPlayIndex + 1 < widget.videoList.length,
           onNextEpisode: widget.currPlayIndex + 1 < widget.videoList.length
               ? () => widget.onEpisodeChanged(widget.currPlayIndex + 1)
@@ -538,13 +540,19 @@ class _TvPlayerLayoutState extends State<TvPlayerLayout> {
                 children: [
                   ClipRRect(
                     borderRadius: BorderRadius.circular(3),
-                    child: LinearProgressIndicator(
-                      value: progress.clamp(0.0, 1.0),
-                      backgroundColor: context.tvTextHintColor,
-                      valueColor: AlwaysStoppedAnimation<Color>(
-                        Theme.of(context).colorScheme.primary,
+                    child: SkipSegmentTrack(
+                      data: ctr.skipData,
+                      duration: dur,
+                      position: pos,
+                      barHeight: 4,
+                      child: LinearProgressIndicator(
+                        value: progress.clamp(0.0, 1.0),
+                        backgroundColor: context.tvTextHintColor,
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          Theme.of(context).colorScheme.primary,
+                        ),
+                        minHeight: 4,
                       ),
-                      minHeight: 4,
                     ),
                   ),
                   const SizedBox(height: 12),

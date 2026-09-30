@@ -2,9 +2,10 @@ import 'package:baka/models/bgm.dart';
 import 'package:baka/api/bgm.dart';
 import 'package:baka/services/playback/danmaku_controller.dart';
 import 'package:baka/utils/toast_utils.dart';
+import 'package:baka/widgets/player/settings_panel.dart';
 import 'package:flutter/material.dart';
 
-/// 居中对话框形态展示的弹幕来源与检索面板
+/// 弹幕来源与检索面板，可在播放器设置内进入并返回。
 class DanmakuListSheet extends StatefulWidget {
   final DanmakuController controller;
   final String? defaultTitle;
@@ -29,22 +30,14 @@ class DanmakuListSheet extends StatefulWidget {
     bool initialShowSearch = false,
     ValueChanged<List<DanmakuItem>>? onDanmakuLoaded,
   }) {
-    return showDialog<void>(
-      context: context,
-      barrierDismissible: true,
-      builder: (_) => Dialog(
-        backgroundColor: Colors.transparent,
-        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 380),
-          child: DanmakuListSheet(
-            controller: controller,
-            defaultTitle: defaultTitle,
-            defaultEpisode: defaultEpisode,
-            initialShowSearch: initialShowSearch,
-            onDanmakuLoaded: onDanmakuLoaded,
-          ),
-        ),
+    return showPlayerSettingsPanel(
+      context,
+      DanmakuListSheet(
+        controller: controller,
+        defaultTitle: defaultTitle,
+        defaultEpisode: defaultEpisode,
+        initialShowSearch: initialShowSearch,
+        onDanmakuLoaded: onDanmakuLoaded,
       ),
     );
   }
@@ -62,6 +55,8 @@ class _DanmakuListSheetState extends State<DanmakuListSheet> {
   BgmSubjectInfo? _selectedSubject;
   Future<List<int>>? _episodes;
   (int, int)? _loadingEpisode;
+  BgmSubjectInfo? _matchedSubject;
+  int? _matchedEpisode;
   int _searchRequest = 0;
   int _loadRequest = 0;
 
@@ -142,6 +137,8 @@ class _DanmakuListSheetState extends State<DanmakuListSheet> {
       );
       setState(() {
         _loadingEpisode = null;
+        _matchedSubject = subject;
+        _matchedEpisode = episode;
         _showSearch = false;
       });
     } catch (e) {
@@ -151,91 +148,178 @@ class _DanmakuListSheetState extends State<DanmakuListSheet> {
     }
   }
 
+  void _toggleSearch() {
+    setState(() => _showSearch = !_showSearch);
+    if (_showSearch && _searchResults.isEmpty && !_isSearching) {
+      _doSearch(_searchController.text);
+    }
+  }
+
+  static const _muted = Color(0xFFB9C3CE);
+  static const _sectionStyle = TextStyle(
+    color: Colors.white,
+    fontSize: 16,
+    fontWeight: FontWeight.w700,
+  );
+
+  ButtonStyle _buttonStyle(BuildContext context, {bool selected = false}) {
+    final colors = Theme.of(context).colorScheme;
+    return FilledButton.styleFrom(
+      minimumSize: const Size(48, 48),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      backgroundColor: selected
+          ? colors.primary
+          : colors.secondaryContainer.withValues(alpha: 0.66),
+      foregroundColor: selected
+          ? colors.onPrimary
+          : colors.onSecondaryContainer,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      side: BorderSide(
+        color: selected
+            ? Colors.transparent
+            : colors.outlineVariant.withValues(alpha: 0.6),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Material(
-      color: theme.colorScheme.surface,
-      borderRadius: BorderRadius.circular(16),
-      clipBehavior: Clip.antiAlias,
+    final matchedTitle =
+        _matchedSubject?.nameCn ??
+        _matchedSubject?.name ??
+        widget.defaultTitle ??
+        '未指定番剧';
+    final matchedEpisode = _matchedEpisode ?? widget.defaultEpisode;
+    return PanelContainer(
+      title: '弹幕管理',
       child: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                const Icon(Icons.subtitles_rounded, size: 20),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text('弹幕管理', style: theme.textTheme.titleMedium),
-                ),
-                IconButton(
-                  tooltip: '关闭',
-                  onPressed: () => Navigator.of(context).pop(),
-                  icon: const Icon(Icons.close_rounded),
-                ),
-              ],
-            ),
+            const Text('当前匹配', style: TextStyle(color: _muted, fontSize: 14)),
+            const SizedBox(height: 8),
             Text(
-              '${widget.defaultTitle ?? "未指定番剧"} · ${widget.defaultEpisode == null ? "未指定集数" : "第 ${widget.defaultEpisode} 话"}',
+              '$matchedTitle · ${matchedEpisode == null ? "未指定集数" : "第 ${matchedEpisode.toString().padLeft(2, '0')} 话"}',
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
+              style: _sectionStyle.copyWith(height: 1.5),
             ),
             const SizedBox(height: 8),
             ListenableBuilder(
               listenable: widget.controller,
               builder: (context, _) => Text(
-                '来源: dandanplay · ${widget.controller.items.length} 条弹幕',
-                style: theme.textTheme.bodySmall,
+                'dandanplay · ${widget.controller.items.length} 条弹幕',
+                style: const TextStyle(color: _muted, fontSize: 14),
               ),
             ),
-            const Divider(height: 24),
+            const Divider(height: 40, color: Color(0xFF384452)),
             ListenableBuilder(
               listenable: widget.controller,
-              builder: (context, _) => Wrap(
-                crossAxisAlignment: WrapCrossAlignment.center,
-                spacing: 4,
+              builder: (context, _) => Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text(
-                    '延迟 ${widget.controller.timeOffset.toStringAsFixed(1)}s',
+                  Row(
+                    children: [
+                      const Expanded(child: Text('时间偏移', style: _sectionStyle)),
+                      TextButton(
+                        onPressed: () => widget.controller.setTimeOffset(0),
+                        child: const Text('重置'),
+                      ),
+                    ],
                   ),
-                  for (final delta in [-0.5, 0.0, 0.5])
-                    TextButton(
-                      onPressed: () => widget.controller.setTimeOffset(
-                        delta == 0
-                            ? 0
-                            : (widget.controller.timeOffset * 10 + delta * 10)
-                                      .round() /
-                                  10,
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      _buildOffsetButton(-0.5),
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              '${widget.controller.timeOffset.toStringAsFixed(1)}s',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 24,
+                                fontWeight: FontWeight.w700,
+                                fontFeatures: [FontFeature.tabularFigures()],
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
-                      child: Text(
-                        delta == 0 ? '重置' : '${delta > 0 ? "+" : ""}${delta}s',
-                      ),
-                    ),
+                      _buildOffsetButton(0.5),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    '负值提前，正值延后',
+                    style: TextStyle(color: _muted, fontSize: 13),
+                  ),
                 ],
               ),
             ),
-            TextButton.icon(
-              onPressed: () {
-                setState(() => _showSearch = !_showSearch);
-                if (_showSearch && _searchResults.isEmpty && !_isSearching) {
-                  _doSearch(_searchController.text);
-                }
-              },
-              icon: Icon(_showSearch ? Icons.expand_less : Icons.search),
-              label: Text(_showSearch ? '收起检索' : '手动检索'),
+            const Divider(height: 40, color: Color(0xFF384452)),
+            Semantics(
+              expanded: _showSearch,
+              child: InkWell(
+                onTap: _toggleSearch,
+                borderRadius: BorderRadius.circular(12),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Row(
+                    children: [
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('手动检索', style: _sectionStyle),
+                            SizedBox(height: 8),
+                            Text(
+                              '匹配不正确时，重新选择番剧与集数',
+                              style: TextStyle(color: _muted, fontSize: 13),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Icon(
+                        _showSearch
+                            ? Icons.expand_less_rounded
+                            : Icons.expand_more_rounded,
+                        color: Colors.white,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
-            if (_showSearch) _buildSearchPanel(),
+            if (_showSearch) ...[
+              const SizedBox(height: 8),
+              _buildSearchPanel(),
+            ],
           ],
         ),
       ),
     );
   }
 
+  Widget _buildOffsetButton(double delta) => Expanded(
+    child: FilledButton(
+      style: _buttonStyle(context),
+      onPressed: () => widget.controller.setTimeOffset(
+        (widget.controller.timeOffset * 10 + delta * 10).round() / 10,
+      ),
+      child: Text('${delta > 0 ? "+" : ""}${delta}s'),
+    ),
+  );
+
   Widget _buildSearchPanel() {
     final subject = _selectedSubject;
+    final colors = Theme.of(context).colorScheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -243,9 +327,28 @@ class _DanmakuListSheetState extends State<DanmakuListSheet> {
           controller: _searchController,
           textInputAction: TextInputAction.search,
           onSubmitted: _doSearch,
+          style: const TextStyle(color: Colors.white, fontSize: 15),
           decoration: InputDecoration(
             hintText: '输入番剧名称搜索...',
-            border: const OutlineInputBorder(),
+            hintStyle: const TextStyle(color: _muted),
+            filled: true,
+            fillColor: colors.secondaryContainer.withValues(alpha: 0.66),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 14,
+            ),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide.none,
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide.none,
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: colors.primary),
+            ),
             suffixIcon: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -265,7 +368,11 @@ class _DanmakuListSheetState extends State<DanmakuListSheet> {
             ),
           ),
         ),
-        if (_isSearching) const LinearProgressIndicator(),
+        if (_isSearching)
+          const Padding(
+            padding: EdgeInsets.only(top: 12),
+            child: LinearProgressIndicator(semanticsLabel: '正在检索番剧'),
+          ),
         if (_searchError != null)
           Padding(
             padding: const EdgeInsets.only(top: 8),
@@ -274,71 +381,141 @@ class _DanmakuListSheetState extends State<DanmakuListSheet> {
               style: TextStyle(color: Theme.of(context).colorScheme.error),
             ),
           ),
-        if (_searchResults.isNotEmpty)
-          SizedBox(
-            height: 56,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              itemCount: _searchResults.length,
-              itemBuilder: (context, index) {
-                final item = _searchResults[index];
-                return Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: ChoiceChip(
-                    label: Text(item.nameCn ?? item.name ?? '未知'),
-                    selected: subject?.subjectId == item.subjectId,
-                    onSelected: (_) => _selectSubject(item),
-                  ),
-                );
-              },
-            ),
-          ),
-        if (subject != null) ...[
-          const Text('选择集数'),
-          const SizedBox(height: 8),
-          FutureBuilder<List<int>>(
-            future: _episodes,
-            builder: (context, snapshot) {
-              if (snapshot.connectionState != ConnectionState.done) {
-                return const LinearProgressIndicator();
-              }
-              if (snapshot.hasError) return const Text('剧集加载失败');
-              final episodes = snapshot.data ?? const [];
-              if (episodes.isEmpty) return const Text('暂无集数信息');
-              return SizedBox(
-                height: 48,
-                child: ListView.builder(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: episodes.length,
+        if (_searchResults.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Material(
+              color: Colors.white.withValues(alpha: 0.025),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 224),
+                child: ListView.separated(
+                  primary: false,
+                  shrinkWrap: true,
+                  padding: EdgeInsets.zero,
+                  itemCount: _searchResults.length,
+                  separatorBuilder: (_, _) =>
+                      const Divider(height: 1, color: Color(0xFF384452)),
                   itemBuilder: (context, index) {
-                    final episode = episodes[index];
-                    final loading =
-                        _loadingEpisode == (subject.subjectId, episode);
-                    return Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: ChoiceChip(
-                        label: loading
-                            ? const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
+                    final item = _searchResults[index];
+                    final selected = subject?.subjectId == item.subjectId;
+                    return Semantics(
+                      selected: selected,
+                      child: ListTile(
+                        onTap: () => _selectSubject(item),
+                        selected: selected,
+                        selectedTileColor: colors.primary.withValues(
+                          alpha: 0.16,
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                        ),
+                        minTileHeight: 48,
+                        minLeadingWidth: 20,
+                        horizontalTitleGap: 12,
+                        leading: selected
+                            ? Icon(
+                                Icons.check_circle_rounded,
+                                color: colors.primary,
+                                size: 22,
                               )
-                            : Text('E$episode'),
-                        selected: widget.defaultEpisode == episode,
-                        onSelected: loading
-                            ? null
-                            : (_) => _loadDanmaku(subject, episode),
+                            : const SizedBox(width: 22),
+                        title: Text(
+                          item.nameCn ?? item.name ?? '未知',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                          ),
+                        ),
                       ),
                     );
                   },
                 ),
+              ),
+            ),
+          ),
+        ],
+        if (subject != null) ...[
+          const SizedBox(height: 20),
+          const Text(
+            '选择集数',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 12),
+          FutureBuilder<List<int>>(
+            future: _episodes,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState != ConnectionState.done) {
+                return const LinearProgressIndicator(semanticsLabel: '正在加载集数');
+              }
+              if (snapshot.hasError) return const Text('剧集加载失败');
+              final episodes = snapshot.data ?? const [];
+              if (episodes.isEmpty) return const Text('暂无集数信息');
+              return LayoutBuilder(
+                builder: (context, constraints) {
+                  final minWidth =
+                      64 * MediaQuery.textScalerOf(context).scale(14) / 14;
+                  final columns = ((constraints.maxWidth + 8) / (minWidth + 8))
+                      .floor()
+                      .clamp(1, 6);
+                  final width =
+                      (constraints.maxWidth - (columns - 1) * 8) / columns;
+                  return Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final episode in episodes)
+                        _buildEpisodeButton(subject, episode, width),
+                    ],
+                  );
+                },
               );
             },
           ),
+          const SizedBox(height: 10),
+          const Text(
+            '点击集数即可重新关联弹幕',
+            style: TextStyle(color: _muted, fontSize: 13),
+          ),
         ],
       ],
+    );
+  }
+
+  Widget _buildEpisodeButton(
+    BgmSubjectInfo subject,
+    int episode,
+    double width,
+  ) {
+    final loading = _loadingEpisode == (subject.subjectId, episode);
+    final matchesSubject = _matchedSubject != null
+        ? _matchedSubject!.subjectId == subject.subjectId
+        : subject.searchTitles.contains(widget.defaultTitle?.trim());
+    final selected =
+        matchesSubject && (_matchedEpisode ?? widget.defaultEpisode) == episode;
+    return SizedBox(
+      width: width,
+      child: Semantics(
+        selected: selected,
+        label: '第 $episode 话${loading ? "，正在关联" : ""}',
+        child: FilledButton(
+          style: _buttonStyle(context, selected: selected),
+          onPressed: loading ? null : () => _loadDanmaku(subject, episode),
+          child: loading
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : Text(episode.toString().padLeft(2, '0')),
+        ),
+      ),
     );
   }
 }

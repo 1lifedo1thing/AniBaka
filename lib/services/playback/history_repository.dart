@@ -131,7 +131,7 @@ class HistoryRepository {
 
   List<Map<String, dynamic>> getHistoryList() => _readList(_historyKey);
 
-  ({int episodeIndex, int lineIndex})? _findResumeSelection(
+  ({int episodeIndex, int lineIndex, int watchTime})? _findResumeSelection(
     PlaybackRequest request,
     Iterable<Map> records,
     int? bgmId,
@@ -150,6 +150,7 @@ class HistoryRepository {
       return (
         episodeIndex: episodeIndex,
         lineIndex: lineIndex > 0 ? lineIndex : 1,
+        watchTime: toInt(record['watchTime']) ?? 0,
       );
     }
     return null;
@@ -158,9 +159,26 @@ class HistoryRepository {
   ({int episodeIndex, int lineIndex})? getResumeSelection(
     PlaybackRequest request, {
     int? bgmId,
-  }) =>
-      _findResumeSelection(request, _readList(_resumeKey), bgmId) ??
-      _findResumeSelection(request, _readList(_historyKey), bgmId);
+  }) {
+    final remembered = _findResumeSelection(
+      request,
+      _readList(_resumeKey),
+      bgmId,
+    );
+    final watched = _findResumeSelection(
+      request,
+      _readList(_historyKey),
+      bgmId,
+    );
+    final latest =
+        remembered == null ||
+            (watched != null && watched.watchTime > remembered.watchTime)
+        ? watched
+        : remembered;
+    return latest == null
+        ? null
+        : (episodeIndex: latest.episodeIndex, lineIndex: latest.lineIndex);
+  }
 
   Future<void> rememberEpisode({
     required PlaybackRequest request,
@@ -243,7 +261,7 @@ class HistoryRepository {
     int? bgmId,
   }) async {
     try {
-      if (durationMs <= 0 || positionMs <= _minPositionToSaveMs) return;
+      if (durationMs <= 0 || positionMs < 0) return;
 
       final record = <String, dynamic>{
         'id': request.metadata['id'],
@@ -269,6 +287,10 @@ class HistoryRepository {
 
       final key = _localKey(record);
       final list = _readList(_historyKey);
+      if (positionMs <= _minPositionToSaveMs &&
+          !list.any((item) => _localKey(item) == key)) {
+        return;
+      }
       final next = <Map<String, dynamic>>[record];
       for (var i = 0; i < list.length; i++) {
         final item = list[i];
@@ -313,16 +335,55 @@ class HistoryRepository {
   static bool isEpisodeWatched(String videoId, int episodeIndex) =>
       readProgress('${videoId}_${episodeIndex}_1').inSeconds > 30;
 
-  static Duration readProgress(String key) => Duration(
-    milliseconds:
-        AppStorage.videoProgressBox.get(key)?['positionMs'] as int? ?? 0,
-  );
+  static Map? _readProgress(String key) =>
+      Hive.isBoxOpen(AppStorage.videoProgressBoxName)
+      ? AppStorage.videoProgressBox.get(key)
+      : null;
 
-  Future<void> saveProgress(String key, Duration position) =>
-      AppStorage.videoProgressBox.put(key, {
-        'positionMs': position.inMilliseconds,
-        'updateTime': DateTime.now().millisecondsSinceEpoch,
-      });
+  static Duration readProgress(String key) =>
+      Duration(milliseconds: toInt(_readProgress(key)?['positionMs']) ?? 0);
+
+  /// Use the latest record for this episode, including history from another
+  /// matched source or a synced device. A newer rewind must win over old progress.
+  Duration getResumePosition({
+    required String videoKey,
+    required PlaybackRequest request,
+    int? bgmId,
+  }) {
+    final progress = _readProgress(videoKey);
+    var position = toInt(progress?['positionMs']) ?? 0;
+    var duration = toInt(progress?['durationMs']) ?? 0;
+    var updated = toInt(progress?['updateTime']) ?? 0;
+    if (request.source != '_local') {
+      for (final record in getHistoryList()) {
+        if (toInt(record['index']) != request.episodeIndex ||
+            !_sameAnime(request.metadata, record, bgmId: bgmId)) {
+          continue;
+        }
+        final time = toInt(record['watchTime']) ?? 0;
+        if (progress == null || time > updated) {
+          position = toInt(record['position']) ?? 0;
+          duration = toInt(record['duration']) ?? 0;
+          updated = time;
+        }
+        break;
+      }
+    }
+    if (position <= 0 || (duration > 0 && position >= duration)) {
+      return Duration.zero;
+    }
+    return Duration(milliseconds: position);
+  }
+
+  Future<void> saveProgress(
+    String key,
+    Duration position, {
+    Duration? duration,
+  }) => AppStorage.videoProgressBox.put(key, {
+    'positionMs': position.inMilliseconds,
+    if (duration != null) 'durationMs': duration.inMilliseconds,
+    'updateTime': DateTime.now().millisecondsSinceEpoch,
+  });
 
   Future<void> clearHistory() async {
     await Future.wait([

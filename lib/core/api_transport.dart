@@ -100,6 +100,7 @@ class ApiTransport {
     Duration? timeout,
     bool notifyOnError = true,
     Future<void>? abortTrigger,
+    T Function()? onNotFound,
   }) async {
     try {
       final response = await _send(
@@ -111,6 +112,11 @@ class ApiTransport {
       );
       return read(response.body);
     } catch (error) {
+      if (error is ApiException &&
+          error.statusCode == 404 &&
+          onNotFound != null) {
+        return onNotFound();
+      }
       if (notifyOnError) onError?.call(error);
       rethrow;
     }
@@ -212,6 +218,16 @@ class ApiTransport {
     timeout: timeout,
     abortTrigger: abortTrigger,
   );
+
+  /// An optional resource may be absent (HTTP 404 or explicit null data).
+  /// Other failures keep the usual exception and notification behavior.
+  Future<T?> getOptionalData<T extends Object>(String url) => _request<T?>(
+    'GET',
+    url,
+    (body) => unwrap<T?>(decodeJson<Map<String, dynamic>>(body)),
+    onNotFound: () => null,
+  );
+
   Future<T> postData<T>(
     String url,
     Object? data, {
@@ -223,6 +239,15 @@ class ApiTransport {
     data: data,
     notifyOnError: notifyOnError,
   );
+
+  Future<T> putData<T>(String url, Object? data, {bool notifyOnError = true}) =>
+      _request(
+        'PUT',
+        url,
+        (body) => unwrap<T>(decodeJson<Map<String, dynamic>>(body)),
+        data: data,
+        notifyOnError: notifyOnError,
+      );
 
   void close() => client.close();
 }

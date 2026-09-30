@@ -4,16 +4,8 @@ import 'package:baka/models/subtitle_config.dart';
 import 'package:baka/widgets/baka_player/controller.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:baka/widgets/player/settings_panel.dart';
-import 'package:baka/widgets/dialog/input_dialog.dart';
 
 export 'package:baka/models/subtitle_config.dart';
-
-final _subtitleFontOptions = SubtitleConfig.availableFonts
-    .map(
-      (font) =>
-          SelectionOption<String>(value: font['value']!, label: font['name']!),
-    )
-    .toList(growable: false);
 
 final _subtitleFontLabels = {
   for (final font in SubtitleConfig.availableFonts)
@@ -93,21 +85,41 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
     if (mounted) setState(() => _currentTrack = track);
   }
 
-  Future<void> _selectFont() async {
-    final font = await showAppSelectionDialog<String>(
-      context,
-      title: '选择字体',
-      options: _subtitleFontOptions,
-      currentValue: _config.fontFamily,
-    );
-    if (font != null && font != _config.fontFamily) {
-      _updateConfig(_config.copyWith(fontFamily: font), persist: true);
-    }
-  }
+  Future<void> _selectFont() => showPlayerSettingsPanel(
+    context,
+    Builder(
+      builder: (pageContext) => PanelContainer(
+        title: '选择字体',
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            for (final font in _subtitleFontLabels.entries)
+              ListTile(
+                title: Text(font.value),
+                selected: font.key == _config.fontFamily,
+                trailing: font.key == _config.fontFamily
+                    ? const Icon(Icons.check_rounded)
+                    : null,
+                onTap: () {
+                  if (font.key != _config.fontFamily) {
+                    _updateConfig(
+                      _config.copyWith(fontFamily: font.key),
+                      persist: true,
+                    );
+                  }
+                  Navigator.of(pageContext).pop();
+                },
+              ),
+          ],
+        ),
+      ),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final compact = isCompactPlayerPanel(context);
     final primaryColor = theme.colorScheme.primary;
 
     return PanelContainer(
@@ -116,7 +128,7 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
         physics: const BouncingScrollPhysics(),
         slivers: [
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+            padding: playerPanelContentPadding(context),
             sliver: SliverList(
               delegate: SliverChildListDelegate([
                 const PanelSectionTitle('字幕轨道'),
@@ -156,7 +168,7 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
                   ],
                 ),
 
-                const SizedBox(height: 24),
+                SizedBox(height: compact ? 12 : 24),
 
                 const PanelSectionTitle('字幕外观'),
                 PanelSettingsGroup(
@@ -270,10 +282,10 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
                   ],
                 ),
 
-                const SizedBox(height: 32),
+                SizedBox(height: compact ? 16 : 32),
 
                 PanelResetButton(onPressed: _resetSettings),
-                const SizedBox(height: 32),
+                SizedBox(height: compact ? 16 : 32),
               ]),
             ),
           ),
@@ -336,7 +348,7 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
   Widget _buildFontPicker() {
     final currentLabel =
         _subtitleFontLabels[_config.fontFamily] ??
-        _subtitleFontOptions.first.label;
+        _subtitleFontLabels.values.first;
 
     return FilledButton.tonal(
       onPressed: _selectFont,

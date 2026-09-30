@@ -34,7 +34,9 @@ class AnimeDetailPlaceholder extends StatefulWidget {
 }
 
 class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
-  late final int? _postId;
+  int? _postId;
+  int _loadGeneration = 0;
+  int _collectionRevision = 0;
 
   Animation<double>? _routeAnimation;
   ModalRoute<dynamic>? _route;
@@ -74,8 +76,8 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
     return (postId != null && postId > 0) ? postId : null;
   }
 
-  void _rebuildDetail() {
-    _bgmInfo = BgmInfo.fromData(widget.data);
+  void _rebuildDetail({BgmInfo? bgmInfo}) {
+    _bgmInfo = bgmInfo ?? BgmInfo.fromData(widget.data);
     _detailData = asMap(widget.data['bgmDetailData']) ?? _detailData;
     _detail = AnimeDetailViewData.from(
       source: widget.data,
@@ -88,6 +90,30 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
   @override
   void initState() {
     super.initState();
+    _initializeData(BgmInfo.fromData(widget.data));
+  }
+
+  @override
+  void didUpdateWidget(covariant AnimeDetailPlaceholder oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final bgmInfo = BgmInfo.fromData(widget.data);
+    if (_postId == toInt(widget.data['id']) &&
+        (bgmInfo.subjectId == null || bgmInfo.subjectId == _subjectId) &&
+        (_validPostId != null ||
+            bgmInfo.subjectId != null ||
+            oldWidget.data['title'] == widget.data['title'])) {
+      return;
+    }
+    _initializeData(bgmInfo);
+  }
+
+  void _initializeData(BgmInfo bgmInfo) {
+    _loadGeneration++;
+    _collectionRevision = 0;
+    _pendingInitialUpdates.clear();
+    _collection = null;
+    _isCollectionLoading = true;
+    _isStatusUpdating = false;
     _postId = toInt(widget.data['id']);
     _initialComments = asMapList(widget.data['bgmComments']);
     _initialCommentTotal =
@@ -95,15 +121,16 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
     // Hydrate from the API-owned cache before constructing the first frame.
     // A warm request still returns a Future; queuing its .then callback behind
     // the transition would incorrectly animate default content for 320 ms.
-    final subjectId = BgmInfo.fromData(widget.data).subjectId;
-    if (subjectId != null) {
-      _anibakaData = AniBakaApi.peekAnimeDetail(subjectId);
-      _detailData =
-          asMap(widget.data['bgmDetailData']) ?? peekBgmSubject(subjectId);
-    }
-    _rebuildDetail();
+    final subjectId = bgmInfo.subjectId;
+    _anibakaData = subjectId == null
+        ? null
+        : AniBakaApi.peekAnimeDetail(subjectId);
+    _detailData =
+        asMap(widget.data['bgmDetailData']) ??
+        (subjectId == null ? null : peekBgmSubject(subjectId));
+    _rebuildDetail(bgmInfo: bgmInfo);
 
-    _loadInitialData();
+    unawaited(_loadInitialData(_loadGeneration));
   }
 
   @override
@@ -131,8 +158,8 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
     setState(_publishInitialUpdates);
   }
 
-  void _updateInitialState(VoidCallback update) {
-    if (!mounted) return;
+  void _updateInitialState(int generation, VoidCallback update) {
+    if (!mounted || generation != _loadGeneration) return;
     if (_initialRouteTransitionFinished && _canPublishInitialUpdates) {
       setState(update);
     } else {
@@ -156,22 +183,23 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
     NavigationService.toPlayer(context, widget.data, autoMatch: true);
   }
 
-  Future<void> _loadInitialData() async {
+  Future<void> _loadInitialData(int generation) async {
     var resolved = _bgmInfo;
+    final collectionRevision = _collectionRevision;
     // Phase 1: 解析 bgmId（若未知）
     if (_subjectId == null) {
       try {
         resolved = await resolveBgmFromData(widget.data);
-        if (!mounted) return;
+        if (!mounted || generation != _loadGeneration) return;
+        final data = widget.data;
         if (resolved.subjectId != null) {
-          widget.data['bgmId'] = resolved.subjectId;
+          data['bgmId'] = resolved.subjectId;
         }
-        if (resolved.score != null) widget.data['score'] = resolved.score;
+        if (resolved.score != null) data['score'] = resolved.score;
         if (resolved.imageUrl != null) {
-          widget.data['bgmImageUrl'] = resolved.imageUrl;
+          data['bgmImageUrl'] = resolved.imageUrl;
         }
-        _updateInitialState(() {
-          _bgmInfo = resolved;
+        _updateInitialState(generation, () {
           _rebuildDetail();
         });
       } catch (e) {
@@ -181,10 +209,10 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
 
     // Subject resolution is available to requests even while its UI update is
     // queued until the transition settles.
-    if (!mounted) return;
+    if (!mounted || generation != _loadGeneration) return;
     final bgmId = resolved.subjectId;
     if (bgmId == null) {
-      _updateInitialState(() => _isCollectionLoading = false);
+      _updateInitialState(generation, () => _isCollectionLoading = false);
       return;
     }
 
@@ -194,8 +222,9 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
     if (_anibakaData == null) {
       AniBakaApi.getAnimeDetail(bgmId)
           .then((data) {
-            _updateInitialState(() {
-              _anibakaData = asMap(data);
+            if (data == null) return;
+            _updateInitialState(generation, () {
+              _anibakaData = data;
               _rebuildDetail();
             });
           })
@@ -208,7 +237,7 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
     if (_detailData == null) {
       getBgmSubject(bgmId)
           .then((data) {
-            _updateInitialState(() {
+            _updateInitialState(generation, () {
               _detailData = data;
               widget.data['bgmDetailData'] = data;
               _rebuildDetail();
@@ -223,14 +252,18 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
     collections
         .getByBgmId(bgmId)
         .then((collection) {
-          _updateInitialState(() {
+          if (collectionRevision != _collectionRevision) return;
+          _updateInitialState(generation, () {
+            // This update may have waited behind a route transition while the
+            // user saved a newer collection status.
+            if (collectionRevision != _collectionRevision) return;
             _collection = collection;
             _isCollectionLoading = false;
           });
         })
         .catchError((Object e) {
           debugPrint('获取收藏状态失败: $e');
-          _updateInitialState(() => _isCollectionLoading = false);
+          _updateInitialState(generation, () => _isCollectionLoading = false);
         });
   }
 
@@ -246,54 +279,58 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
     );
   }
 
-  Future<void> _updateCollectionStatus(CollectionStatus status) async {
-    if (_isStatusUpdating) return;
-    setState(() => _isStatusUpdating = true);
-
-    try {
-      if (_collection != null && _collection!.status == status.value) {
-        await _deleteCollection();
-        return;
-      }
-
-      HapticFeedback.mediumImpact();
-      final result = await collections.addOrUpdate(
-        _buildCollection(status.value),
-      );
-      if (result != null && mounted) {
-        setState(() => _collection = result);
-        showSnackBar('已标记为「${status.label}」');
-      } else if (mounted) {
-        showSnackBar('操作失败，请重试');
-      }
-    } catch (e) {
-      debugPrint('更新收藏状态失败: $e');
-      if (mounted) showSnackBar('操作失败: $e');
-    } finally {
-      if (mounted) setState(() => _isStatusUpdating = false);
-    }
-  }
-
-  Future<void> _deleteCollection() async {
-    if (_collection == null) return;
+  Future<void> _updateCollectionStatus(CollectionStatus? status) async {
+    if (!mounted || _isStatusUpdating) return;
+    final collection = _collection;
+    final removing = status == null || collection?.status == status.value;
+    if (removing && collection == null) return;
+    final generation = _loadGeneration;
+    // This is only a request guard; changing it has no visible UI effect.
+    _isStatusUpdating = true;
     HapticFeedback.mediumImpact();
+
     try {
-      final bgmId = _collection!.bgmId ?? _subjectId;
-      bool success = false;
-      if (bgmId != null) {
-        success = await collections.deleteByBgmId(bgmId);
-      } else {
+      if (removing) {
+        final bgmId = collection!.bgmId ?? _subjectId;
         final postId = _validPostId;
-        if (postId != null) {
-          success = await collections.delete(postId);
+        final success = bgmId != null
+            ? await collections.deleteByBgmId(bgmId)
+            : postId != null && await collections.delete(postId);
+        if (!mounted || generation != _loadGeneration) return;
+        if (success) {
+          _collectionRevision++;
+          setState(() {
+            _collection = null;
+            _isCollectionLoading = false;
+          });
+          showSnackBar('已取消收藏');
+        }
+      } else {
+        final result = await collections.addOrUpdate(
+          _buildCollection(status.value),
+        );
+        if (!mounted || generation != _loadGeneration) return;
+        if (result != null) {
+          _collectionRevision++;
+          setState(() {
+            _collection = result;
+            _isCollectionLoading = false;
+          });
+          showSnackBar('已标记为「${status.label}」');
+        } else {
+          showSnackBar('操作失败，请重试');
         }
       }
-      if (success && mounted) {
-        setState(() => _collection = null);
-        showSnackBar('已取消收藏');
-      }
     } catch (e) {
-      if (mounted) showSnackBar(e.toString(), isError: true);
+      if (!mounted || generation != _loadGeneration) return;
+      if (removing) {
+        showSnackBar(e.toString(), isError: true);
+      } else {
+        debugPrint('更新收藏状态失败: $e');
+        showSnackBar('操作失败: $e');
+      }
+    } finally {
+      if (generation == _loadGeneration) _isStatusUpdating = false;
     }
   }
 
@@ -308,22 +345,26 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
   }
 
   void _showCollectionSheet() {
+    final collection = _collection;
+    final generation = _loadGeneration;
     HapticFeedback.selectionClick();
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       builder: (ctx) => CollectionStatusSheet(
-        currentStatus: _collection != null
-            ? CollectionStatus.fromValue(_collection!.status)
+        currentStatus: collection != null
+            ? CollectionStatus.fromValue(collection.status)
             : null,
         onSelect: (status) {
           Navigator.pop(ctx);
-          _updateCollectionStatus(status);
+          if (generation == _loadGeneration) _updateCollectionStatus(status);
         },
-        onRemove: _collection != null
+        onRemove: collection != null
             ? () {
                 Navigator.pop(ctx);
-                _deleteCollection();
+                if (generation == _loadGeneration) {
+                  _updateCollectionStatus(null);
+                }
               }
             : null,
       ),
@@ -352,15 +393,16 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
   }
 
   Widget _buildContent() {
-    final isWide = MediaQuery.of(context).size.width > 800;
-    final platform = Theme.of(context).platform;
+    final isWide = MediaQuery.sizeOf(context).width > 800;
+    final theme = Theme.of(context);
+    final platform = theme.platform;
     final useBackdrop =
         isWide &&
         (platform == TargetPlatform.windows ||
             platform == TargetPlatform.macOS ||
             platform == TargetPlatform.linux);
     final tabs = _buildTabs(isWide);
-    final surfaceColor = Theme.of(context).scaffoldBackgroundColor;
+    final surfaceColor = theme.scaffoldBackgroundColor;
 
     return Stack(
       children: [
@@ -436,7 +478,9 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
                       ),
                       dividerColor: Colors.transparent,
                       splashFactory: NoSplash.splashFactory,
-                      overlayColor: WidgetStateProperty.all(Colors.transparent),
+                      overlayColor: const WidgetStatePropertyAll(
+                        Colors.transparent,
+                      ),
                       tabs: [for (final tab in tabs) Tab(text: tab.$1)],
                     );
 
@@ -508,21 +552,12 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
         '概览',
         (_) {
           final summary = _buildSummarySection(_detail.summary);
-          final genresSection = _detail.genres.isEmpty
-              ? const SizedBox.shrink()
-              : _buildGenresSection(_detail.genres);
           return _wrapTabContent(
             isWide
                 ? Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        flex: 2,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [summary],
-                        ),
-                      ),
+                      Expanded(flex: 2, child: summary),
                       if (_detail.infobox.isNotEmpty) ...[
                         const SizedBox(width: 32),
                         Expanded(
@@ -566,7 +601,9 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
                     children: [
                       summary,
                       const SizedBox(height: 24),
-                      genresSection,
+                      _detail.genres.isEmpty
+                          ? const SizedBox.shrink()
+                          : _buildGenresSection(_detail.genres),
                     ],
                   ),
           );
@@ -652,6 +689,13 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
   }
 
   Widget _buildGenresSection(List<String> genres) {
+    final cardColor = _cardColor;
+    final genreStyle = TextStyle(
+      color: _isDark ? Colors.white70 : const Color(0xFF3A3A3C),
+      fontSize: 13,
+      fontWeight: FontWeight.w600,
+      letterSpacing: 0.2,
+    );
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Column(
@@ -678,18 +722,10 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
                     vertical: 8,
                   ),
                   decoration: BoxDecoration(
-                    color: _cardColor,
-                    borderRadius: BorderRadius.circular(8),
+                    color: cardColor,
+                    borderRadius: const BorderRadius.all(Radius.circular(8)),
                   ),
-                  child: Text(
-                    genre,
-                    style: TextStyle(
-                      color: _isDark ? Colors.white70 : const Color(0xFF3A3A3C),
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.2,
-                    ),
-                  ),
+                  child: Text(genre, style: genreStyle),
                 ),
             ],
           ),
@@ -810,6 +846,20 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
     bool isWide = false,
   }) {
     final itemCount = infobox.length < 30 ? infobox.length : 30;
+    final labelStyle = TextStyle(
+      color: _subtitleColor,
+      fontSize: 14,
+      fontWeight: FontWeight.w500,
+      letterSpacing: 0,
+    );
+    final valueStyle = TextStyle(
+      color: _textColor,
+      fontSize: 14,
+      height: 1.5,
+      fontWeight: FontWeight.w500,
+      letterSpacing: 0.2,
+    );
+    final dividerColor = _dividerColor;
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: isWide ? 0 : 20),
       child: Column(
@@ -824,25 +874,14 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
                     width: 90,
                     child: Text(
                       infobox[i]['key'] as String? ?? '',
-                      style: TextStyle(
-                        color: _subtitleColor,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        letterSpacing: 0,
-                      ),
+                      style: labelStyle,
                     ),
                   ),
                   const SizedBox(width: 16),
                   Expanded(
                     child: Text(
                       _formatInfoboxValue(infobox[i]['value']),
-                      style: TextStyle(
-                        color: _textColor,
-                        fontSize: 14,
-                        height: 1.5,
-                        fontWeight: FontWeight.w500,
-                        letterSpacing: 0.2,
-                      ),
+                      style: valueStyle,
                     ),
                   ),
                 ],
@@ -850,7 +889,7 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
             ),
             if (i < itemCount - 1)
               Divider(
-                color: _dividerColor,
+                color: dividerColor,
                 height: 1,
                 thickness: 0.5,
                 indent: 106,
@@ -936,7 +975,7 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
     }
 
     if (tvdbId != null && tvdbId.isNotEmpty) {
-      final tvdbUrl = (tvdbId.contains('/') || tvdbId.startsWith('series/'))
+      final tvdbUrl = tvdbId.contains('/')
           ? 'https://thetvdb.com/$tvdbId'
           : 'https://thetvdb.com/dereferer/series/$tvdbId';
       links.add(('TVDB', tvdbUrl));

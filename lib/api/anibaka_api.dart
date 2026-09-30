@@ -86,14 +86,14 @@ final class AniBakaApi {
   );
 
   static Future<AnimeCollection?> getCollectionByPostId(int postId) => _read(
-    apiTransport.getData<Map<String, dynamic>?>(
+    apiTransport.getOptionalData<Map<String, dynamic>>(
       '$_baseUrl/collection/post/$postId',
     ),
     AnimeCollection.fromJson,
   );
 
   static Future<AnimeCollection?> getCollectionByBgmId(int bgmId) => _read(
-    apiTransport.getData<Map<String, dynamic>?>(
+    apiTransport.getOptionalData<Map<String, dynamic>>(
       '$_baseUrl/bgm-collection/$bgmId',
     ),
     AnimeCollection.fromJson,

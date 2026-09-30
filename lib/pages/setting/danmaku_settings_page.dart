@@ -83,6 +83,7 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final compact = isCompactPlayerPanel(context);
     final option = widget.controller.option;
     final blockWords = widget.controller.blockWords;
 
@@ -92,7 +93,7 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
         physics: const BouncingScrollPhysics(),
         slivers: [
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+            padding: playerPanelContentPadding(context),
             sliver: SliverList(
               delegate: SliverChildListDelegate([
                 const PanelSectionTitle('弹幕匹配'),
@@ -113,7 +114,7 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
                     ],
                   ),
                 ),
-                const SizedBox(height: 24),
+                SizedBox(height: compact ? 12 : 24),
 
                 const PanelSectionTitle('弹幕外观'),
 
@@ -199,7 +200,7 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
                   ],
                 ),
 
-                const SizedBox(height: 24),
+                SizedBox(height: compact ? 12 : 24),
 
                 const PanelSectionTitle('弹幕类型'),
                 Row(
@@ -238,7 +239,7 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 24),
+                SizedBox(height: compact ? 12 : 24),
 
                 const PanelSectionTitle('屏蔽管理'),
                 PanelSwitchTile(
@@ -315,10 +316,10 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
                   ),
                 ],
 
-                const SizedBox(height: 32),
+                SizedBox(height: compact ? 16 : 32),
 
                 PanelResetButton(onPressed: _resetSettings),
-                const SizedBox(height: 32),
+                SizedBox(height: compact ? 16 : 32),
               ]),
             ),
           ),

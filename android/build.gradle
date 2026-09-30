@@ -12,6 +12,19 @@ subprojects {
     project.evaluationDependsOn(':app')
 }
 
+// Kotlin incremental caches cannot relativize plugin sources across Windows
+// drives (for example, a C: Pub cache and a D: checkout). Apply this after Kotlin
+// has configured its defaults, preserving incremental compilation on one drive.
+gradle.projectsEvaluated {
+    subprojects {
+        if (project.projectDir.toPath().root != rootProject.projectDir.toPath().root) {
+            tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).each { task ->
+                task.incremental = false
+            }
+        }
+    }
+}
+
 tasks.register("clean", Delete) {
     delete rootProject.buildDir
 }

@@ -10,6 +10,7 @@ import 'package:baka/services/playback/danmaku_controller.dart';
 import 'package:baka/services/playback/playback_settings.dart';
 import 'package:baka/widgets/platform/tv/tv_focusable.dart';
 import 'package:baka/widgets/common/value_selector.dart';
+import 'package:baka/widgets/player/skip_segments_panel.dart';
 
 class TvSettingsPanel extends StatefulWidget {
   final PlaybackController controller;
@@ -289,7 +290,7 @@ class _TvSettingsPanelState extends State<TvSettingsPanel> {
                     valueListenable: _ctrl.preferences,
                     builder: (context, preferences, _) => _buildToggleItem(
                       icon: Icons.skip_next,
-                      title: '智能跳过片头片尾',
+                      title: '自动跳过片头片尾（首集保留）',
                       value: preferences.enableSkipOpEd,
                       onToggle: () {
                         _ctrl.updatePreferences(
@@ -302,6 +303,20 @@ class _TvSettingsPanelState extends State<TvSettingsPanel> {
                   ),
                   const SizedBox(height: 8),
 
+                  TvFocusable(
+                    onPressed: () => SkipSegmentsPanel.show(context, _ctrl),
+                    child: const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Row(
+                        children: [
+                          Icon(Icons.edit_note),
+                          SizedBox(width: 12),
+                          Text('查看与校正区间'),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
                   ValueListenableBuilder<PlaybackPreferences>(
                     valueListenable: _ctrl.preferences,
                     builder: (context, preferences, _) => _buildToggleItem(

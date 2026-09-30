@@ -21,6 +21,12 @@ class _ScaleButtonState extends State<ScaleButton> {
   }
 
   @override
+  void didUpdateWidget(covariant ScaleButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.onTap == null) _pressed = false;
+  }
+
+  @override
   Widget build(BuildContext context) {
     final bool isEnabled = widget.onTap != null;
     return GestureDetector(

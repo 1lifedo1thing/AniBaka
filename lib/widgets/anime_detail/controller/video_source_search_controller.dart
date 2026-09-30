@@ -208,7 +208,12 @@ class VideoSourceSearchController extends ChangeNotifier {
   final _engine = const SourceMatchEngine();
   Future<void>? _adapterInitFuture;
 
-  Future<void> ensureAdapterReady() => _adapterInitFuture ??= _adapter.init();
+  Future<void> ensureAdapterReady() => _adapterInitFuture ??= _adapter
+      .init()
+      .catchError((Object error, StackTrace stack) {
+        _adapterInitFuture = null;
+        Error.throwWithStackTrace(error, stack);
+      });
 
   final _results = <String, SearchResultItem>{};
   final _sourceCounts = <String, int>{};
@@ -315,6 +320,10 @@ class VideoSourceSearchController extends ChangeNotifier {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    if (identical(globalCached, this)) {
+      globalCached = null;
+      globalCachedTitle = null;
+    }
     _sourceOperation.cancel();
     _sourceOperation.close();
     _runId++;
@@ -367,7 +376,7 @@ class VideoSourceSearchController extends ChangeNotifier {
     for (final c in pool) {
       final clean = c
           .replaceAll(_reBrackets, '')
-          .replaceAll(RegExp(r'\s+'), ' ')
+          .replaceAll(_reWhitespace, ' ')
           .trim();
       final base = RegUtils.extractBaseTitle(c);
       for (final candidate in [c, clean, base]) {
@@ -395,7 +404,7 @@ class VideoSourceSearchController extends ChangeNotifier {
   }
 
   Future<void> toggleAutoAlias(String alias) async {
-    if (isSearching) return;
+    if (_disposed || isSearching) return;
     if (!activeAutoAliases.remove(alias)) {
       activeAutoAliases.add(alias);
     }
@@ -404,36 +413,36 @@ class VideoSourceSearchController extends ChangeNotifier {
   }
 
   Future<bool> addManualAlias(String value) async {
-    if (isSearching) return false;
-    final next = List<String>.of(manualAliases);
-    final seen = {_norm(_primary), for (final a in next) _norm(a)};
-    var added = false;
+    if (_disposed || isSearching) return false;
+    List<String>? next;
+    final seen = {_norm(_primary), for (final a in manualAliases) _norm(a)};
     for (final part in value.split(_reAliasSep)) {
       final alias = part.trim();
       if (alias.isNotEmpty && seen.add(_norm(alias))) {
-        next.add(alias);
-        added = true;
+        (next ??= List.of(manualAliases)).add(alias);
       }
     }
-    if (!added) return false;
+    if (next == null) return false;
     manualAliases = next;
+    final runId = _runId;
     notifyListeners();
     await MatchMemoryService.saveAliases(_aliasKey, next);
-    await startSearch();
+    if (_alive(runId)) await startSearch();
     return true;
   }
 
   Future<void> removeManualAlias(String alias) async {
-    if (isSearching) return;
-    manualAliases = manualAliases
-        .where((a) => _norm(a) != _norm(alias))
-        .toList();
+    if (_disposed || isSearching) return;
+    final normalized = _norm(alias);
+    manualAliases = manualAliases.where((a) => _norm(a) != normalized).toList();
+    final runId = _runId;
     notifyListeners();
     await MatchMemoryService.saveAliases(_aliasKey, manualAliases);
-    await startSearch();
+    if (_alive(runId)) await startSearch();
   }
 
   Future<void> startSearch() async {
+    if (_disposed) return;
     _cancelAutoTimers();
     _completeAutoMatchGate(false);
     _sourceOperation.cancel();
@@ -448,16 +457,40 @@ class VideoSourceSearchController extends ChangeNotifier {
     _autoMatchStartedAt = autoMatchMode ? DateTime.now() : null;
     final gate = autoMatchMode ? Completer<bool>() : null;
     _autoMatchGate = gate;
-    _resetState();
+    _releaseRetainedData();
+    _probeScheduler.reset();
     isSearching = true;
     _emitProgress();
 
-    await ensureAdapterReady();
+    try {
+      await operation.wait(ensureAdapterReady());
+    } catch (_) {
+      if (!_alive(runId) || operation.isCancelled) return;
+      _errors.add('搜索初始化失败');
+      _stopBackgroundWork();
+      _completeAutoMatchGate(false);
+      isSearching = false;
+      _emitProgress();
+      if (_alive(runId) && autoMatchMode && !_userSelected) {
+        _recordAutoMatchDuration();
+        onMatchFailed?.call();
+      }
+      return;
+    }
     if (!_alive(runId)) return;
 
     final memoryFuture = autoMatchMode ? _tryMemory(runId) : null;
-    final quick = sourceCatalog.quickSearchSources;
-    final custom = sourceCatalog.enabledCustomSources;
+    final sources = [
+      for (final source in sourceCatalog.quickSearchSources)
+        (key: source.key, error: '${source.displayName} 搜索失败'),
+      for (final source in sourceCatalog.enabledCustomSources)
+        (
+          key: AdapterRegistry.customSourceKey(source.id),
+          error: '${source.name} 搜索失败',
+        ),
+      // 站内源只用于手动列表，不参与自动匹配。
+      if (!autoMatchMode) (key: 'internal', error: '站内搜索失败'),
+    ];
 
     // 自动匹配只搜主标题：最快的路径，别名回退已移除。
     final keywords = autoMatchMode
@@ -468,46 +501,20 @@ class VideoSourceSearchController extends ChangeNotifier {
             ...automaticAliases.where(activeAutoAliases.contains).take(3),
           ];
 
-    _progressing
-      ..clear()
-      ..addAll([
-        if (!autoMatchMode) 'internal',
-        ...quick.map((s) => s.key),
-        ...custom.map((s) => AdapterRegistry.customSourceKey(s.id)),
-      ]);
+    final keywordPlan = SourceMatchEngine.planKeywords(
+      autoMatch: autoMatchMode,
+      titles: keywords,
+    );
+    _progressing.addAll(sources.map((source) => source.key));
 
     final tasks = [
-      for (final s in quick)
+      for (final source in sources)
         () => _searchSource(
           runId: runId,
           operation: operation,
-          keywords: keywords,
-          sourceKey: s.key,
-          load: (kw) => _adapter.search(s.key, kw, skipBgmEnhancement: true),
-          errorMsg: '${s.displayName} 搜索失败',
-        ),
-      for (final s in custom)
-        () => _searchSource(
-          runId: runId,
-          operation: operation,
-          keywords: keywords,
-          sourceKey: AdapterRegistry.customSourceKey(s.id),
-          load: (kw) => _adapter.search(
-            AdapterRegistry.customSourceKey(s.id),
-            kw,
-            skipBgmEnhancement: true,
-          ),
-          errorMsg: '${s.name} 搜索失败',
-        ),
-      // 站内源只用于手动列表，不参与自动匹配。
-      if (!autoMatchMode)
-        () => _searchSource(
-          runId: runId,
-          operation: operation,
-          keywords: keywords,
-          sourceKey: 'internal',
-          load: _loadInternal,
-          errorMsg: '站内搜索失败',
+          keywordPlan: keywordPlan,
+          sourceKey: source.key,
+          errorMsg: source.error,
         ),
     ];
 
@@ -549,7 +556,7 @@ class VideoSourceSearchController extends ChangeNotifier {
     if (!_alive(runId)) return;
     isSearching = false;
     _emitProgress();
-    if (!_autoMatched && !_userSelected) {
+    if (_alive(runId) && !_autoMatched && !_userSelected) {
       _recordAutoMatchDuration();
       onMatchFailed?.call();
     }
@@ -677,6 +684,9 @@ class VideoSourceSearchController extends ChangeNotifier {
       }
     } catch (_) {}
 
+    if (!_alive(runId) || _autoMatched || _userSelected || _autoMatchSettled) {
+      return false;
+    }
     try {
       await MatchMemoryService.remove(bgmId: bgmId, title: _primary);
     } catch (_) {}
@@ -687,12 +697,13 @@ class VideoSourceSearchController extends ChangeNotifier {
   bool _claimAutoMatch(int runId, SearchResultItem item, PlaybackRequest data) {
     if (!_alive(runId) || _autoMatched || _userSelected) return false;
     if (_autoMatchSettled) return false;
+    final gate = _autoMatchGate;
     _autoMatched = true;
     _stopBackgroundWork();
     _recordAutoMatchDuration();
+    _completeGate(gate, true);
     onMatchFound?.call(data.copyWith());
     unawaited(persistMatchMemory(item, data));
-    _completeAutoMatchGate(true);
     return true;
   }
 
@@ -749,11 +760,6 @@ class VideoSourceSearchController extends ChangeNotifier {
 
   bool _alive(int runId) => !_disposed && runId == _runId;
 
-  void _resetState() {
-    _releaseRetainedData();
-    _probeScheduler.reset();
-  }
-
   void _emitProgress() {
     if (!_disposed) notifyListeners();
   }
@@ -761,12 +767,11 @@ class VideoSourceSearchController extends ChangeNotifier {
   Future<void> _searchSource({
     required int runId,
     required SourceOperation operation,
-    required List<String> keywords,
+    required SourceKeywordPlan keywordPlan,
     required String sourceKey,
-    required Future<List<SourceSearchResult>> Function(String) load,
     required String errorMsg,
   }) async {
-    if (keywords.isEmpty) {
+    if (keywordPlan.isEmpty) {
       return _finishSource(runId, sourceKey);
     }
     var attempted = 0;
@@ -779,7 +784,11 @@ class VideoSourceSearchController extends ChangeNotifier {
         timeout: autoMatchMode ? _autoSourceSearchBudget : null,
       );
       try {
-        return await search.run(() => load(kw));
+        return await search.run(
+          () => sourceKey == 'internal'
+              ? _loadInternal(kw)
+              : _adapter.search(sourceKey, kw, skipBgmEnhancement: true),
+        );
       } catch (_) {
         return null;
       } finally {
@@ -788,10 +797,6 @@ class VideoSourceSearchController extends ChangeNotifier {
       }
     }
 
-    final keywordPlan = SourceMatchEngine.planKeywords(
-      autoMatch: autoMatchMode,
-      titles: keywords,
-    );
     final raceKws = keywordPlan.race;
     final extraKeywords = keywordPlan.fallback;
 
@@ -1113,6 +1118,7 @@ class VideoSourceSearchController extends ChangeNotifier {
     required int preferredLine,
     String? currentSource,
   }) {
+    if (_disposed) return const [];
     final context = _syncContext();
     final key = (
       context,
@@ -1187,7 +1193,7 @@ class VideoSourceSearchController extends ChangeNotifier {
   ) {
     final probe = candidate.probe;
     if (probe.isInstantPlayable) {
-      return Future.value(probe);
+      return _sourceOperation.wait(Future.value(probe));
     }
     return ensureCandidatePlayable(
       candidate.item,
@@ -1246,65 +1252,38 @@ class VideoSourceSearchController extends ChangeNotifier {
     bool resolveMedia = true,
     bool raceMode = false,
   }) {
-    final wantMedia = resolveMedia;
     final probe = _probeFor(item, episodeIndex, preferredLine);
-    if (probe.isInstantPlayable) {
+    if (probe.isInstantPlayable || (!resolveMedia && probe.isReady)) {
       return Future.value(probe);
-    }
-    if (!wantMedia && probe.isReady) {
-      return Future.value(probe);
-    }
-    // 目录已就绪但还差媒体：升级解析，避免重复拉详情。
-    if (wantMedia &&
-        probe.data != null &&
-        probe.status == SourceProbeStatus.playable) {
-      return _upgradeProbeToMedia(probe, raceMode: raceMode);
     }
     final running = probe.future;
     if (running != null) {
-      if (!wantMedia) return running;
+      if (!resolveMedia || probe.status == SourceProbeStatus.playable) {
+        return running;
+      }
       return running.then((state) {
+        SourceOperation.check();
         if (state.isInstantPlayable ||
-            state.status == SourceProbeStatus.failed) {
+            state.status == SourceProbeStatus.failed ||
+            state.data == null) {
           return state;
         }
-        if (state.data != null) {
-          return _upgradeProbeToMedia(state, raceMode: raceMode);
-        }
-        return state;
+        // 目录请求先完成，再复用其数据升级媒体；共享同一在途探针。
+        return state.future ??
+            _ensureCandidatePlayable(
+              item,
+              episodeIndex: episodeIndex,
+              preferredLine: preferredLine,
+              raceMode: raceMode,
+            );
       });
     }
 
     final future = _resolveProbe(
       probe,
-      resolveMedia: wantMedia,
+      resolveMedia: resolveMedia,
       raceMode: raceMode,
     );
-    probe.future = future;
-    unawaited(
-      future.then<void>(
-        (_) {
-          if (identical(probe.future, future)) probe.future = null;
-        },
-        onError: (Object _) {
-          if (identical(probe.future, future)) probe.future = null;
-        },
-      ),
-    );
-    return future;
-  }
-
-  Future<SourceProbeState> _upgradeProbeToMedia(
-    SourceProbeState probe, {
-    bool raceMode = false,
-  }) {
-    if (probe.isInstantPlayable || probe.data == null) {
-      return Future.value(probe);
-    }
-    final running = probe.future;
-    if (running != null) return running;
-
-    final future = _resolveProbe(probe, resolveMedia: true, raceMode: raceMode);
     probe.future = future;
     void clear() {
       if (identical(probe.future, future)) probe.future = null;
@@ -1422,28 +1401,20 @@ class VideoSourceSearchController extends ChangeNotifier {
 
     // 站内源：目录就绪即可选；若线路已是媒体直链则顺便预取。
     if (sourceKey == 'internal') {
-      final lineIndex = episodeItem.lineAt(preferredLineIndex) != null
-          ? preferredLineIndex
-          : episodeItem.availableLineIndexes.firstOrNull ?? 1;
-      final token = episodeItem.lineAt(lineIndex)?.trim() ?? '';
-      readyData.lineIndex = lineIndex;
-      probe.resolvedLineIndex = lineIndex;
+      final token = episodeItem.lineAt(preferredLineIndex)?.trim() ?? '';
       probe.routeKey = _routeKeyFor(token);
-      probe.data = readyData;
       if (MediaReadiness.isAcceptablePlaybackUrl(token)) {
-        readyData.storePrefetched(
+        return _acceptMedia(
+          probe,
+          readyData,
           episodeIndex: epIndex,
-          lineIndex: lineIndex,
-          episodeId: token,
+          lineIndex: preferredLineIndex,
+          lineToken: token,
           url: token,
           httpHeaders: const {},
         );
-        probe.mediaUrl = token;
-        probe.status = SourceProbeStatus.direct;
-      } else {
-        probe.status = SourceProbeStatus.playable;
       }
-      _resolved.put(probe.item.key, readyData);
+      probe.status = SourceProbeStatus.playable;
       _emitProgress();
       return probe;
     }
@@ -1474,9 +1445,10 @@ class VideoSourceSearchController extends ChangeNotifier {
     final planned = <(int, String)>[];
     final tokens = <String>{};
     var considered = 0;
-    for (final line in [preferred, for (var l = 1; l <= lineCount; l++) l]) {
+    for (var index = 0; index <= lineCount; index++) {
       if (considered >= _autoMatchMaxLines) break;
-      if (planned.any((p) => p.$1 == line)) continue;
+      final line = index == 0 ? preferred : index;
+      if (index != 0 && line == preferred) continue;
       final token = episodeItem.lineAt(line)?.trim() ?? '';
       if (token.isEmpty) continue;
       considered++;
@@ -1535,49 +1507,71 @@ class VideoSourceSearchController extends ChangeNotifier {
 
     final winner = await done.future;
     SourceOperation.check();
+    if (probe.isInstantPlayable) return probe;
     if (winner == null) {
-      if (timedOut) {
-        probe
-          ..data = readyData
-          ..status = SourceProbeStatus.playable
-          ..error = '直链解析超时，仍在后台解析';
-        _resolved.put(probe.item.key, readyData);
-        _emitProgress();
-        return probe;
-      }
-      return _failProbe(probe, readyData, lastError?.toString() ?? '无法解析播放地址');
+      return _failProbe(
+        probe,
+        readyData,
+        timedOut ? '直链解析超时，仍在后台解析' : lastError?.toString() ?? '无法解析播放地址',
+        timedOut: timedOut,
+      );
     }
 
     final (lineIndex, token, media) = winner;
-    readyData.lineIndex = lineIndex;
-    probe
-      ..resolvedLineIndex = lineIndex
-      ..routeKey = _routeKeyFor(token)
-      ..mediaUrl = media.url
-      ..data = readyData
-      ..status = SourceProbeStatus.direct;
-    // 关键：episodeId 必须与 PlaybackContent.currentEpisodeId（线路 token）一致。
-    readyData.storePrefetched(
+    return _acceptMedia(
+      probe,
+      readyData,
       episodeIndex: epIndex,
       lineIndex: lineIndex,
-      episodeId: token,
+      lineToken: token,
       url: media.url,
       httpHeaders: media.httpHeaders,
     );
-    _resolved.put(probe.item.key, readyData);
-    _emitProgress();
-    return probe;
   }
 
   SourceProbeState _failProbe(
     SourceProbeState probe,
     PlaybackRequest readyData,
-    String error,
-  ) {
+    String error, {
+    bool timedOut = false,
+  }) {
     probe
       ..data = readyData
-      ..status = SourceProbeStatus.failed
+      ..status = timedOut
+          ? SourceProbeStatus.playable
+          : SourceProbeStatus.failed
       ..error = error;
+    if (timedOut) _resolved.put(probe.item.key, readyData);
+    _emitProgress();
+    return probe;
+  }
+
+  SourceProbeState _acceptMedia(
+    SourceProbeState probe,
+    PlaybackRequest readyData, {
+    required int episodeIndex,
+    required int lineIndex,
+    required String lineToken,
+    required String url,
+    required Map<String, String> httpHeaders,
+  }) {
+    readyData.lineIndex = lineIndex;
+    // episodeId 必须与 PlaybackContent.currentEpisodeId（线路 token）一致。
+    readyData.storePrefetched(
+      episodeIndex: episodeIndex,
+      lineIndex: lineIndex,
+      episodeId: lineToken,
+      url: url,
+      httpHeaders: httpHeaders,
+    );
+    probe
+      ..resolvedLineIndex = lineIndex
+      ..routeKey = _routeKeyFor(lineToken)
+      ..mediaUrl = url
+      ..data = readyData
+      ..status = SourceProbeStatus.direct
+      ..error = null;
+    _resolved.put(probe.item.key, readyData);
     _emitProgress();
     return probe;
   }
@@ -1601,6 +1595,7 @@ class VideoSourceSearchController extends ChangeNotifier {
       attempt < _manualMaxLines && attempt < lineCount;
       attempt++
     ) {
+      if (probe.isInstantPlayable) return probe;
       final int lineIndex;
       if (attempt == 0) {
         lineIndex = preferred;
@@ -1622,32 +1617,25 @@ class VideoSourceSearchController extends ChangeNotifier {
       try {
         final media = await resolve.timeout(lineTimeout);
         SourceOperation.check();
+        if (probe.isInstantPlayable) return probe;
 
         if (!MediaReadiness.isAcceptablePlaybackUrl(media.url)) {
           lastError = '线路 $lineIndex 返回不可播地址';
           continue;
         }
 
-        readyData.lineIndex = lineIndex;
-        probe.resolvedLineIndex = lineIndex;
-        probe.routeKey = _routeKeyFor(token);
-        probe.mediaUrl = media.url;
-
-        readyData.storePrefetched(
+        return _acceptMedia(
+          probe,
+          readyData,
           episodeIndex: epIndex,
           lineIndex: lineIndex,
-          episodeId: token,
+          lineToken: token,
           url: media.url,
           httpHeaders: media.httpHeaders,
         );
-
-        probe.data = readyData;
-        probe.status = SourceProbeStatus.direct;
-        _resolved.put(probe.item.key, readyData);
-        _emitProgress();
-        return probe;
       } catch (e) {
         SourceOperation.check();
+        if (probe.isInstantPlayable) return probe;
         lastError = e;
         if (e is TimeoutException) {
           timedOut = true;
@@ -1666,19 +1654,13 @@ class VideoSourceSearchController extends ChangeNotifier {
     }
 
     // 媒体全失败：保留目录供 UI 展示，但不标为 direct，避免误匹配。
-    probe.data = readyData;
-    if (timedOut) {
-      // 目录已就绪、直链还在解析：保留为「待取链」，让慢解析回来后自动
-      // 升级，而不是把还能播的源直接判成不可用。
-      probe.status = SourceProbeStatus.playable;
-      probe.error = '直链解析超时，仍在后台解析';
-      _resolved.put(probe.item.key, readyData);
-    } else {
-      probe.status = SourceProbeStatus.failed;
-      probe.error = lastError?.toString() ?? '无法解析播放地址';
-    }
-    _emitProgress();
-    return probe;
+    if (probe.isInstantPlayable) return probe;
+    return _failProbe(
+      probe,
+      readyData,
+      timedOut ? '直链解析超时，仍在后台解析' : lastError?.toString() ?? '无法解析播放地址',
+      timedOut: timedOut,
+    );
   }
 
   /// 竞速档单线路媒体解析预算。
@@ -1702,38 +1684,30 @@ class VideoSourceSearchController extends ChangeNotifier {
       _trackAutoWork(
         resolve
             .then((media) {
-              if (_disposed ||
-                  !_alive(runId) ||
+              if (!_alive(runId) ||
                   SourceOperation.current?.isCancelled == true) {
                 return;
               }
               if (probe.isInstantPlayable) return;
               if (!MediaReadiness.isAcceptablePlaybackUrl(media.url)) return;
 
-              readyData.lineIndex = lineIndex;
-              probe.resolvedLineIndex = lineIndex;
-              probe.routeKey = _routeKeyFor(lineToken);
-              probe.mediaUrl = media.url;
-              probe.status = SourceProbeStatus.direct;
-              probe.error = null;
-              readyData.storePrefetched(
+              _acceptMedia(
+                probe,
+                readyData,
                 episodeIndex: episodeIndex,
                 lineIndex: lineIndex,
-                episodeId: lineToken,
+                lineToken: lineToken,
                 url: media.url,
                 httpHeaders: media.httpHeaders,
               );
-              probe.data = readyData;
-              _resolved.put(probe.item.key, readyData);
               if (kDebugMode) {
                 debugPrint('[AutoMatch] late media accepted: ${media.url}');
               }
-              _emitProgress();
               if (autoMatchMode &&
                   !_autoMatched &&
                   !_userSelected &&
                   !_autoMatchSettled) {
-                _claimAutoMatch(_autoRunId, probe.item, readyData);
+                _claimAutoMatch(runId, probe.item, readyData);
               }
             })
             .catchError((Object _) {}),
@@ -1844,18 +1818,19 @@ class VideoSourceSearchController extends ChangeNotifier {
   PlaybackRequest _mergeSeed(PlaybackRequest request) {
     final seed = seedData;
     if (seed == null) return request;
-    return request.copyWith(
-      metadata: {
-        ...request.metadata,
-        for (final key in const [
-          'bgmId',
-          'score',
-          'bgmDetailData',
-          'bgmImageUrl',
-          'logoUrl',
-        ])
-          if (seed[key] != null) key: seed[key],
-      },
-    );
+    Map<String, dynamic>? metadata;
+    for (final key in const [
+      'bgmId',
+      'score',
+      'bgmDetailData',
+      'bgmImageUrl',
+      'logoUrl',
+    ]) {
+      final value = seed[key];
+      if (value != null) {
+        (metadata ??= Map.of(request.metadata))[key] = value;
+      }
+    }
+    return metadata == null ? request : request.copyWith(metadata: metadata);
   }
 }

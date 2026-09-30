@@ -2,6 +2,7 @@ import 'dart:typed_data';
 import 'dart:async';
 import 'dart:io';
 import 'package:baka/services/torrent/piece_manager.dart';
+import 'package:baka/services/torrent/stream_server.dart';
 import 'package:baka/services/torrent/torrent_model.dart';
 import 'package:baka/services/torrent/torrent_service.dart';
 import 'package:baka/source/engine/torrent_records.dart';
@@ -216,6 +217,114 @@ void main() {
     });
   });
 
+  group('torrent HTTP', () {
+    test('serves exact byte ranges and rejects unsatisfiable ranges', () async {
+      final manager = _streamFixture();
+      final server = TorrentStreamServer();
+      final client = HttpClient();
+      addTearDown(() async {
+        client.close(force: true);
+        await server.stop();
+        manager.dispose();
+      });
+      await server.start(manager);
+      final size = manager.targetFile.length;
+      for (final (range, start, length, status) in [
+        (null, 0, size, 200),
+        ('bytes=0-0', 0, 1, 206),
+        ('bytes=17-42', 17, 26, 206),
+        ('bytes=${size - 7}-', size - 7, 7, 206),
+        ('bytes=-7', size - 7, 7, 206),
+        ('bytes=-${size + 1}', 0, size, 206),
+        ('bytes=17-${size + 1}', 17, size - 17, 206),
+        ('bytes=-999999999999999999999999', 0, size, 206),
+        ('bytes=17-999999999999999999999999', 17, size - 17, 206),
+        ('bytes=$size-', 0, 0, 416),
+        ('bytes=999999999999999999999999-', 0, 0, 416),
+        ('bytes=-0', 0, 0, 416),
+        ('bytes=42-17', 0, 0, 416),
+        ('bytes=-', 0, size, 200),
+        ('items=0-7', 0, size, 200),
+        ('bytes=0-1,4-5', 0, size, 200),
+        ('bytes=0-7junk', 0, size, 200),
+      ]) {
+        final request = await client.getUrl(Uri.parse(server.streamUrl));
+        if (range != null) request.headers.set('Range', range);
+        final response = await request.close();
+        final body = await response.fold<List<int>>([], (a, b) => a..addAll(b));
+        expect(response.statusCode, status, reason: '$range');
+        expect(response.contentLength, length, reason: '$range');
+        expect(
+          response.headers.value('content-range'),
+          status == 206
+              ? 'bytes $start-${start + length - 1}/$size'
+              : status == 416
+              ? 'bytes */$size'
+              : null,
+          reason: '$range',
+        );
+        expect(body, [
+          for (var i = start; i < start + length; i++) i & 0xff,
+        ], reason: '$range');
+      }
+    });
+
+    test(
+      'HEAD answers before missing pieces arrive without reading the body',
+      () async {
+        final manager = _streamFixture(complete: false);
+        final server = TorrentStreamServer();
+        final client = HttpClient();
+        addTearDown(() async {
+          client.close(force: true);
+          await server.stop();
+          manager.dispose();
+        });
+        await server.start(manager);
+        final request = await client.headUrl(Uri.parse(server.streamUrl));
+        request.headers.set('Range', 'bytes=-7');
+        final response = await request.close().timeout(
+          const Duration(seconds: 2),
+        );
+        expect(response.statusCode, 200);
+        expect(response.contentLength, manager.targetFile.length);
+        expect(response.headers.value('content-range'), isNull);
+        expect(await response.isEmpty, isTrue);
+        expect(manager.readBytes, 0);
+      },
+    );
+
+    test(
+      'cached media is read on demand instead of buffering the whole file',
+      () async {
+        final manager = _streamFixture(pieceCount: 256);
+        final server = TorrentStreamServer();
+        final client = HttpClient();
+        addTearDown(() async {
+          client.close(force: true);
+          await server.stop();
+          manager.dispose();
+        });
+        await server.start(manager);
+        final request = await client.getUrl(Uri.parse(server.streamUrl));
+        final response = await request.close();
+        expect(response.statusCode, 200);
+        expect(manager.readBytes, lessThan(manager.targetFile.length));
+        // Read all data as well: backpressure must not truncate a valid response.
+        var received = 0;
+        await for (final chunk in response) {
+          for (var i = 0; i < chunk.length; i++) {
+            if (chunk[i] != ((received + i) & 0xff)) {
+              fail('incorrect media byte at ${received + i}');
+            }
+          }
+          received += chunk.length;
+        }
+        expect(received, manager.targetFile.length);
+      },
+    );
+  });
+
   group('catalog records', () {
     group('DMHY catalogue records', () {
       final seriesParams = _dmhyParams('series');
@@ -344,4 +453,59 @@ void main() {
       );
     });
   });
+}
+
+// Real verified disk pieces, with read accounting at the HTTP boundary.
+class _CountingPieceManager extends PieceManager {
+  _CountingPieceManager(TorrentMetadata metadata)
+    : super(metadata: metadata, targetFileIndex: 0);
+
+  int readBytes = 0;
+
+  @override
+  Uint8List? readFileData(int fileOffset, int length) {
+    readBytes += length;
+    return super.readFileData(fileOffset, length);
+  }
+}
+
+_CountingPieceManager _streamFixture({
+  int pieceCount = 1,
+  bool complete = true,
+}) {
+  final piece = Uint8List.fromList([
+    for (var i = 0; i < 64 * 1024; i++) i & 0xff,
+  ]);
+  final hash = sha1.convert(piece).bytes;
+  final size = piece.length * pieceCount;
+  final manager = _CountingPieceManager(
+    TorrentMetadata(
+      infoHash: Uint8List.fromList(List.filled(20, 2)),
+      rawInfoBytes: Uint8List(0),
+      name: 'http-fixture',
+      pieceLength: piece.length,
+      pieces: Uint8List.fromList([
+        for (var i = 0; i < pieceCount; i++) ...hash,
+      ]),
+      files: [TorrentFile(path: 'video.mp4', length: size, offset: 0)],
+      totalSize: size,
+      trackers: const [],
+    ),
+  );
+  if (complete) {
+    for (var i = 0; i < pieceCount; i++) {
+      for (
+        var begin = 0;
+        begin < piece.length;
+        begin += PieceManager.blockSize
+      ) {
+        manager.onBlockReceived(
+          i,
+          begin,
+          Uint8List.sublistView(piece, begin, begin + PieceManager.blockSize),
+        );
+      }
+    }
+  }
+  return manager;
 }

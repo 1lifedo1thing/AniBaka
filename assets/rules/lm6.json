@@ -34,14 +34,21 @@
             "op": "sniff",
             "goal": "html",
             "url": "/index.php/vod/search/wd/{keyword}.html",
-            "readyContains": ["video-img-box"],
-            "rejectContains": ["身份验证", "安全验证"],
+            "readyContains": [
+              "video-img-box"
+            ],
+            "rejectContains": [
+              "身份验证",
+              "安全验证"
+            ],
             "timeoutMs": 30000,
             "settleMs": 2000
           },
           {
             "op": "searchList",
-            "selectors": [".video-img-box .detail"],
+            "selectors": [
+              ".video-img-box .detail"
+            ],
             "detailPattern": "/detail/"
           }
         ]
@@ -69,8 +76,13 @@
             "op": "sniff",
             "goal": "html",
             "url": "{seriesId:raw}",
-            "readyContains": ["module-player-list"],
-            "rejectContains": ["身份验证", "安全验证"],
+            "readyContains": [
+              "module-player-list"
+            ],
+            "rejectContains": [
+              "身份验证",
+              "安全验证"
+            ],
             "timeoutMs": 30000,
             "settleMs": 2000
           },
@@ -86,26 +98,40 @@
   ],
   "play": [
     {
+      "op": "fetch",
+      "url": "{episodeId:raw}"
+    },
+    {
+      "op": "setVar",
+      "name": "page",
+      "value": "{url:raw}"
+    },
+    {
+      "op": "playerAaaa"
+    },
+    {
+      "op": "setVar",
+      "name": "purl",
+      "value": "{url:raw}"
+    },
+    {
       "op": "first",
       "branches": [
         [
           {
-            "op": "fetch",
-            "url": "{episodeId:raw}"
+            "op": "template",
+            "value": "{purl:raw}"
           },
           {
-            "op": "setVar",
-            "name": "page",
-            "value": "{url:raw}"
+            "op": "regex",
+            "pattern": "^(https?:\\/\\/\\S+\\.(?:m3u8|mp4|mkv|flv)(?:[?#]\\S*)?)$",
+            "group": 1
           },
           {
-            "op": "playerAaaa"
-          },
-          {
-            "op": "setVar",
-            "name": "purl",
-            "value": "{url:raw}"
-          },
+            "op": "videoUrl"
+          }
+        ],
+        [
           {
             "op": "setVar",
             "name": "playref",
@@ -346,6 +372,11 @@
           {
             "op": "json",
             "path": "url"
+          },
+          {
+            "op": "regex",
+            "pattern": "^(https?:\\/\\/\\S+\\.(?:m3u8|mp4|mkv|flv)(?:[?#]\\S*)?)$",
+            "group": 1
           },
           {
             "op": "videoUrl"

@@ -19,33 +19,31 @@ Future<void> previewImage(String imagePath) async {
   final context = Instances.navigatorKey.currentContext;
   if (context == null) return;
 
+  final backgroundColor = Colors.black.withValues(alpha: 0.92);
+  const errorImage = Icon(
+    Icons.broken_image_outlined,
+    color: Colors.white70,
+    size: 48,
+  );
+  final image = _isNetworkPath(imagePath)
+      ? CachedNetworkImage(
+          imageUrl: imagePath,
+          fit: BoxFit.contain,
+          placeholder: (_, _) =>
+              const Center(child: CircularProgressIndicator()),
+          errorWidget: (_, _, _) => errorImage,
+        )
+      : Image.file(
+          File(imagePath),
+          fit: BoxFit.contain,
+          errorBuilder: (_, _, _) => errorImage,
+        );
+
   await showDialog<void>(
     context: context,
-    barrierColor: Colors.black.withValues(alpha: 0.92),
+    barrierColor: backgroundColor,
     builder: (dialogContext) {
       final size = MediaQuery.sizeOf(dialogContext);
-      final image = _isNetworkPath(imagePath)
-          ? CachedNetworkImage(
-              imageUrl: imagePath,
-              fit: BoxFit.contain,
-              placeholder: (_, _) =>
-                  const Center(child: CircularProgressIndicator()),
-              errorWidget: (_, _, _) => const Icon(
-                Icons.broken_image_outlined,
-                color: Colors.white70,
-                size: 48,
-              ),
-            )
-          : Image.file(
-              File(imagePath),
-              fit: BoxFit.contain,
-              errorBuilder: (_, _, _) => const Icon(
-                Icons.broken_image_outlined,
-                color: Colors.white70,
-                size: 48,
-              ),
-            );
-
       return Material(
         color: Colors.transparent,
         child: Stack(
@@ -53,7 +51,7 @@ Future<void> previewImage(String imagePath) async {
             Positioned.fill(
               child: GestureDetector(
                 onTap: () => Navigator.of(dialogContext).pop(),
-                child: ColoredBox(color: Colors.black.withValues(alpha: 0.92)),
+                child: ColoredBox(color: backgroundColor),
               ),
             ),
             Center(
@@ -91,11 +89,13 @@ Future<void> previewImage(String imagePath) async {
 Future<String?> saveImage(String imagePath, {CancelToken? cancelToken}) async {
   if (Platform.isAndroid || Platform.isIOS) {
     final granted = await _ensureGalleryPermission();
+    if (cancelToken?.isCancelled == true) return null;
     if (!granted) {
       throw Exception('Gallery permission denied');
     }
 
     final imageData = await _loadImageData(imagePath, cancelToken);
+    if (cancelToken?.isCancelled == true) return null;
     final result = await SaverGallery.saveImage(
       imageData.bytes,
       fileName: imageData.fileName,
@@ -133,6 +133,7 @@ Future<String?> saveImage(String imagePath, {CancelToken? cancelToken}) async {
       source = File(imagePath);
       fileName = _sanitizeFileName(source.uri.pathSegments.last);
     }
+    if (cancelToken?.isCancelled == true) return null;
     final savePath = await FilePicker.saveFile(
       dialogTitle: 'Save image',
       fileName: fileName,

@@ -48,9 +48,99 @@
       }
     },
     {
-      "op": "sniff",
-      "goal": "video",
-      "url": "{episodeId:raw}"
+      "op": "first",
+      "branches": [
+        [
+          {
+            "op": "fetch",
+            "url": "{episodeId:raw}",
+            "method": "POST",
+            "contentType": "form",
+            "headers": {
+              "X-Requested-With": "XMLHttpRequest",
+              "Cookie": "silisili=on; c_player=1"
+            },
+            "body": {
+              "player": "sili"
+            }
+          },
+          {
+            "op": "setVar",
+            "name": "siliPayload",
+            "value": "{url:raw}"
+          },
+          {
+            "op": "regex",
+            "pattern": "^(.{9})",
+            "group": 1
+          },
+          {
+            "op": "crypto",
+            "algo": "md5"
+          },
+          {
+            "op": "setVar",
+            "name": "siliDigest",
+            "value": "{url:raw}"
+          },
+          {
+            "op": "regex",
+            "pattern": "^.{16}(.{16})$",
+            "group": 1
+          },
+          {
+            "op": "setVar",
+            "name": "siliKey",
+            "value": "{url:raw}"
+          },
+          {
+            "op": "template",
+            "value": "{siliDigest:raw}"
+          },
+          {
+            "op": "regex",
+            "pattern": "^(.{16})",
+            "group": 1
+          },
+          {
+            "op": "setVar",
+            "name": "siliIv",
+            "value": "{url:raw}"
+          },
+          {
+            "op": "template",
+            "value": "{siliPayload:raw}"
+          },
+          {
+            "op": "regex",
+            "pattern": "^.{9}([\\s\\S]+)$",
+            "group": 1
+          },
+          {
+            "op": "crypto",
+            "algo": "aes-cbc",
+            "mode": "decrypt",
+            "key": "{siliKey:raw}",
+            "iv": "{siliIv:raw}"
+          },
+          {
+            "op": "json",
+            "path": "url"
+          },
+          {
+            "op": "regex",
+            "pattern": "^(https?://\\S+\\.(?:m3u8|mp4|mkv|flv)(?:[?#]\\S*)?)$",
+            "group": 1
+          }
+        ],
+        [
+          {
+            "op": "sniff",
+            "goal": "video",
+            "url": "{episodeId:raw}"
+          }
+        ]
+      ]
     }
   ],
   "useWebview": true

@@ -48,6 +48,16 @@
       "branches": [
         [
           {
+            "op": "regex",
+            "pattern": "^(https?:\\/\\/\\S+\\.(?:m3u8|mp4|mkv|flv)(?:[?#]\\S*)?)$",
+            "group": 1
+          },
+          {
+            "op": "videoUrl"
+          }
+        ],
+        [
+          {
             "op": "fetch",
             "url": "https://data.m3u8.in/player/?url={mediaToken}"
           },
@@ -62,8 +72,16 @@
             "value": "{url:raw}"
           },
           {
+            "op": "template",
+            "value": "https://data.m3u8.in/player/api.php?url={mediaToken}&sign={mediaSign}"
+          },
+          {
+            "op": "regex",
+            "pattern": "^(https:\\/\\/data\\.m3u8\\.in\\/player\\/api\\.php\\?url=[^&\\s]+&sign=[^&\\s]+)$",
+            "group": 1
+          },
+          {
             "op": "fetch",
-            "url": "https://data.m3u8.in/player/api.php?url={mediaToken}&sign={mediaSign}",
             "headers": {
               "X-Requested-With": "XMLHttpRequest",
               "Referer": "https://data.m3u8.in/player/?url={mediaToken}"
@@ -72,22 +90,26 @@
           {
             "op": "json",
             "path": "url"
-          }
-        ],
-        [
-          {
-            "op": "template",
-            "value": "https://data.m3u8.in/player/?url={mediaToken}"
           },
           {
-            "op": "sniff",
-            "goal": "video"
+            "op": "regex",
+            "pattern": "^(https?:\\/\\/\\S+\\.(?:m3u8|mp4|mkv|flv)(?:[?#]\\S*)?)$",
+            "group": 1
           }
         ],
         [
           {
             "op": "sniff",
-            "goal": "video"
+            "goal": "video",
+            "url": "https://data.m3u8.in/player/?url={mediaToken}"
+          }
+        ],
+        [
+          {
+            "op": "sniff",
+            "goal": "video",
+            "url": "{episodeId:raw}",
+            "followEmbeddedPlayer": true
           }
         ]
       ]
@@ -96,7 +118,10 @@
       "op": "setMediaHeaders",
       "headers": {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-      }
+      },
+      "remove": [
+        "Referer"
+      ]
     }
   ]
 }

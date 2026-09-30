@@ -171,6 +171,25 @@ fvm flutter test
 
 项目按 GPLv3 的“无担保”条款提供。第三方站点的可用性、内容准确性、安全性和版权状态不受本项目控制。
 
+## 自动跳过片头片尾
+
+在播放器设置中开启“智能跳过”，按当前剧集的 OP/ED 区间跳到终点。无数据、
+身份不明确或版本不匹配时保持正常播放；跳过后可在 5 秒内撤销，片尾后的彩蛋继续播放。
+自动绑定使用播放资料中已有的 Bangumi ID 和明确集数；只有标题搜索结果或合集编号时，
+请先在标注面板绑定具体剧集。
+
+公共时间戳来自 AniSkip，通过 BangumiExtLinker 关联 MAL 条目。仅在条目、集数明确且
+实际时长与参考时长相差不超过 2 秒时自动使用。相同总时长仍可能对应不同剪辑版本，
+可在“标注与校正片头片尾”中更正或关闭当前片源的片头/片尾跳过。
+
+手动标注保存在本机；登录后可以主动共享。其他两位用户确认后用于当前片源自动跳过，
+两位用户报错后暂停使用。切换片源、线路或 HLS 去广告结果会重新匹配；过滤后的时间轴
+只使用该版本上确认的标注。新接口需要配套后端，旧服务器仍可使用本机标注。
+
+查询通过所选社区服务器完成，发送 Bangumi 条目和剧集 ID、视频时长、片源摘要及
+时间轴摘要，不发送播放地址、请求头或本地文件路径。提交与反馈需登录，并关联提交账号。
+服务器向 AniSkip 查询 MAL 条目、集数及视频时长，并定期更新 BangumiExtLinker 映射。
+
 ## 致谢
 
 - [Flutter](https://flutter.dev/) — 跨平台 UI 框架
@@ -179,6 +198,9 @@ fvm flutter test
 - [Hive](https://github.com/isar/hive) — 本地数据存储
 - [Anime4K](https://github.com/bloc97/Anime4K) — 动漫画质增强着色器
 - [弹弹Play](https://www.dandanplay.com/) — 弹幕 API 服务
+- [AniSkip](https://github.com/aniskip/aniskip-api) — 社区贡献的片头、片尾时间戳服务
+- [Rhilip / BangumiExtLinker](https://github.com/Rhilip/BangumiExtLinker) — Bangumi 与 MyAnimeList 条目映射数据（[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)）；服务端提取所需 ID，并允许独立的逐集校正
+- 感谢提交、确认和纠正片头片尾区间的社区用户
 
 ## 许可证
 

@@ -64,6 +64,7 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
   static const _identityKeys = ['seriesId', 'seriesUrl', 'id', 'url'];
 
   late final VideoSourceSearchController _controller;
+  late final bool _ownsController;
   String _selectedFilter = 'all';
   late List<String> _sourceKeys;
   final _meta = SourceMetaLookup();
@@ -71,10 +72,14 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
   late final Set<String> _currentIds;
   late final String _title;
   late final String _cover;
-  late final double? _score;
+  late final String? _scoreText;
   late final int? _scoreCount;
 
   List<DirectSourceGroup> _routes = const [];
+  List<DirectSourceGroup> _visibleRoutes = const [];
+  int _readyRouteCount = 0;
+  bool _probeScheduled = false;
+  late int _coverCacheWidth;
   String? _selectingKey;
 
   bool get _isSelecting => _selectingKey != null;
@@ -87,7 +92,8 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
     final seed = widget.seedData;
     _title = seed['title']?.toString().trim() ?? '';
     _cover = resolveCoverImage(seed) ?? '';
-    _score = BgmInfo.fromData(seed).score;
+    final score = BgmInfo.fromData(seed).score;
+    _scoreText = score != null && score > 0 ? score.toStringAsFixed(1) : null;
     final rating = asMap(asMap(seed['bgmDetailData'])?['rating']);
     _scoreCount = toInt(rating?['total']);
 
@@ -97,6 +103,7 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
           v,
     };
 
+    _ownsController = widget.searchController == null;
     _controller =
         widget.searchController ??
         VideoSourceSearchController(
@@ -105,18 +112,21 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
         );
 
     _sourceKeys = _currentSourceKeys();
+    _refreshRoutes();
 
     _controller.addListener(_onCandidatesChanged);
 
-    _controller.ensureAdapterReady().then((_) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _sourceKeys = _currentSourceKeys();
-        _meta.clear();
-      });
-    });
+    _controller.ensureAdapterReady().then<void>(
+      (_) {
+        if (!mounted) return;
+        setState(() {
+          _sourceKeys = _currentSourceKeys();
+          _meta.clear();
+        });
+      },
+      // 搜索初始化失败由 controller 的搜索状态和错误横幅报告。
+      onError: (Object _, StackTrace _) {},
+    );
 
     if (_controller.results.isEmpty && !_controller.isSearching) {
       _controller.startSearch();
@@ -134,7 +144,7 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
   @override
   void dispose() {
     _controller.removeListener(_onCandidatesChanged);
-    if (widget.searchController == null &&
+    if (_ownsController &&
         !VideoSourceSearchController.isGlobalCached(_controller)) {
       _controller.dispose();
     }
@@ -142,7 +152,76 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
   }
 
   void _onCandidatesChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    _refreshRoutes();
+  }
+
+  @override
+  void didUpdateWidget(covariant VideoSourceSearchSheet oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.currentEpisodeIndex != widget.currentEpisodeIndex ||
+        oldWidget.currentLineIndex != widget.currentLineIndex ||
+        oldWidget.currentSource != widget.currentSource) {
+      _refreshRoutes();
+    }
+  }
+
+  void _refreshRoutes() {
+    _routes = _controller.getDirectSourceGroups(
+      episodeIndex: widget.currentEpisodeIndex,
+      preferredLine: widget.currentLineIndex,
+      currentSource: widget.currentSource,
+    );
+    _readyRouteCount = 0;
+    var hasPending = false;
+    for (final group in _routes) {
+      if (group.isInstantPlayable) _readyRouteCount++;
+      if (group.status == SourceProbeStatus.pending) hasPending = true;
+    }
+    _filterRoutes();
+    if (hasPending && !_probeScheduled) {
+      _probeScheduled = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _probeScheduled = false;
+        if (mounted && !_isSelecting && !_controller.isDisposed) {
+          _controller.startSwitchProbes(
+            _routes.expand((group) => group.origins),
+          );
+        }
+      });
+    }
+  }
+
+  void _filterRoutes() {
+    if (_selectedFilter == 'all') {
+      _visibleRoutes = _routes;
+      return;
+    }
+    final routes = <DirectSourceGroup>[];
+    for (final group in _routes) {
+      if (group.origins.length == 1) {
+        if (group.primary.item.sourceType == _selectedFilter) routes.add(group);
+        continue;
+      }
+      List<SourceCandidateState>? origins;
+      for (final origin in group.origins) {
+        if (origin.item.sourceType == _selectedFilter) {
+          (origins ??= []).add(origin);
+        }
+      }
+      if (origins != null) {
+        routes.add(
+          origins.length == group.origins.length
+              ? group
+              : DirectSourceGroup(
+                  key: group.key,
+                  origins: origins,
+                  status: origins.first.status,
+                ),
+        );
+      }
+    }
+    _visibleRoutes = routes;
   }
 
   bool _matchesCurrent(SourceCandidateState origin) {
@@ -182,6 +261,11 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
     setState(() => _selectingKey = group.key);
     try {
       final probe = await _controller.resolveSwitchCandidate(origin);
+      if (!mounted ||
+          _controller.isDisposed ||
+          !_controller.results.contains(origin.item)) {
+        return;
+      }
       final data = probe.data;
       if (!probe.isReady || data == null) {
         _message('线路解析失败，请尝试其他线路');
@@ -190,18 +274,31 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
       final lineIndex = probe.resolvedLineIndex ?? probe.preferredLine;
       final selectionData = data.copyWith(lineIndex: lineIndex);
       await _controller.persistMatchMemory(origin.item, selectionData);
-      if (mounted) {
+      if (mounted &&
+          !_controller.isDisposed &&
+          _controller.results.contains(origin.item)) {
+        _controller.cancelSearch();
         if (_isFromPlayer) {
-          _controller.cancelSearch();
           Navigator.of(context).pop(selectionData);
         } else {
-          _navigateToPlayer(selectionData);
+          VideoSourceSearchController.cacheGlobal(_title, _controller);
+          NavigationService.toPlayback(
+            context,
+            selectionData,
+            popFirst: true,
+            autoMatch: false,
+          );
         }
       }
     } catch (_) {
       _message('线路解析失败，请尝试其他线路');
     } finally {
-      if (mounted) setState(() => _selectingKey = null);
+      if (mounted) {
+        setState(() {
+          _selectingKey = null;
+          _refreshRoutes();
+        });
+      }
     }
   }
 
@@ -222,30 +319,35 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
   Future<void> _showAddAliasDialog() async {
     if (_controller.isSearching) return;
     final textController = TextEditingController();
-    final value = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('添加搜索别名'),
-        content: TextField(
-          controller: textController,
-          autofocus: true,
-          textInputAction: TextInputAction.done,
-          decoration: const InputDecoration(hintText: '例如 尖帽子的魔法工坊'),
-          onSubmitted: (text) => Navigator.pop(dialogContext, text),
+    String? value;
+    try {
+      value = await showDialog<String>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('添加搜索别名'),
+          content: TextField(
+            controller: textController,
+            autofocus: true,
+            textInputAction: TextInputAction.done,
+            decoration: const InputDecoration(hintText: '例如 尖帽子的魔法工坊'),
+            onSubmitted: (text) => Navigator.pop(dialogContext, text),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  Navigator.pop(dialogContext, textController.text),
+              child: const Text('添加'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, textController.text),
-            child: const Text('添加'),
-          ),
-        ],
-      ),
-    );
-    textController.dispose();
+      );
+    } finally {
+      textController.dispose();
+    }
 
     if (!mounted || value == null) {
       return;
@@ -258,78 +360,59 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
     }
   }
 
-  void _navigateToPlayer(PlaybackRequest videoData) {
-    if (!mounted) return;
-    _controller.cancelSearch();
-    VideoSourceSearchController.cacheGlobal(_title, _controller);
-    NavigationService.toPlayback(
-      context,
-      videoData,
-      popFirst: true,
-      autoMatch: false,
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final primary = Theme.of(context).colorScheme.primary;
-    _routes = _controller.getDirectSourceGroups(
-      episodeIndex: widget.currentEpisodeIndex,
-      preferredLine: widget.currentLineIndex,
-      currentSource: widget.currentSource,
-    );
-    if (_routes.any((g) => g.status == SourceProbeStatus.pending)) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && !_isSelecting) {
-          _controller.startSwitchProbes(_routes.expand((g) => g.origins));
-        }
-      });
-    }
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
+    _coverCacheWidth = (56 * MediaQuery.devicePixelRatioOf(context)).ceil();
 
     return DraggableScrollableSheet(
       initialChildSize: 0.76,
       minChildSize: 0.46,
       maxChildSize: 0.96,
       builder: (context, scrollController) => Material(
-        color: Theme.of(context).colorScheme.surface,
+        color: colors.surface,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
         clipBehavior: Clip.antiAlias,
         child: SafeArea(
           top: false,
-          child: CustomScrollView(
-            controller: scrollController,
-            slivers: [
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                sliver: SliverToBoxAdapter(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Center(
-                        child: Container(
-                          width: 36,
-                          height: 4,
-                          decoration: BoxDecoration(
-                            color: Theme.of(context).colorScheme.outlineVariant,
-                            borderRadius: BorderRadius.circular(2),
+          child: ListenableBuilder(
+            listenable: _controller,
+            builder: (context, _) => CustomScrollView(
+              controller: scrollController,
+              slivers: [
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  sliver: SliverToBoxAdapter(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Center(
+                          child: Container(
+                            width: 36,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: colors.outlineVariant,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(height: 12),
-                      _buildHeaderCard(isDark, primary),
-                      _buildErrorBanner(isDark),
-                      const SizedBox(height: 12),
-                      _buildProgressSection(primary),
-                      const SizedBox(height: 8),
-                      _buildFilterChips(),
-                      const SizedBox(height: 12),
-                    ],
+                        const SizedBox(height: 12),
+                        _buildHeaderCard(isDark, colors.primary),
+                        _buildErrorBanner(isDark),
+                        const SizedBox(height: 12),
+                        _buildProgressSection(colors.primary),
+                        const SizedBox(height: 8),
+                        _buildFilterChips(),
+                        const SizedBox(height: 12),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-              _buildResultList(isDark),
-            ],
+                _buildResultList(isDark),
+              ],
+            ),
           ),
         ),
       ),
@@ -337,7 +420,6 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
   }
 
   Widget _buildHeaderCard(bool isDark, Color primary) {
-    final scoreText = (_score ?? 0) > 0 ? _score!.toStringAsFixed(1) : null;
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -398,12 +480,12 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
                         ],
                       ],
                     ),
-                    if (scoreText != null &&
+                    if (_scoreText != null &&
                         _scoreCount != null &&
                         _scoreCount > 0) ...[
                       const SizedBox(height: 4),
                       _chipBadge(
-                        label: '$scoreText 分 · $_scoreCount 人评分',
+                        label: '$_scoreText 分 · $_scoreCount 人评分',
                         icon: Icons.star_rounded,
                         color: const Color(0xFFFFC107),
                         bgColor: const Color(
@@ -601,7 +683,6 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
     final searching = _controller.isSearching;
     final completed = _controller.finishedSources.length;
     final total = _sourceKeys.length - 1;
-    final ready = _routes.where((g) => g.isInstantPlayable).length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -619,7 +700,7 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
               ),
             ),
             Text(
-              '$ready 个可即播',
+              '$_readyRouteCount 个可即播',
               style: TextStyle(
                 fontSize: 12,
                 color: primary,
@@ -641,9 +722,7 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
         ),
         if (searching)
           LinearProgressIndicator(
-            value: completed == 0
-                ? null
-                : completed / total.clamp(1, total + 1),
+            value: completed == 0 ? null : completed / total,
             minHeight: 2,
             borderRadius: BorderRadius.circular(2),
           ),
@@ -669,7 +748,13 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
           showCheckmark: false,
           avatar: Icon(searching ? Icons.sync_rounded : meta.icon, size: 15),
           label: Text('${meta.label} $count'),
-          onSelected: (_) => setState(() => _selectedFilter = key),
+          onSelected: (_) {
+            if (_selectedFilter == key) return;
+            setState(() {
+              _selectedFilter = key;
+              _filterRoutes();
+            });
+          },
           visualDensity: VisualDensity.compact,
         );
       },
@@ -678,20 +763,7 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
 
   Widget _buildResultList(bool isDark) {
     final colors = Theme.of(context).colorScheme;
-    final routes = _selectedFilter == 'all'
-        ? _routes
-        : [
-            for (final group in _routes)
-              if (group.origins
-                      .where((c) => c.item.sourceType == _selectedFilter)
-                      .toList()
-                  case final origins when origins.isNotEmpty)
-                DirectSourceGroup(
-                  key: group.key,
-                  origins: origins,
-                  status: origins.first.status,
-                ),
-          ];
+    final routes = _visibleRoutes;
     return SliverPadding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
       sliver: routes.isEmpty
@@ -704,10 +776,8 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
             )
           : SliverList.builder(
               itemCount: routes.length,
-              itemBuilder: (context, index) => KeyedSubtree(
-                key: ValueKey(routes[index].key),
-                child: _buildRouteTile(index, routes[index], isDark, colors),
-              ),
+              itemBuilder: (context, index) =>
+                  _buildRouteTile(index, routes[index], isDark, colors),
             ),
     );
   }
@@ -716,7 +786,6 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
     String message,
     bool isDarkMode, {
     bool isLoading = false,
-    bool isSearching = false,
   }) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
     decoration: BoxDecoration(
@@ -751,7 +820,7 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
         if (!isLoading) ...[
           const SizedBox(height: 14),
           ElevatedButton.icon(
-            onPressed: isSearching ? null : _controller.startSearch,
+            onPressed: _controller.startSearch,
             icon: const Icon(Icons.refresh_rounded, size: 15),
             label: const Text('重新搜索', style: TextStyle(fontSize: 12)),
             style: ElevatedButton.styleFrom(
@@ -764,100 +833,20 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
     ),
   );
 
-  Widget _buildTile({
-    required String title,
-    required bool isDark,
-    Widget? leading,
-    List<Widget>? chips,
-    Widget? trailing,
-    bool isCurrent = false,
-    bool isRecommended = false,
-    Color? accentColor,
-    VoidCallback? onTap,
-  }) {
-    final colors = Theme.of(context).colorScheme;
-    final accent = accentColor ?? colors.primary;
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(14),
-          splashColor: accent.withValues(alpha: 0.1),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(14),
-              color: isCurrent
-                  ? colors.primaryContainer.withValues(
-                      alpha: isDark ? 0.3 : 0.2,
-                    )
-                  : (isDark
-                        ? Colors.white.withValues(alpha: 0.04)
-                        : Colors.black.withValues(alpha: 0.03)),
-              border: Border.all(
-                color: isCurrent
-                    ? colors.primary.withValues(alpha: 0.6)
-                    : isRecommended
-                    ? colors.primary.withValues(alpha: 0.3)
-                    : (isDark
-                          ? Colors.white.withValues(alpha: 0.06)
-                          : Colors.black.withValues(alpha: 0.06)),
-                width: isCurrent ? 1.2 : 1.0,
-              ),
-            ),
-            child: Row(
-              children: [
-                if (leading != null) ...[leading, const SizedBox(width: 12)],
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          height: 1.25,
-                          color: isDark
-                              ? Colors.white.withValues(alpha: 0.95)
-                              : Colors.black87,
-                        ),
-                      ),
-                      if (chips != null && chips.isNotEmpty) ...[
-                        const SizedBox(height: 5),
-                        Wrap(spacing: 4, runSpacing: 4, children: chips),
-                      ],
-                    ],
-                  ),
-                ),
-                if (trailing != null) ...[const SizedBox(width: 8), trailing],
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _buildRouteTile(
     int index,
     DirectSourceGroup group,
     bool isDark,
     ColorScheme colors,
   ) {
+    final item = group.primary.item;
     final labels = <String>{};
     var isCurrent = false;
     for (final origin in group.origins) {
       labels.add(_sourceLabel(origin.item));
       if (!isCurrent && _matchesCurrent(origin)) isCurrent = true;
     }
-    final sourcesStr = labels.isEmpty ? '未知来源' : labels.join(' · ');
+    final sourcesStr = labels.join(' · ');
     final isRecommended = index == 0 && group.isReady && !isCurrent;
 
     final (statusLabel, statusIcon, statusColor) = switch (group.status) {
@@ -890,48 +879,136 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
     final accent = isCurrent ? colors.primary : statusColor;
     final isSelectingThis = _selectingKey == group.key;
 
-    return _buildTile(
-      title: group.primary.item.title,
-      isDark: isDark,
-      isCurrent: isCurrent,
-      isRecommended: isRecommended,
-      accentColor: accent,
-      onTap: (!_isSelecting || isSelectingThis)
-          ? () => _selectRoute(group)
-          : null,
-      leading: _buildCoverThumb(
-        group.primary.item.coverUrl.isNotEmpty
-            ? group.primary.item.coverUrl
-            : _cover,
-        isDark: isDark,
-        fallbackIcon: _meta[group.primary.item.sourceType].icon,
-        fallbackColor: accent,
-      ),
-      chips: [
-        _chipBadge(label: sourcesStr, color: colors.secondary, isDark: isDark),
-        if (group.primary.item.episodeInfo case final info?)
-          _chipBadge(label: info, color: colors.secondary, isDark: isDark),
-        if (group.primary.item.lineInfo case final info?)
-          _chipBadge(label: info, color: colors.secondary, isDark: isDark),
-        if (group.primary.item.updateInfo case final info?)
-          _chipBadge(label: info, color: colors.secondary, isDark: isDark),
-        _chipBadge(label: statusLabel, icon: statusIcon, color: statusColor),
-        if (isCurrent)
-          _chipBadge(label: '当前线路', color: colors.primary, isDark: isDark),
-        if (isRecommended && !isCurrent)
-          _chipBadge(label: '优选推荐', color: colors.primary, isDark: isDark),
-      ],
-      trailing: isSelectingThis
-          ? SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2, color: accent),
-            )
-          : Icon(
-              Icons.chevron_right_rounded,
-              size: 20,
-              color: isDark ? Colors.white38 : Colors.black38,
+    return Padding(
+      key: ValueKey(group.key),
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: (!_isSelecting || isSelectingThis)
+              ? () => _selectRoute(group)
+              : null,
+          borderRadius: BorderRadius.circular(14),
+          splashColor: accent.withValues(alpha: 0.1),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              color: isCurrent
+                  ? colors.primaryContainer.withValues(
+                      alpha: isDark ? 0.3 : 0.2,
+                    )
+                  : (isDark
+                        ? Colors.white.withValues(alpha: 0.04)
+                        : Colors.black.withValues(alpha: 0.03)),
+              border: Border.all(
+                color: isCurrent
+                    ? colors.primary.withValues(alpha: 0.6)
+                    : isRecommended
+                    ? colors.primary.withValues(alpha: 0.3)
+                    : (isDark
+                          ? Colors.white.withValues(alpha: 0.06)
+                          : Colors.black.withValues(alpha: 0.06)),
+                width: isCurrent ? 1.2 : 1.0,
+              ),
             ),
+            child: Row(
+              children: [
+                _buildCoverThumb(
+                  item.coverUrl.isNotEmpty ? item.coverUrl : _cover,
+                  isDark: isDark,
+                  fallbackIcon: _meta[item.sourceType].icon,
+                  fallbackColor: accent,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        item.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          height: 1.25,
+                          color: isDark
+                              ? Colors.white.withValues(alpha: 0.95)
+                              : Colors.black87,
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      Wrap(
+                        spacing: 4,
+                        runSpacing: 4,
+                        children: [
+                          _chipBadge(
+                            label: sourcesStr,
+                            color: colors.secondary,
+                            isDark: isDark,
+                          ),
+                          if (item.episodeInfo case final info?)
+                            _chipBadge(
+                              label: info,
+                              color: colors.secondary,
+                              isDark: isDark,
+                            ),
+                          if (item.lineInfo case final info?)
+                            _chipBadge(
+                              label: info,
+                              color: colors.secondary,
+                              isDark: isDark,
+                            ),
+                          if (item.updateInfo case final info?)
+                            _chipBadge(
+                              label: info,
+                              color: colors.secondary,
+                              isDark: isDark,
+                            ),
+                          _chipBadge(
+                            label: statusLabel,
+                            icon: statusIcon,
+                            color: statusColor,
+                          ),
+                          if (isCurrent)
+                            _chipBadge(
+                              label: '当前线路',
+                              color: colors.primary,
+                              isDark: isDark,
+                            ),
+                          if (isRecommended)
+                            _chipBadge(
+                              label: '优选推荐',
+                              color: colors.primary,
+                              isDark: isDark,
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                if (isSelectingThis)
+                  SizedBox.square(
+                    dimension: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: accent,
+                    ),
+                  )
+                else
+                  Icon(
+                    Icons.chevron_right_rounded,
+                    size: 20,
+                    color: isDark ? Colors.white38 : Colors.black38,
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -963,7 +1040,7 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
       borderRadius: BorderRadius.circular(8),
       child: CachedNetworkImage(
         imageUrl: url,
-        memCacheWidth: (56 * MediaQuery.devicePixelRatioOf(context)).ceil(),
+        memCacheWidth: _coverCacheWidth,
         fadeInDuration: Duration.zero,
         fit: BoxFit.cover,
         width: 56,

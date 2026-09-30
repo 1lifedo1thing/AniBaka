@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:baka/models/skip_segment.dart';
+import 'package:baka/services/playback/skip_segments.dart';
+
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -33,6 +36,16 @@ class PlaybackController {
   static const _maxLongPressRate = 5.0;
 
   Player? _player;
+  final skipData = ValueNotifier<SkipData>(const SkipData());
+  final skipService = SkipSegmentsService();
+  final _skipSession = SkipSession();
+  SkipContext? _skipContext;
+  SkipSegment? _activeSkipSegment;
+  Duration? _skipReturnPosition;
+  int _skipGeneration = 0;
+  int _skipDuration = 0;
+  SkipContext? get skipContext => _skipContext;
+  bool get canControlPlayback => !_roomConnected || _roomCanControl;
 
   final core = ValueNotifier<PlaybackCoreState>(const PlaybackCoreState());
   final timeline = ValueNotifier<PlaybackTimelineState>(
@@ -296,6 +309,7 @@ class PlaybackController {
       return;
     }
     timeline.value = timeline.value.copyWith(duration: duration);
+    unawaited(refreshSkipSegments());
   }
 
   void _onBufferedChanged(Duration buffered) {
@@ -370,8 +384,21 @@ class PlaybackController {
     Duration target, {
     bool fromSlider = false,
     bool remote = false,
+  }) => _seek(target, fromSlider: fromSlider, remote: remote);
+
+  Future<void> _seek(
+    Duration target, {
+    bool fromSlider = false,
+    bool remote = false,
+    bool fromSkip = false,
   }) async {
     if (_disposed || (!_roomCanControl && _roomConnected && !remote)) return;
+    if (!fromSkip) {
+      _skipSession.seek(target.inMilliseconds);
+      _skipReturnPosition = null;
+      _skipCancelHideTimer?.cancel();
+      _setSkipState(SkipState.idle);
+    }
     if (overlay.value.skipState == SkipState.waiting) {
       _setSkipState(SkipState.idle);
     }
@@ -464,6 +491,11 @@ class PlaybackController {
     _roomConnected = connected;
     _roomCanControl = canControl;
     _roomRateLocked = connected;
+    _updateSkipSuggestion();
+    if (!canControlPlayback) {
+      userActionCancelSkip();
+      hideJumpPrompt();
+    }
     if (connected && core.value.playbackRate != 1.0) {
       await setRate(1.0, roomCorrection: true);
     }
@@ -611,7 +643,7 @@ class PlaybackController {
     overlay.value = overlay.value.copyWith(
       showJumpPrompt: true,
       jumpPosition: position,
-      jumpPromptText: '继续播放${position.toTimeString(includeDays: true)}？',
+      jumpPromptText: '上次看到 ${position.toTimeString(includeDays: true)}',
     );
     _jumpPromptTimer?.cancel();
     _jumpPromptTimer = Timer(const Duration(seconds: 15), hideJumpPrompt);
@@ -633,79 +665,179 @@ class PlaybackController {
     hideJumpPrompt();
   }
 
+  void setSkipContext(SkipContext? context) {
+    _skipGeneration++;
+    _skipDuration = 0;
+    _skipSession.reset();
+    _activeSkipSegment = null;
+    _skipReturnPosition = null;
+    _skipCancelHideTimer?.cancel();
+    _setSkipState(SkipState.idle);
+    _skipContext = context == null ? null : skipService.restoreBinding(context);
+    skipData.value = SkipData(context: _skipContext);
+    _updateSkipSuggestion();
+    if (context != null) unawaited(refreshSkipSegments());
+  }
+
+  void _updateSkipSuggestion() {
+    final context = _skipContext;
+    final key = context?.suggestionKey;
+    final visible =
+        context?.episodeNumber == 2 &&
+        key != null &&
+        !preferences.value.enableSkipOpEd &&
+        canControlPlayback &&
+        !skipService.hasAnsweredSuggestion(key);
+    if (overlay.value.showSkipSuggestion != visible) {
+      overlay.value = overlay.value.copyWith(showSkipSuggestion: visible);
+    }
+  }
+
+  Future<void> answerSkipSuggestion(bool enable) async {
+    final key = _skipContext?.suggestionKey;
+    if (_disposed || !canControlPlayback || key == null) return;
+    overlay.value = overlay.value.copyWith(showSkipSuggestion: false);
+    await skipService.rememberSuggestion(key);
+    if (_disposed) return;
+    if (enable) {
+      await updatePreferences(preferences.value.copyWith(enableSkipOpEd: true));
+    }
+  }
+
+  Future<void> refreshSkipSegments({bool force = false}) async {
+    final context = _skipContext;
+    final duration = timeline.value.duration.inMilliseconds;
+    if (_disposed || context == null || duration <= 0) return;
+    if (!force && _skipDuration == duration) return;
+    _skipDuration = duration;
+    final generation = ++_skipGeneration;
+    // Apply personal edits immediately, even while the server is unavailable.
+    final local = skipService.mergeLocal(
+      context,
+      duration,
+      skipData.value.segments.where((s) => s.origin != 'local').toList(),
+    );
+    skipData.value = SkipData(
+      context: context,
+      segments: local,
+      message: skipData.value.message,
+    );
+    _skipSession.install(local, timeline.value.position.inMilliseconds);
+    // Markers and manual ending actions also need data with auto-skip off.
+    final data = await skipService.load(context, duration);
+    if (_disposed || generation != _skipGeneration) return;
+    skipData.value = data;
+    _skipSession.install(data.segments, timeline.value.position.inMilliseconds);
+  }
+
   void _updateSkipState(Duration position) {
-    final settings = preferences.value;
-    final current = overlay.value;
-    if (!settings.enableSkipOpEd) {
-      if (current.skipState == SkipState.waiting) {
+    if (_skipContext == null || _skipContext!.isFirstEpisode) {
+      if (overlay.value.skipState == SkipState.waiting) {
         _setSkipState(SkipState.idle);
       }
       return;
     }
-    final seconds = position.inSeconds;
-    final canSkip =
-        seconds > 0 &&
-        timeline.value.duration.inSeconds >
-            settings.skipOpWaitTime + settings.skipOpDuration;
-    if (!canSkip || current.showJumpPrompt) return;
-
-    if (current.skipState == SkipState.idle &&
-        seconds < settings.skipOpWaitTime) {
-      _setSkipState(SkipState.waiting);
+    final result = _skipSession.observe(
+      position.inMilliseconds,
+      duration: timeline.value.duration.inMilliseconds,
+      episodeNumber: _skipContext!.episodeNumber,
+      canAuto:
+          preferences.value.enableSkipOpEd &&
+          core.value.playing &&
+          !core.value.loading &&
+          !core.value.buffering &&
+          !timeline.value.seeking &&
+          !overlay.value.showJumpPrompt &&
+          !overlay.value.showSkipSuggestion &&
+          canControlPlayback,
+    );
+    if (overlay.value.skipState == SkipState.showingCancel ||
+        overlay.value.skipState == SkipState.ending) {
       return;
     }
-    if (current.skipState != SkipState.waiting) return;
-    if (seconds < settings.skipOpWaitTime) return;
+    if (result == null ||
+        overlay.value.showJumpPrompt ||
+        overlay.value.showSkipSuggestion ||
+        !canControlPlayback) {
+      _setSkipState(SkipState.idle);
+      return;
+    }
+    _activeSkipSegment = result.segment;
+    if (result.automatic) {
+      _skipCurrentSegment(automatic: true);
+    } else {
+      _setSkipState(SkipState.waiting, label: result.segment.label);
+    }
+  }
 
-    _showSkipCancelPrompt();
-    unawaited(
-      _performSeek(position + Duration(seconds: settings.skipOpDuration)),
+  void _setSkipState(SkipState state, {String? label, bool automatic = false}) {
+    final current = overlay.value;
+    if (current.skipState == state &&
+        (label == null || label == current.skipLabel) &&
+        current.skipWasAutomatic == automatic) {
+      return;
+    }
+    overlay.value = current.copyWith(
+      skipState: state,
+      skipLabel: label,
+      skipWasAutomatic: automatic,
     );
   }
 
-  void _setSkipState(SkipState state) {
-    if (overlay.value.skipState == state) return;
-    overlay.value = overlay.value.copyWith(skipState: state);
+  void userActionSkip() => _skipCurrentSegment(automatic: false);
+
+  void previewSkipSegment(SkipSegment segment) {
+    if (!canControlPlayback ||
+        !segment.fits(timeline.value.duration.inMilliseconds)) {
+      return;
+    }
+    _activeSkipSegment = segment;
+    _skipCurrentSegment(automatic: false);
   }
 
-  void userActionSkip() {
-    _showSkipCancelPrompt();
-    unawaited(
-      _performSeek(
-        timeline.value.position +
-            Duration(seconds: preferences.value.skipOpDuration),
-      ),
+  void _skipCurrentSegment({required bool automatic}) {
+    final segment = _activeSkipSegment;
+    if (segment == null ||
+        _skipContext?.isFirstEpisode == true ||
+        !canControlPlayback ||
+        !segment.fits(timeline.value.duration.inMilliseconds)) {
+      return;
+    }
+    _skipSession.suppress(segment);
+    _skipReturnPosition = timeline.value.position;
+    _setSkipState(
+      SkipState.showingCancel,
+      label: segment.label,
+      automatic: automatic,
     );
+    unawaited(_seek(Duration(milliseconds: segment.endMs), fromSkip: true));
+    _skipCancelHideTimer?.cancel();
+    _skipCancelHideTimer = Timer(_skipCancelVisibleDuration, () {
+      if (_disposed) return;
+      _skipReturnPosition = null;
+      if (overlay.value.skipState == SkipState.showingCancel) {
+        _setSkipState(
+          segment.type == 'ed' ? SkipState.ending : SkipState.idle,
+          label: segment.label,
+          automatic: automatic,
+        );
+      }
+    });
   }
 
   void userActionCancelSkip() {
+    final segment = _activeSkipSegment;
+    if (segment != null) _skipSession.dismiss(segment);
     _skipCancelHideTimer?.cancel();
+    _skipReturnPosition = null;
     _setSkipState(SkipState.idle);
   }
 
   void cancelSkipOpEd() {
-    final wasShowing = overlay.value.skipState == SkipState.showingCancel;
-    _skipCancelHideTimer?.cancel();
-    _setSkipState(SkipState.idle);
-    if (!wasShowing) return;
-    final position = timeline.value.position;
-    final target =
-        (position - Duration(seconds: preferences.value.skipOpDuration)).clamp(
-          Duration.zero,
-          position,
-        );
-    unawaited(_performSeek(target));
-  }
-
-  void _showSkipCancelPrompt() {
-    _setSkipState(SkipState.showingCancel);
-    _skipCancelHideTimer?.cancel();
-    _skipCancelHideTimer = Timer(_skipCancelVisibleDuration, () {
-      if (_disposed || overlay.value.skipState != SkipState.showingCancel) {
-        return;
-      }
-      _setSkipState(SkipState.idle);
-    });
+    final target = _skipReturnPosition;
+    if (target == null || !canControlPlayback) return;
+    userActionCancelSkip();
+    unawaited(_seek(target, fromSkip: true));
   }
 
   void setMediaInfo(PlaybackMediaInfo info) {
@@ -736,6 +868,14 @@ class PlaybackController {
     }
     if (previous == next) return;
     preferences.value = next;
+    _updateSkipSuggestion();
+    if (next.enableSkipOpEd != previous.enableSkipOpEd) {
+      if (next.enableSkipOpEd) {
+        unawaited(refreshSkipSegments(force: true));
+      } else {
+        userActionCancelSkip();
+      }
+    }
     if (previous.longPressSpeed != next.longPressSpeed) {
       _notifyToastChanged();
     }
@@ -950,6 +1090,7 @@ class PlaybackController {
     final mediaUri = currentMediaUri;
     final subtitleTrack = currentSubtitleTrack;
     final rate = core.value.playbackRate;
+    final skipContext = _skipContext;
 
     for (final sub in _subscriptions) {
       await sub.cancel();
@@ -973,6 +1114,7 @@ class PlaybackController {
       if (_disposed) return;
       await _reapplyHwdec();
       if (position > Duration.zero) await newPlayer.seek(position);
+      setSkipContext(skipContext);
       if (subtitleTrack.id != 'auto' && subtitleTrack.id != 'no') {
         try {
           await newPlayer.setSubtitleTrack(subtitleTrack);
@@ -1023,6 +1165,7 @@ class PlaybackController {
   );
 
   void _resetPlaybackState() {
+    setSkipContext(null);
     _stopReversePlayback();
     _skipCancelHideTimer?.cancel();
     _jumpPromptTimer?.cancel();
@@ -1079,6 +1222,7 @@ class PlaybackController {
     timeline.dispose();
     overlay.dispose();
     toastRevision.dispose();
+    skipData.dispose();
     preferences.dispose();
     mediaInfo.dispose();
     enhancement.dispose();

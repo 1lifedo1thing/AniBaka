@@ -52,6 +52,7 @@ class BakaPlayer extends StatefulWidget {
     this.onFullScreenChanged,
     this.focusNode,
     this.showPlaybackError = true,
+    this.showPrompts = true,
     this.onAiRepair,
     super.key,
   });
@@ -67,6 +68,7 @@ class BakaPlayer extends StatefulWidget {
   final ValueChanged<bool>? onFullScreenChanged;
   final FocusNode? focusNode;
   final bool showPlaybackError;
+  final bool showPrompts;
   final VoidCallback? onAiRepair;
 
   BakaPlayer fullscreenView() => BakaPlayer(
@@ -80,6 +82,7 @@ class BakaPlayer extends StatefulWidget {
     onNextEpisode: onNextEpisode,
     onFullScreenChanged: onFullScreenChanged,
     showPlaybackError: showPlaybackError,
+    showPrompts: showPrompts,
     onAiRepair: onAiRepair,
   );
 
@@ -323,9 +326,9 @@ class _BakaPlayerState extends State<BakaPlayer> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final isWide =
-            Instances.isDesktopPlatform ||
             Instances.isTV ||
-            (_isTablet && constraints.maxWidth >= 720);
+            ((Instances.isDesktopPlatform || _isTablet) &&
+                constraints.maxWidth >= 720);
 
         return Stack(
           fit: StackFit.passthrough,
@@ -363,12 +366,6 @@ class _BakaPlayerState extends State<BakaPlayer> {
               onSearch: _navigateToSearch,
               show: widget.showPlaybackError,
               onAiRepair: widget.onAiRepair,
-            ),
-            PlayerPrompts(
-              controller: widget.controller,
-              isFullScreen: widget.full,
-              hasNextEpisode: widget.hasNextEpisode,
-              onNextEpisode: widget.onNextEpisode,
             ),
             _buildDanmakuInputOverlay(),
           ],
@@ -743,6 +740,11 @@ class _BakaPlayerState extends State<BakaPlayer> {
   }
 
   Widget _buildControlsOverlay(bool isWide) {
+    // Settings use a translucent surface; controls underneath would bleed
+    // through its header and search results even though they cannot be used.
+    if (!(ModalRoute.isCurrentOf(context) ?? true)) {
+      return const SizedBox.shrink();
+    }
     final controller = widget.controller;
     final headerContent = _buildHeaderContent(isWide);
     final danmakuBar = _buildDanmakuBar(isWide);
@@ -770,7 +772,21 @@ class _BakaPlayerState extends State<BakaPlayer> {
                 ),
               ),
             ),
-            const Spacer(),
+            Expanded(
+              child: Stack(
+                children: [
+                  if (widget.showPrompts)
+                    PlayerPrompts(
+                      controller: controller,
+                      isFullScreen: widget.full,
+                      isWideLayout: isWide,
+                      isTvLayout: Instances.isTV,
+                      hasNextEpisode: widget.hasNextEpisode,
+                      onNextEpisode: widget.onNextEpisode,
+                    ),
+                ],
+              ),
+            ),
             ClipRect(
               child: AnimatedSlide(
                 offset: showControls ? Offset.zero : const Offset(0, 1),
@@ -898,6 +914,13 @@ class _BakaPlayerState extends State<BakaPlayer> {
                   onTap: () => showSpeedDialog(context, controller),
                 ),
               );
+            }
+
+            if (widget.headerControl != null) {
+              actions.add(widget.headerControl!);
+            }
+
+            if (widget.full) {
               actions.add(
                 PlatformTooltip(
                   message: '播放器详情',
@@ -913,10 +936,6 @@ class _BakaPlayerState extends State<BakaPlayer> {
                   ),
                 ),
               );
-            }
-
-            if (widget.headerControl != null) {
-              actions.add(widget.headerControl!);
             }
 
             if (actions.isEmpty) return const SizedBox.shrink();

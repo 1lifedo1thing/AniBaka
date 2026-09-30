@@ -45,6 +45,15 @@ class PlaybackContent {
         bgmEpisodes = asMapList(embeddedEpisodes);
         _bgmEpisodesLoaded = true;
       }
+      // Auto matching starts before loadDetail. Keep the desired episode even
+      // while its source catalog is still empty.
+      final remembered = history.getResumeSelection(
+        this.request,
+        bgmId: bgmInfo.subjectId,
+      );
+      _request.episodeIndex =
+          posIndex ?? request.episodeIndex ?? remembered?.episodeIndex;
+      _request.lineIndex = request.lineIndex ?? remembered?.lineIndex;
     }
   }
 
@@ -69,6 +78,10 @@ class PlaybackContent {
     final source = request.source;
     return !isLocalSource && AdapterRegistry.isAdapterSource(source);
   }
+
+  /// Bangumi 条目没有对应的本站贴文：它的 `id` 是 BGM 条目 id。
+  /// 两个 id 不是同一命名空间，按贴文查询会命中别人的贴文或 null。
+  bool get isBgmSubject => request.source.trim() == 'bgm';
 
   String? get localFilePath {
     if (isLocalSource && videoList.isNotEmpty) {
@@ -208,7 +221,10 @@ class PlaybackContent {
     int? lineIndex,
   ]) {
     if (videoList.isEmpty) {
-      return (episodeIndex: 0, lineIndex: 1);
+      return (
+        episodeIndex: episodeIndex < 0 ? 0 : episodeIndex,
+        lineIndex: (lineIndex ?? currUrl) > 0 ? (lineIndex ?? currUrl) : 1,
+      );
     }
     final normalizedEpisodeIndex = episodeIndex.clamp(0, videoList.length - 1);
     final preferred = lineIndex ?? currUrl;
@@ -267,7 +283,8 @@ class PlaybackContent {
     final explicitEpisodeIndex = posIndex ?? request.episodeIndex;
     final explicitLineIndex = request.lineIndex;
 
-    if (!isAdapter) {
+    // Bangumi 条目的 `id` 是 BGM 条目 id，拿去查贴文只会拿到 null 或别人的贴文。
+    if (!isAdapter && !isBgmSubject) {
       final postId = int.tryParse(data['id']?.toString() ?? '');
       if (postId != null && postId > 0) {
         final lifetime = _lifetime;
@@ -609,7 +626,9 @@ class PlaybackContent {
     }
   }
 
+  /// 贴文 id 只对本站条目成立；BGM 条目 id 一旦写进收藏的 post_id 就是串号。
   int? get validPostId {
+    if (isBgmSubject) return null;
     final postId = toInt(data['id']);
     return postId != null && postId > 0 ? postId : null;
   }

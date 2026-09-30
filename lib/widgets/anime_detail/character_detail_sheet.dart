@@ -1,13 +1,27 @@
-import 'package:baka/utils/json_values.dart';
 import 'dart:math' as math;
 
 import 'package:baka/api/bgm.dart';
 import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/utils/date_util.dart';
+import 'package:baka/utils/json_values.dart';
 import 'package:baka/widgets/common/skeletonizer.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
+String _voiceActorNames(Map<String, dynamic> character) {
+  final actors = character['actors'] as List?;
+  if (actors == null || actors.isEmpty) return '';
+
+  final names = StringBuffer();
+  for (final actor in actors) {
+    final name = (actor as Map)['name']?.toString();
+    if (name == null || name.isEmpty) continue;
+    if (names.isNotEmpty) names.write(' / ');
+    names.write(name);
+  }
+  return names.toString();
+}
 
 /// 统一的网络图片组件（封装 wsrv.nl 图片代理 + 缓存 + 错误处理）
 class _NetImage extends StatelessWidget {
@@ -32,18 +46,14 @@ class _NetImage extends StatelessWidget {
     final fallbackBg = (isDark ? Colors.white : Colors.black).withValues(
       alpha: 0.05,
     );
-    final iconColor = (isDark ? Colors.white : Colors.black).withValues(
-      alpha: 0.24,
-    );
-
-    final fallback = Container(
+    late final fallback = Container(
       width: width,
       height: height,
       color: fallbackBg,
       alignment: Alignment.center,
       child: Icon(
         Icons.person_off,
-        color: iconColor,
+        color: (isDark ? Colors.white : Colors.black).withValues(alpha: 0.24),
         size: (width != null && width! < 50) ? 18 : 32,
       ),
     );
@@ -81,12 +91,8 @@ class CharacterCard extends StatelessWidget {
     final textColor = isDark ? Colors.white : Colors.black87;
     final name = character['name']?.toString() ?? '未知';
     final role = character['role_name']?.toString();
-    final voiceActor =
-        (character['actors'] as List?)
-            ?.map((actor) => (actor as Map)['name']?.toString())
-            .where((v) => v != null && v.isNotEmpty)
-            .join(' / ') ??
-        '';
+    final voiceActor = _voiceActorNames(character);
+    final images = character['images'];
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -106,8 +112,8 @@ class CharacterCard extends StatelessWidget {
             ),
             child: _NetImage(
               url:
-                  character['images']?['large']?.toString() ??
-                  character['images']?['grid']?.toString() ??
+                  images?['large']?.toString() ??
+                  images?['grid']?.toString() ??
                   '',
               borderRadius: 12,
               proxyWidth: 240,
@@ -234,11 +240,14 @@ class _CharactersSectionState extends State<CharactersSection>
                     (textScaler.scale(10) * 1.2).ceilToDouble(),
               ),
               itemCount: characters.length,
-              itemBuilder: (context, index) => GestureDetector(
-                onTap: () => widget.onCharacterTap?.call(characters[index]),
-                behavior: HitTestBehavior.opaque,
-                child: CharacterCard(character: characters[index]),
-              ),
+              itemBuilder: (context, index) {
+                final character = characters[index];
+                return GestureDetector(
+                  onTap: () => widget.onCharacterTap?.call(character),
+                  behavior: HitTestBehavior.opaque,
+                  child: CharacterCard(character: character),
+                );
+              },
             );
           },
         );
@@ -284,9 +293,9 @@ class CharacterDetailSheet extends StatefulWidget {
 
 class _CharacterDetailSheetState extends State<CharacterDetailSheet> {
   Map<String, dynamic>? _charInfo;
-  List<Map<String, dynamic>> _charComments = [];
+  late Future<List<Map<String, dynamic>>> _comments;
   bool _isLoading = true;
-  bool _commentsLoading = true;
+  int _infoGeneration = 0;
 
   @override
   void initState() {
@@ -294,34 +303,49 @@ class _CharacterDetailSheetState extends State<CharacterDetailSheet> {
     // 秒开预览：优先保留外部传入的角色基础信息
     _charInfo = widget.initialData;
     _loadInfo();
-    _loadComments();
+    _comments = _loadComments(widget.characterId);
+  }
+
+  @override
+  void didUpdateWidget(covariant CharacterDetailSheet oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.characterId != widget.characterId) {
+      _charInfo = widget.initialData;
+      _isLoading = true;
+      _loadInfo();
+      _comments = _loadComments(widget.characterId);
+    }
   }
 
   Future<void> _loadInfo() async {
+    final generation = ++_infoGeneration;
     try {
       final infoData = await getBgmCharacterInfo(widget.characterId);
-      if (!mounted) return;
+      if (!mounted || generation != _infoGeneration) return;
 
       setState(() {
         if (infoData.isNotEmpty) {
-          _charInfo = {...?_charInfo, ...infoData};
+          final preview = _charInfo;
+          _charInfo = preview == null || preview.isEmpty
+              ? infoData
+              : {...preview, ...infoData};
         }
         _isLoading = false;
       });
     } catch (e) {
       debugPrint('获取角色详情失败: $e');
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted && generation == _infoGeneration) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
-  Future<void> _loadComments() async {
+  Future<List<Map<String, dynamic>>> _loadComments(int characterId) async {
     try {
-      final comments = await getBgmCharacterComments(widget.characterId);
-      if (mounted) setState(() => _charComments = comments);
+      return await getBgmCharacterComments(characterId);
     } catch (e) {
       debugPrint('获取角色评论失败: $e');
-    } finally {
-      if (mounted) setState(() => _commentsLoading = false);
+      return const [];
     }
   }
 
@@ -366,7 +390,10 @@ class _CharacterDetailSheetState extends State<CharacterDetailSheet> {
                   enabled: _isLoading && !hasBasicData,
                   child: _CharHeader(
                     info:
-                        _charInfo ?? {'name': _isLoading ? '角色名称占位' : '暂无角色信息'},
+                        _charInfo ??
+                        (_isLoading
+                            ? const {'name': '角色名称占位'}
+                            : const {'name': '暂无角色信息'}),
                   ),
                 ),
               ),
@@ -406,36 +433,45 @@ class _CharacterDetailSheetState extends State<CharacterDetailSheet> {
                   ),
                 ),
               ),
-              if (_commentsLoading && _charComments.isEmpty)
-                const SliverToBoxAdapter(
-                  child: Padding(
-                    padding: EdgeInsets.all(40),
-                    child: Center(child: CircularProgressIndicator.adaptive()),
-                  ),
-                )
-              else if (_charComments.isEmpty)
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.all(40),
-                    child: Center(
-                      child: Text(
-                        '暂无评论',
-                        style: TextStyle(
-                          color: textColor.withValues(alpha: 0.4),
-                          fontSize: 13,
+              FutureBuilder<List<Map<String, dynamic>>>(
+                future: _comments,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState != ConnectionState.done) {
+                    return const SliverToBoxAdapter(
+                      child: Padding(
+                        padding: EdgeInsets.all(40),
+                        child: Center(
+                          child: CircularProgressIndicator.adaptive(),
                         ),
                       ),
+                    );
+                  }
+                  final comments = snapshot.data!;
+                  if (comments.isEmpty) {
+                    return SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.all(40),
+                        child: Center(
+                          child: Text(
+                            '暂无评论',
+                            style: TextStyle(
+                              color: textColor.withValues(alpha: 0.4),
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }
+                  return SliverList(
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) =>
+                          _CharCommentItem(comment: comments[index]),
+                      childCount: math.min(comments.length, 50),
                     ),
-                  ),
-                )
-              else
-                SliverList(
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) =>
-                        _CharCommentItem(comment: _charComments[index]),
-                    childCount: math.min(_charComments.length, 50),
-                  ),
-                ),
+                  );
+                },
+              ),
               const SliverToBoxAdapter(child: SizedBox(height: 32)),
             ],
           ),
@@ -457,22 +493,16 @@ class _CharHeader extends StatelessWidget {
     final name = info['name']?.toString() ?? info['nameCN']?.toString() ?? '未知';
     final nameCN = info['nameCN']?.toString() ?? '';
     final role = info['role_name']?.toString();
-    final voiceActor =
-        (info['actors'] as List?)
-            ?.map((actor) => (actor as Map)['name']?.toString())
-            .where((v) => v != null && v.isNotEmpty)
-            .join(' / ') ??
-        '';
+    final voiceActor = _voiceActorNames(info);
     final collects =
         info['collects'] as int? ?? info['collects_count'] as int? ?? 0;
     final commentCount =
         info['comment'] as int? ?? info['comment_count'] as int? ?? 0;
     final infoStr =
         info['info']?.toString().replaceAll('\r\n', '\n').trim() ?? '';
+    final images = info['images'] as Map?;
     final imageUrl =
-        (info['images'] as Map?)?['large']?.toString() ??
-        (info['images'] as Map?)?['grid']?.toString() ??
-        '';
+        images?['large']?.toString() ?? images?['grid']?.toString() ?? '';
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -676,7 +706,7 @@ class _CharCommentItem extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(left: 44, top: 8),
               child: Text(
-                BgmUtils.cleanBbCode(content).trim(),
+                BgmUtils.cleanBbCode(content),
                 style: TextStyle(
                   color: textColor.withValues(alpha: 0.85),
                   fontSize: 13,
@@ -739,7 +769,7 @@ class _CharCommentItem extends StatelessWidget {
             ),
           ),
           TextSpan(
-            text: BgmUtils.cleanBbCode(rContent).trim(),
+            text: BgmUtils.cleanBbCode(rContent),
             style: TextStyle(
               color: textColor.withValues(alpha: 0.6),
               fontSize: 12,

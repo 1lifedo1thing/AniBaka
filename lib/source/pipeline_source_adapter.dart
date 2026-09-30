@@ -15,6 +15,7 @@ import 'package:baka/services/playback/playback_settings.dart';
 import 'package:baka/source/adapter_base.dart';
 import 'package:baka/source/hls/hls_ad_filter.dart';
 import 'package:baka/source/hls/hls_master_playlist.dart';
+import 'package:baka/source/hls/hls_manifest_decoder.dart';
 import 'package:baka/source/hls/mpeg_ts_fingerprint.dart';
 import 'package:baka/source/models/episode.dart';
 import 'package:baka/source/models/series.dart';
@@ -336,11 +337,13 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
     ({String url, Map<String, String> httpHeaders}) media, {
     bool? filterHlsAds,
     void Function(String message)? onHlsAdFilterStatus,
+    void Function(String key)? onTimelinePrepared,
   }) => runOperation(
     () => _preparePlaybackMedia(
       media,
       filterHlsAds: filterHlsAds,
       onHlsAdFilterStatus: onHlsAdFilterStatus,
+      onTimelinePrepared: onTimelinePrepared,
     ),
   );
 
@@ -348,6 +351,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
     ({String url, Map<String, String> httpHeaders}) media, {
     bool? filterHlsAds,
     void Function(String message)? onHlsAdFilterStatus,
+    void Function(String key)? onTimelinePrepared,
   }) async {
     final generation = ++_hlsGeneration;
     _hlsPreparation?.cancel();
@@ -397,10 +401,9 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
           return prepared;
         }
 
-        // 主清单只有码率变体、没有分片，去广告得先落到一个具体变体上。
-        // 这一步固定了码率，所以只在规则显式开启 filterHlsAds 时做。
+        // Encrypted masters also need a decoded, materialized media variant.
         if (HlsMasterPlaylist.isMaster(playlist.body)) {
-          if (!filtersAds) {
+          if (!filtersAds && _playFeatures.hlsManifestDecode == null) {
             debugPrint('${rule.id}: HLS 主清单不做物化（未开启 filterHlsAds）');
             return prepared;
           }
@@ -464,6 +467,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
                 : 'HLS 去广告：${filterOutcome.detail}',
           );
         }
+        onTimelinePrepared?.call(filterOutcome?.timelineKey ?? 'original');
         return (url: proxyUrl, httpHeaders: const <String, String>{});
       });
     } catch (error) {
@@ -489,6 +493,23 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
     Uri uri,
     Map<String, String> headers,
   ) async {
+    final decoder = _playFeatures.hlsManifestDecode;
+    if (decoder != null) {
+      final response = await dio.getUri<List<int>>(
+        uri,
+        options: Options(
+          headers: headers,
+          responseType: ResponseType.bytes,
+          validateStatus: (_) => true,
+          extra: const {SchedulerInterceptor.priorityKey: RequestPriority.play},
+        ),
+      );
+      return (
+        body: HlsManifestDecoder.decode(response.data ?? const [], decoder),
+        uri: response.realUri,
+        status: response.statusCode ?? 0,
+      );
+    }
     final response = await dio.getUri<String>(
       uri,
       options: Options(
@@ -883,6 +904,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
     bool filtersHlsAds,
     bool resolvesMediaRedirects,
     bool followsEmbeddedPlayer,
+    Map<String, dynamic>? hlsManifestDecode,
     PipelineStep? keepAliveStep,
   })
   _inspectPlayFeatures(List<PipelineStep> steps) {
@@ -893,6 +915,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
     var filtersHlsAds = false;
     var resolvesMediaRedirects = false;
     var followsEmbeddedPlayer = false;
+    Map<String, dynamic>? hlsManifestDecode;
     PipelineStep? keepAliveStep;
 
     void inspect(List<PipelineStep> current) {
@@ -906,6 +929,11 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
         usesCookies |= step.flag('cookieSession');
         validatesWithCookies |= step.flag('validateWithCookies');
         materializesHls |= step.flag('materializeHls');
+        final decoder = step.params['hlsManifestDecode'];
+        if (hlsManifestDecode == null && decoder is Map) {
+          hlsManifestDecode = Map<String, dynamic>.from(decoder);
+          materializesHls = true;
+        }
         filtersHlsAds |= step.flag('filterHlsAds');
         resolvesMediaRedirects |= step.flag('resolveMediaRedirects');
         followsEmbeddedPlayer |= step.flag('followEmbeddedPlayer');
@@ -927,6 +955,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
       filtersHlsAds: filtersHlsAds,
       resolvesMediaRedirects: resolvesMediaRedirects,
       followsEmbeddedPlayer: followsEmbeddedPlayer,
+      hlsManifestDecode: hlsManifestDecode,
       keepAliveStep: keepAliveStep,
     );
   }

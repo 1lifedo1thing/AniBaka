@@ -63,6 +63,10 @@ $ops
 Stage flags are optional booleans on play-stage steps (branch steps included):
 - materializeHls: serve a complete VOD HLS manifest through the app, so segment
   requests keep the rule's Referer/Cookie headers.
+- hlsManifestDecode: decode a binary HLS manifest using a declared map, e.g.
+  {scheme: xor, prefix: enc, key: [144,223,214,167,22,76,53], period: 10,
+   fallbackIndex: 6, xor: 165, skipBytes: 3, trimPrefixBeforeM3u8: true}.
+  This enables materialization and resolves a master to one bitrate variant.
 - filterHlsAds: drop HLS segments whose video encoding differs from the rest of
   the playlist, which removes ads spliced into the stream. Implies
   materializeHls; also resolves a master playlist down to one bitrate variant.

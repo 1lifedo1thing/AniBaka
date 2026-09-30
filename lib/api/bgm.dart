@@ -62,6 +62,9 @@ Future<Map<String, dynamic>> getBgmSubject(int subjectId) => _subjectCache.get(
   ),
 );
 
+Future<Map<String, dynamic>> getBgmEpisode(int episodeId) => apiTransport
+    .getJson<Map<String, dynamic>>('$_bgmApiBase/v0/episodes/$episodeId');
+
 Future<BgmSubjectInfo> _subjectInfo(int subjectId) async =>
     BgmSubjectInfo.fromJson(await getBgmSubject(subjectId));
 

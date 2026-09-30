@@ -1,7 +1,20 @@
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+bool isCompactPlayerPanel(BuildContext context) =>
+    MediaQuery.sizeOf(context).shortestSide < 600;
+
+EdgeInsets playerPanelContentPadding(BuildContext context) =>
+    isCompactPlayerPanel(context)
+    ? const EdgeInsets.fromLTRB(8, 4, 8, 12)
+    : const EdgeInsets.fromLTRB(16, 12, 16, 24);
 
 Future<void> showPlayerSettingsPanel(BuildContext context, Widget child) {
+  if (context.findAncestorStateOfType<_PlayerSettingsPanelState>() != null) {
+    return Navigator.of(context).push<void>(_panelRoute(child));
+  }
+
   final theme = Theme.of(context);
   final colors = ColorScheme.fromSeed(
     seedColor: theme.colorScheme.primary,
@@ -12,8 +25,11 @@ Future<void> showPlayerSettingsPanel(BuildContext context, Widget child) {
     barrierColor: Colors.transparent,
     builder: (context) {
       final screenWidth = MediaQuery.sizeOf(context).width;
-      final width = screenWidth < 600
-          ? screenWidth
+      final compact = isCompactPlayerPanel(context);
+      final width = compact
+          ? (screenWidth * (screenWidth < 600 ? 0.88 : 0.38))
+                .clamp(280.0, 340.0)
+                .clamp(0.0, screenWidth)
           : (screenWidth * 0.55).clamp(400.0, 560.0);
       return Theme(
         data: theme.copyWith(
@@ -24,18 +40,19 @@ Future<void> showPlayerSettingsPanel(BuildContext context, Widget child) {
             ),
           ),
           brightness: Brightness.dark,
+          visualDensity: compact ? VisualDensity.compact : theme.visualDensity,
           colorScheme: colors,
           textTheme: theme.textTheme.apply(
             bodyColor: Colors.white,
             displayColor: Colors.white,
           ),
           sliderTheme: SliderThemeData(
-            trackHeight: 16,
-            trackGap: 6,
+            trackHeight: compact ? 10 : 16,
+            trackGap: compact ? 4 : 6,
             tickMarkShape: SliderTickMarkShape.noTickMark,
             trackShape: const GappedSliderTrackShape(),
             thumbShape: const HandleThumbShape(),
-            thumbSize: const WidgetStatePropertyAll(Size(4, 36)),
+            thumbSize: WidgetStatePropertyAll(Size(4, compact ? 28 : 36)),
             activeTrackColor: colors.primary,
             inactiveTrackColor: colors.surfaceContainerHighest.withValues(
               alpha: 0.7,
@@ -53,7 +70,7 @@ Future<void> showPlayerSettingsPanel(BuildContext context, Widget child) {
           ),
           filledButtonTheme: FilledButtonThemeData(
             style: FilledButton.styleFrom(
-              minimumSize: const Size(48, 48),
+              minimumSize: Size(44, compact ? 40 : 48),
               backgroundColor: colors.secondaryContainer.withValues(
                 alpha: 0.66,
               ),
@@ -69,10 +86,55 @@ Future<void> showPlayerSettingsPanel(BuildContext context, Widget child) {
           constraints: BoxConstraints.tightFor(width: width),
           alignment: Alignment.centerRight,
           elevation: 0,
-          child: child,
+          child: _PlayerSettingsPanel(child: child),
         ),
       );
     },
+  );
+}
+
+PageRoute<void> _panelRoute(Widget child) => PageRouteBuilder<void>(
+  // Keep the previous page alive but offstage, so its translucent surface and
+  // controls cannot show through the current page, even during a transition.
+  pageBuilder: (_, _, _) => child,
+  transitionDuration: Duration.zero,
+  reverseTransitionDuration: Duration.zero,
+);
+
+class _PlayerSettingsPanel extends StatefulWidget {
+  const _PlayerSettingsPanel({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_PlayerSettingsPanel> createState() => _PlayerSettingsPanelState();
+}
+
+class _PlayerSettingsPanelState extends State<_PlayerSettingsPanel> {
+  late NavigatorState _navigator;
+
+  void close() => Navigator.of(context).pop();
+
+  @override
+  Widget build(BuildContext context) => CallbackShortcuts(
+    bindings: {
+      const SingleActivator(LogicalKeyboardKey.escape): () {
+        if (_navigator.canPop()) {
+          _navigator.pop();
+        } else {
+          close();
+        }
+      },
+    },
+    child: NavigatorPopHandler<void>(
+      onPopWithResult: (_) => _navigator.pop(),
+      child: Navigator(
+        onGenerateInitialRoutes: (navigator, _) {
+          _navigator = navigator;
+          return [_panelRoute(widget.child)];
+        },
+      ),
+    ),
   );
 }
 
@@ -83,11 +145,16 @@ class PanelContainer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final panel = context.findAncestorStateOfType<_PlayerSettingsPanelState>();
+    final canGoBack = panel != null && (ModalRoute.canPopOf(context) ?? false);
     return LayoutBuilder(
       builder: (context, constraints) {
         // The empty leading space lets the scrim dissolve into the video without
         // fading the controls or creating a visible drawer edge.
-        final leading = constraints.maxWidth < 400 ? 20.0 : 64.0;
+        final compact = isCompactPlayerPanel(context);
+        final leading = compact
+            ? 12.0
+            : (constraints.maxWidth < 400 ? 20.0 : 64.0);
         return DecoratedBox(
           decoration: BoxDecoration(
             gradient: LinearGradient(
@@ -104,7 +171,7 @@ class PanelContainer extends StatelessWidget {
             type: MaterialType.transparency,
             child: SafeArea(
               child: Padding(
-                padding: EdgeInsets.only(left: leading, right: 8),
+                padding: EdgeInsets.only(left: leading, right: compact ? 4 : 8),
                 child: DefaultTextStyle.merge(
                   style: const TextStyle(
                     color: Colors.white,
@@ -113,14 +180,24 @@ class PanelContainer extends StatelessWidget {
                   child: Column(
                     children: [
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+                        padding: compact
+                            ? const EdgeInsets.fromLTRB(8, 2, 4, 2)
+                            : const EdgeInsets.fromLTRB(16, 12, 8, 8),
                         child: Row(
                           children: [
+                            if (canGoBack) ...[
+                              IconButton(
+                                tooltip: '返回上一级',
+                                onPressed: () => Navigator.of(context).pop(),
+                                icon: const Icon(Icons.arrow_back_rounded),
+                              ),
+                              const SizedBox(width: 8),
+                            ],
                             Expanded(
                               child: Text(
                                 title,
-                                style: const TextStyle(
-                                  fontSize: 22,
+                                style: TextStyle(
+                                  fontSize: compact ? 18 : 22,
                                   fontWeight: FontWeight.w700,
                                 ),
                               ),
@@ -133,7 +210,9 @@ class PanelContainer extends StatelessWidget {
                                     .secondaryContainer
                                     .withValues(alpha: 0.66),
                               ),
-                              onPressed: () => Navigator.of(context).pop(),
+                              onPressed:
+                                  panel?.close ??
+                                  () => Navigator.of(context).pop(),
                               icon: const Icon(Icons.close_rounded),
                             ),
                           ],
@@ -199,12 +278,12 @@ class PanelSectionTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
+    padding: EdgeInsets.only(bottom: isCompactPlayerPanel(context) ? 4 : 8),
     child: Text(
       title,
-      style: const TextStyle(
+      style: TextStyle(
         color: Colors.white,
-        fontSize: 16,
+        fontSize: isCompactPlayerPanel(context) ? 14 : 16,
         fontWeight: FontWeight.w700,
       ),
     ),
@@ -226,7 +305,8 @@ class PanelDivider extends StatelessWidget {
   const PanelDivider({super.key});
 
   @override
-  Widget build(BuildContext context) => const SizedBox(height: 8);
+  Widget build(BuildContext context) =>
+      SizedBox(height: isCompactPlayerPanel(context) ? 4 : 8);
 }
 
 class PanelSliderTile extends StatelessWidget {
@@ -407,39 +487,50 @@ class PanelSwitchTile extends StatelessWidget {
     child: InkWell(
       borderRadius: BorderRadius.circular(20),
       onTap: () => onChanged(!value),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  if (subtitle != null) ...[
-                    const SizedBox(height: 4),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 44),
+        child: Padding(
+          padding: EdgeInsets.symmetric(
+            vertical: isCompactPlayerPanel(context) ? 2 : 6,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Text(
-                      subtitle!,
-                      style: const TextStyle(
-                        color: Color(0xFFD4DCE5),
-                        fontSize: 12,
-                        height: 1.4,
+                      title,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: isCompactPlayerPanel(context) ? 14 : 15,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
+                    if (subtitle != null) ...[
+                      SizedBox(height: isCompactPlayerPanel(context) ? 2 : 4),
+                      Text(
+                        subtitle!,
+                        style: const TextStyle(
+                          color: Color(0xFFD4DCE5),
+                          fontSize: 12,
+                          height: 1.25,
+                        ),
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
-            ),
-            const SizedBox(width: 12),
-            Switch(value: value, onChanged: onChanged),
-          ],
+              SizedBox(width: isCompactPlayerPanel(context) ? 6 : 12),
+              Switch(
+                value: value,
+                onChanged: onChanged,
+                materialTapTargetSize: isCompactPlayerPanel(context)
+                    ? MaterialTapTargetSize.shrinkWrap
+                    : MaterialTapTargetSize.padded,
+              ),
+            ],
+          ),
         ),
       ),
     ),

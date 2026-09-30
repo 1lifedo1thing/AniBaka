@@ -72,18 +72,19 @@ content_14.ts
 
 /// 假 CDN：主清单、媒体清单与分片都在本机，分片按正片/广告返回真实前缀。
 class _FakeCdn {
-  _FakeCdn(this.server);
+  _FakeCdn(this.server, {this.encrypted = false});
 
   final HttpServer server;
+  final bool encrypted;
   final List<String> paths = [];
   final Map<String, String?> referers = {};
   final Map<String, String?> ranges = {};
 
   String get origin => 'http://127.0.0.1:${server.port}';
 
-  static Future<_FakeCdn> start() async {
+  static Future<_FakeCdn> start({bool encrypted = false}) async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    final cdn = _FakeCdn(server);
+    final cdn = _FakeCdn(server, encrypted: encrypted);
     server.listen(cdn._handle);
     return cdn;
   }
@@ -99,9 +100,9 @@ class _FakeCdn {
 
     switch (path) {
       case '/index.m3u8':
-        return _writePlaylist(response, _masterPlaylist);
+        return _writePlaylist(response, _masterPlaylist, encrypted: encrypted);
       case '/3000k/hls/mixed.m3u8':
-        return _writePlaylist(response, _mediaPlaylist);
+        return _writePlaylist(response, _mediaPlaylist, encrypted: encrypted);
     }
 
     final segment = switch (path) {
@@ -118,13 +119,26 @@ class _FakeCdn {
     return _writeSegment(response, segment, ranges[path]);
   }
 
-  static Future<void> _writePlaylist(HttpResponse response, String body) async {
+  static Future<void> _writePlaylist(
+    HttpResponse response,
+    String body, {
+    bool encrypted = false,
+  }) async {
     response.headers.contentType = ContentType(
       'application',
       'vnd.apple.mpegurl',
       charset: 'utf-8',
     );
-    response.write(body);
+    if (encrypted) {
+      response.add([
+        101,
+        110,
+        99,
+        ...utf8.encode(body).map((byte) => byte ^ 7),
+      ]);
+    } else {
+      response.write(body);
+    }
     await response.close();
   }
 
@@ -329,10 +343,12 @@ void main() {
     );
 
     try {
+      String? timelineKey;
       final prepared = await adapter.preparePlaybackMedia((
         url: '${cdn.origin}/index.m3u8',
         httpHeaders: {HttpHeaders.refererHeader: 'https://source/'},
-      ));
+      ), onTimelinePrepared: (key) => timelineKey = key);
+      expect(timelineKey, matches(RegExp(r'^hls:[a-f0-9]{64}$')));
 
       // 主清单 → 变体 → 媒体清单 → 本地代理清单。
       expect(prepared.url, startsWith('http://127.0.0.1:'));
@@ -369,6 +385,51 @@ void main() {
       await cdn.close();
     }
   });
+
+  test(
+    'declared binary decoder materializes master and variant without ad filtering',
+    () async {
+      final cdn = await _FakeCdn.start(encrypted: true);
+      final adapter = PipelineSourceAdapter(
+        SourceRule(
+          id: 'hls-decode-test',
+          name: 'HLS decode test',
+          baseUrl: cdn.origin,
+          play: const [
+            PipelineStep('noop', {
+              'hlsManifestDecode': {
+                'scheme': 'xor',
+                'prefix': 'enc',
+                'key': [0],
+                'period': 1,
+                'fallbackIndex': 0,
+                'xor': 7,
+                'skipBytes': 3,
+              },
+            }),
+          ],
+        ),
+      );
+      try {
+        final prepared = await adapter.preparePlaybackMedia((
+          url: '${cdn.origin}/index.m3u8',
+          httpHeaders: const {'Referer': 'https://example.org/'},
+        ));
+        expect(prepared.url, isNot('${cdn.origin}/index.m3u8'));
+        expect(cdn.paths, contains('/3000k/hls/mixed.m3u8'));
+        final manifest = _decode((await _get(prepared.url)).bytes);
+        expect(manifest, startsWith('#EXTM3U'));
+        expect(manifest, contains('#EXT-X-ENDLIST'));
+        final segments = _proxySegments(manifest);
+        expect(segments, hasLength(17));
+        expect((await _get(segments.first)).bytes, contentPrefixBytes);
+        expect(cdn.referers['/3000k/hls/content_0.ts'], 'https://example.org/');
+      } finally {
+        adapter.dispose();
+        await cdn.close();
+      }
+    },
+  );
 
   test('未开启 filterHlsAds 时主清单仍回落到原始地址', () async {
     final cdn = await _FakeCdn.start();

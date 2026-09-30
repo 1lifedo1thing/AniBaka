@@ -593,10 +593,6 @@ class CIslandCommentWidgetState extends State<CIslandCommentWidget>
                       pid: widget.postId,
                       size: 100,
                       asSliver: true,
-                      loadingPlaceholder: const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 24),
-                        child: Text('正在获取评论…'),
-                      ),
                       onTapLink: widget.onCommentLinkTap == null
                           ? null
                           : (text, url, title) {
@@ -618,47 +614,51 @@ class CIslandCommentWidgetState extends State<CIslandCommentWidget>
                         ),
                       ),
                     ),
-                    if (loading)
-                      SliverPadding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        sliver: SliverToBoxAdapter(
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 24),
-                            child: Text(
-                              '正在获取剧评…',
-                              style: theme.textTheme.bodyMedium,
-                            ),
-                          ),
-                        ),
-                      )
-                    else if (comments.isEmpty)
-                      SliverPadding(
-                        padding: const EdgeInsets.symmetric(vertical: 32),
-                        sliver: SliverToBoxAdapter(
-                          child: Center(
-                            child: Text(
-                              '暂无剧评',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: theme.textTheme.bodySmall?.color
-                                    ?.withValues(alpha: 0.3),
+                    CommentLoadTransition(
+                      loading: loading,
+                      asSliver: true,
+                      child: loading
+                          ? const SliverPadding(
+                              padding: EdgeInsets.symmetric(horizontal: 16),
+                              sliver: SliverToBoxAdapter(
+                                child: CommentLoadingPlaceholder(
+                                  itemCount: 2,
+                                  avatarSize: 36,
+                                  spacing: 12,
+                                  label: '正在加载 Bangumi 剧评',
+                                ),
+                              ),
+                            )
+                          : comments.isEmpty
+                          ? SliverPadding(
+                              padding: const EdgeInsets.symmetric(vertical: 32),
+                              sliver: SliverToBoxAdapter(
+                                child: Center(
+                                  child: Text(
+                                    '暂无剧评',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: theme.textTheme.bodySmall?.color
+                                          ?.withValues(alpha: 0.3),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            )
+                          : SliverPadding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                              ),
+                              sliver: SliverList(
+                                delegate: SliverChildBuilderDelegate(
+                                  (context, index) =>
+                                      _buildBgmComment(comments[index], theme),
+                                  childCount: comments.length,
+                                  addAutomaticKeepAlives: false,
+                                ),
                               ),
                             ),
-                          ),
-                        ),
-                      )
-                    else
-                      SliverPadding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        sliver: SliverList(
-                          delegate: SliverChildBuilderDelegate(
-                            (context, index) =>
-                                _buildBgmComment(comments[index], theme),
-                            childCount: comments.length,
-                            addAutomaticKeepAlives: false,
-                          ),
-                        ),
-                      ),
+                    ),
                   ],
                   const SliverToBoxAdapter(child: SizedBox(height: 16)),
                 ],
