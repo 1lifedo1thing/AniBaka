@@ -19,48 +19,46 @@ class Recipes {
     var search = rule.search;
     var detail = rule.detail;
     var play = rule.play;
+    if (search.isNotEmpty && detail.isNotEmpty && play.isNotEmpty) return rule;
 
     for (final recipe in rule.recipes) {
-      final fragment = _fragmentsFor(recipe.toLowerCase());
-      if (fragment == null) continue;
-      if (search.isEmpty && fragment.search != null) search = fragment.search!;
-      if (detail.isEmpty && fragment.detail != null) detail = fragment.detail!;
-      if (play.isEmpty && fragment.play != null) play = fragment.play!;
+      switch (recipe.toLowerCase()) {
+        case 'maccms':
+          if (search.isEmpty) search = _maccmsSearch;
+          if (detail.isEmpty) detail = _maccmsDetail;
+          break;
+        case 'player_aaaa':
+          break;
+        default:
+          continue;
+      }
+      if (play.isEmpty) play = _playerAaaaPlay;
+      if (search.isNotEmpty && detail.isNotEmpty && play.isNotEmpty) break;
     }
 
     return rule.copyWith(search: search, detail: detail, play: play);
   }
 
-  static _RecipeFragment? _fragmentsFor(String recipe) {
-    switch (recipe) {
-      case 'maccms':
-        return const _RecipeFragment(
-          search: [
-            PipelineStep('fetch', {
-              'url': '/index.php/ajax/suggest?mid=1&wd={keyword}&limit=20',
-              'headers': {'X-Requested-With': 'XMLHttpRequest'},
-            }),
-            PipelineStep('jsonSeries', {
-              'listPath': 'list',
-              'idKey': 'id',
-              'nameKey': 'name',
-              'imageKey': 'pic',
-              'detailUrlTemplate': '/index.php/vod/detail/id/{id}.html',
-            }),
-          ],
-          detail: [
-            PipelineStep('follow', {}),
-            PipelineStep('episodes', {
-              'listSelectors': ['.module-play-list', '.play_list', '.playlist'],
-            }),
-          ],
-          play: _playerAaaaPlay,
-        );
-      case 'player_aaaa':
-        return const _RecipeFragment(play: _playerAaaaPlay);
-    }
-    return null;
-  }
+  static const List<PipelineStep> _maccmsSearch = [
+    PipelineStep('fetch', {
+      'url': '/index.php/ajax/suggest?mid=1&wd={keyword}&limit=20',
+      'headers': {'X-Requested-With': 'XMLHttpRequest'},
+    }),
+    PipelineStep('jsonSeries', {
+      'listPath': 'list',
+      'idKey': 'id',
+      'nameKey': 'name',
+      'imageKey': 'pic',
+      'detailUrlTemplate': '/index.php/vod/detail/id/{id}.html',
+    }),
+  ];
+
+  static const List<PipelineStep> _maccmsDetail = [
+    PipelineStep('follow', {}),
+    PipelineStep('episodes', {
+      'listSelectors': ['.module-play-list', '.play_list', '.playlist'],
+    }),
+  ];
 
   static const List<PipelineStep> _playerAaaaPlay = [
     PipelineStep('follow', {}),
@@ -71,11 +69,4 @@ class Recipes {
       [PipelineStep('videoUrl', {})],
     ]),
   ];
-}
-
-class _RecipeFragment {
-  final List<PipelineStep>? search;
-  final List<PipelineStep>? detail;
-  final List<PipelineStep>? play;
-  const _RecipeFragment({this.search, this.detail, this.play});
 }

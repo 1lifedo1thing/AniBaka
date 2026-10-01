@@ -63,7 +63,7 @@ class _PipelineContext {
   static const String timestampVar = 'timestamp';
 
   final PipelineHost host;
-  final Map<String, Object?> vars;
+  Map<String, Object?> vars;
   final RequestPriority priority;
 
   Object? value;
@@ -81,16 +81,10 @@ class _PipelineContext {
   String get baseUrl => vars[baseUrlVar]?.toString() ?? '';
   int get outputCount => _seriesById.length + _sources.length;
   List<Series> get seriesOut => _seriesById.values.toList(growable: false);
-  List<Source> get sourceResults => _sources;
-
-  _PipelineContext trial() => _PipelineContext._trial(this);
-
   void commit(_PipelineContext trial) {
     value = trial.value;
     pageUrl = trial.pageUrl;
-    vars
-      ..clear()
-      ..addAll(trial.vars);
+    vars = trial.vars;
     mediaHeaders = trial.mediaHeaders;
     cookieNames = trial.cookieNames;
     cookiePrefixes = trial.cookiePrefixes;
@@ -108,12 +102,6 @@ class _PipelineContext {
       _seriesById[series.seriesId] = series;
     }
   }
-
-  void emitSources(Iterable<Source> values) {
-    _sources.addAll(values);
-  }
-
-  void beginSink() => sinkRuns++;
 }
 
 /// anx-rule/2 顺序解释器；实例无状态，可并发复用。
@@ -221,7 +209,7 @@ class PipelineInterpreter {
     );
     ctx.pageUrl = host.toAbsolute(seriesId, rule.baseUrl);
     await _runSteps(rule.detail, ctx);
-    return ctx.sourceResults;
+    return ctx._sources;
   }
 
   Future<String> runPlay(
@@ -365,16 +353,18 @@ class PipelineInterpreter {
       await SourceOperation.delay(Duration(milliseconds: delayMs));
     }
     final template = step.str('url');
-    final rawUrl = template != null && template.isNotEmpty
-        ? _render(template, ctx)
-        : ctx.currentString;
-    if (rawUrl.trim().isEmpty) {
+    final rawUrl =
+        (template != null && template.isNotEmpty
+                ? _render(template, ctx)
+                : ctx.currentString)
+            .trim();
+    if (rawUrl.isEmpty) {
       ctx.value = '';
       return;
     }
 
     final url = ctx.host.toAbsolute(
-      rawUrl.trim(),
+      rawUrl,
       ctx.pageUrl.isEmpty ? ctx.baseUrl : ctx.pageUrl,
     );
     final method = (step.str('method') ?? 'GET').toUpperCase();
@@ -382,10 +372,7 @@ class PipelineInterpreter {
     Object? body;
     final bodyParam = step.params['body'];
     if (bodyParam is Map) {
-      body = {
-        for (final entry in bodyParam.entries)
-          entry.key.toString(): _render(entry.value.toString(), ctx),
-      };
+      body = _renderMap(bodyParam, ctx);
     } else if (bodyParam is String) {
       body = _render(bodyParam, ctx);
     }
@@ -493,20 +480,16 @@ class PipelineInterpreter {
         : ctx.currentString;
 
     try {
-      if (step.flag('regex')) {
-        final regex = _cachedRegExp(
-          pattern,
-          ignoreCase: step.flag('ignoreCase'),
-          dotAll: step.flag('dotAll'),
-        );
-        ctx.value = step.flag('first')
-            ? source.replaceFirst(regex, replacement)
-            : source.replaceAll(regex, replacement);
-      } else {
-        ctx.value = step.flag('first')
-            ? source.replaceFirst(pattern, replacement)
-            : source.replaceAll(pattern, replacement);
-      }
+      final Pattern matcher = step.flag('regex')
+          ? _cachedRegExp(
+              pattern,
+              ignoreCase: step.flag('ignoreCase'),
+              dotAll: step.flag('dotAll'),
+            )
+          : pattern;
+      ctx.value = step.flag('first')
+          ? source.replaceFirst(matcher, replacement)
+          : source.replaceAll(matcher, replacement);
     } catch (e) {
       _debugLog('[pipeline] replace 错误: $e');
       ctx.value = '';
@@ -600,16 +583,17 @@ class PipelineInterpreter {
   }
 
   /// 按编码把字符串转成字节。
-  static List<int> _decodeBytes(String value, String encoding) {
+  static Uint8List _decodeBytes(String value, String encoding) {
     switch (encoding) {
       case 'base64':
         return base64.decode(base64.normalize(value.trim()));
       case 'hex':
         final hex = value.trim().replaceAll(_nonHexPattern, '');
-        return [
-          for (var i = 0; i + 1 < hex.length; i += 2)
-            int.parse(hex.substring(i, i + 2), radix: 16),
-        ];
+        final bytes = Uint8List(hex.length ~/ 2);
+        for (var i = 0; i < bytes.length; i++) {
+          bytes[i] = int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16);
+        }
+        return bytes;
       default:
         return utf8.encode(value);
     }
@@ -633,11 +617,9 @@ class PipelineInterpreter {
       ivObj = enc.IV.fromSecureRandom(ivRandom);
     } else {
       ivObj = enc.IV(
-        Uint8List.fromList(
-          _decodeBytes(
-            _render(step.str('iv') ?? '', ctx),
-            (step.str('ivEncoding') ?? 'utf8').toLowerCase(),
-          ),
+        _decodeBytes(
+          _render(step.str('iv') ?? '', ctx),
+          (step.str('ivEncoding') ?? 'utf8').toLowerCase(),
         ),
       );
     }
@@ -649,7 +631,7 @@ class PipelineInterpreter {
     // GCM 不使用块填充；CBC 用 PKCS7。
     final encrypter = enc.Encrypter(
       enc.AES(
-        enc.Key(Uint8List.fromList(keyBytes)),
+        enc.Key(keyBytes),
         mode: aesMode,
         padding: aesMode == enc.AESMode.gcm ? null : 'PKCS7',
       ),
@@ -665,9 +647,7 @@ class PipelineInterpreter {
       input,
       (step.str('inputEncoding') ?? 'base64').toLowerCase(),
     );
-    return encrypter
-        .decrypt(enc.Encrypted(Uint8List.fromList(cipherBytes)), iv: ivObj)
-        .trim();
+    return encrypter.decrypt(enc.Encrypted(cipherBytes), iv: ivObj).trim();
   }
 
   /// `baseN`：整数 ↔ 自定义字母表进制串（小端），可加固定前后缀。
@@ -736,7 +716,7 @@ class PipelineInterpreter {
   /// - `idKey` / `nameKey` / `imageKey` / `urlKey` / `descKey` / `listPath`
   /// - `verify`：是否在收到验证页时自动尝试 maccms smart_verify
   Future<void> _opMaccmsSuggest(PipelineStep step, _PipelineContext ctx) async {
-    ctx.beginSink();
+    ctx.sinkRuns++;
     final base = ctx.baseUrl;
     final mid = step.str('mid') ?? '1';
     final limit = step.str('limit') ?? '20';
@@ -786,7 +766,7 @@ class PipelineInterpreter {
             TitleFingerprint(name).similarityTo(queryFingerprint) > 0.10;
       });
       final before = ctx.outputCount;
-      _appendJsonSeries(filtered.toList(), step, ctx);
+      _appendJsonSeries(filtered, step, ctx);
       if (ctx.outputCount > before) return;
     }
   }
@@ -880,6 +860,7 @@ class PipelineInterpreter {
       contentType: 'form',
       priority: ctx.priority,
     );
+    SourceOperation.check();
     if (!_isMacCmsVerifySuccess(response) || pageUrl.isEmpty) return null;
     return ctx.host.fetch(pageUrl, referer: pageUrl, priority: ctx.priority);
   }
@@ -928,7 +909,7 @@ class PipelineInterpreter {
   Future<void> _opFirst(PipelineStep step, _PipelineContext ctx) async {
     final outputBefore = ctx.outputCount;
     for (final branch in step.branches) {
-      final trial = ctx.trial();
+      final trial = _PipelineContext._trial(ctx);
       await _runSteps(branch, trial);
       final succeeded = trial.sinkRuns == 0
           ? _isNonEmpty(trial.value)
@@ -943,7 +924,7 @@ class PipelineInterpreter {
 
   /// `searchList`：CSS/XPath 解析搜索结果，追加到 seriesOut。
   void _opSearchList(PipelineStep step, _PipelineContext ctx) {
-    ctx.beginSink();
+    ctx.sinkRuns++;
     final html = ctx.currentString;
     if (html.isEmpty) return;
     List<Series> results;
@@ -965,7 +946,7 @@ class PipelineInterpreter {
     final nameFilter = step.str('nameFilter') ?? '';
     if (nameFilter.isNotEmpty) {
       try {
-        namePattern = RegExp(nameFilter);
+        namePattern = _cachedRegExp(nameFilter);
       } catch (e) {
         _debugLog('[pipeline] nameFilter 错误: $e');
       }
@@ -997,7 +978,7 @@ class PipelineInterpreter {
 
   /// `jsonSeries`：从 JSON 列表构建 Series（JSON API 搜索）。
   void _opJsonSeries(PipelineStep step, _PipelineContext ctx) {
-    ctx.beginSink();
+    ctx.sinkRuns++;
     final rawData = _asJson(ctx.value);
     if (rawData == null) return;
 
@@ -1018,7 +999,7 @@ class PipelineInterpreter {
   }
 
   void _appendJsonSeries(
-    List<dynamic> list,
+    Iterable<dynamic> list,
     PipelineStep step,
     _PipelineContext ctx,
   ) {
@@ -1090,7 +1071,7 @@ class PipelineInterpreter {
 
   /// `episodes`：CSS/XPath 解析播放线路，追加到 sourcesOut。
   void _opEpisodes(PipelineStep step, _PipelineContext ctx) {
-    ctx.beginSink();
+    ctx.sinkRuns++;
     final html = ctx.currentString;
     if (html.isEmpty) return;
     List<Source> sources;
@@ -1109,29 +1090,23 @@ class PipelineInterpreter {
             : step.strList('tabSelectors'),
       );
     }
-    if (step.flag('reverseEpisodes')) {
-      sources = sources
-          .map((source) {
-            final reversed = source.episodes.reversed.toList(growable: false);
-            return Source(
-              List<Episode>.generate(
-                reversed.length,
-                (index) => Episode(
-                  reversed[index].episodeId,
-                  index,
-                  reversed[index].episodeName,
-                ),
-                growable: false,
-              ),
-              source.sourceName,
-            );
-          })
-          .toList(growable: false);
+    final orderedSources = step.flag('reverse') ? sources.reversed : sources;
+    if (!step.flag('reverseEpisodes')) {
+      ctx._sources.addAll(orderedSources);
+      return;
     }
-    if (step.flag('reverse')) {
-      sources = sources.reversed.toList(growable: false);
+    for (final source in orderedSources) {
+      final episodes = source.episodes;
+      ctx._sources.add(
+        Source(
+          List<Episode>.generate(episodes.length, (index) {
+            final episode = episodes[episodes.length - 1 - index];
+            return Episode(episode.episodeId, index, episode.episodeName);
+          }, growable: false),
+          source.sourceName,
+        ),
+      );
     }
-    ctx.emitSources(sources);
   }
 
   /// `jsonEpisodes`：从 JSON 构建播放线路（JSON API 详情）。
@@ -1144,7 +1119,7 @@ class PipelineInterpreter {
   /// 站点把线路序号放在播放页 URL 里（如 `?source=1&episode=0`）时，用
   /// `source_index` 与剧集自身的 `sort` 拼进 episodeId 才能在播放阶段还原。
   void _opJsonEpisodes(PipelineStep step, _PipelineContext ctx) {
-    ctx.beginSink();
+    ctx.sinkRuns++;
     final data = _asJson(ctx.value);
     final episodesPath = step.str('episodesPath') ?? '';
     if (episodesPath.isNotEmpty) {
@@ -1153,7 +1128,7 @@ class PipelineInterpreter {
       final episodes = _buildJsonEpisodes(epList, step, ctx);
       if (episodes.isEmpty) return;
       final name = _render(step.str('sourceName') ?? '', ctx).trim();
-      ctx.emitSources([Source(episodes, name.isEmpty ? null : name)]);
+      ctx._sources.add(Source(episodes, name.isEmpty ? null : name));
       return;
     }
 
@@ -1166,7 +1141,6 @@ class PipelineInterpreter {
     final epListKey = step.str('episodesKey') ?? 'episodes';
     final sourceNameKey = step.str('sourceNameKey') ?? 'name';
 
-    final result = <Source>[];
     for (var sourceIndex = 0; sourceIndex < sourcesList.length; sourceIndex++) {
       final rawSource = sourcesList[sourceIndex];
       if (rawSource is! Map) continue;
@@ -1181,16 +1155,17 @@ class PipelineInterpreter {
       );
       if (episodes.isNotEmpty) {
         final name = rawSource[sourceNameKey]?.toString().trim();
-        result.add(Source(episodes, name?.isNotEmpty == true ? name : null));
+        ctx._sources.add(
+          Source(episodes, name?.isNotEmpty == true ? name : null),
+        );
       }
     }
-    ctx.emitSources(result);
   }
 
   /// `maccmsApiEpisodes`：解析 MacCMS provide API 的播放线路。
   /// `vod_play_url` 以 `$$$` 分线路、`#` 分剧集、`$` 分标题与地址。
   void _opMaccmsApiEpisodes(PipelineStep step, _PipelineContext ctx) {
-    ctx.beginSink();
+    ctx.sinkRuns++;
     final data = _asJson(ctx.value);
     final list = AnimeRuleOps.jsonPath(data, step.str('listPath') ?? 'list');
     if (list is! List || list.isEmpty) return;
@@ -1254,10 +1229,12 @@ class PipelineInterpreter {
         );
         (isHls ? hls : others).add(source);
       }
-      ctx.emitSources([...hls, ...others]);
+      ctx._sources
+        ..addAll(hls)
+        ..addAll(others);
       return;
     }
-    ctx.emitSources(sources);
+    ctx._sources.addAll(sources);
   }
 
   List<Episode> _buildJsonEpisodes(
@@ -1376,7 +1353,7 @@ class PipelineInterpreter {
     final html = ctx.currentString;
     final variable = RegExp.escape(step.str('var') ?? 'player_aaaa');
     final key = step.str('key') ?? 'url';
-    final match = RegExp(
+    final match = _cachedRegExp(
       variable + r'\s*=\s*(\{.*?\})\s*[;<]',
       dotAll: true,
     ).firstMatch(html);
@@ -1439,9 +1416,9 @@ class PipelineInterpreter {
       final encryptedPattern =
           '''(?:var|let|const)?\\s*$configVar\\s*=\\s*\\{[\\s\\S]*?["']$urlKey["']\\s*:\\s*["']([^"']+)["']''';
       final encrypted =
-          RegExp(
+          _cachedRegExp(
             encryptedPattern,
-            caseSensitive: false,
+            ignoreCase: true,
           ).firstMatch(html)?.group(1)?.replaceAll(r'\/', '/').trim() ??
           '';
 
@@ -1454,21 +1431,14 @@ class PipelineInterpreter {
       }
 
       final order = List<int>.generate(length, (index) => index);
-      order.sort((a, b) {
-        final left = int.tryParse(charsetId[a]);
-        final right = int.tryParse(charsetId[b]);
-        if (left != null && right != null) return left.compareTo(right);
-        return charsetId[a].compareTo(charsetId[b]);
-      });
+      order.sort(
+        (a, b) => charsetId.codeUnitAt(a).compareTo(charsetId.codeUnitAt(b)),
+      );
       final secret = StringBuffer();
       for (final index in order) {
         secret.write(viewportId[index]);
       }
       final hash = md5.convert(utf8.encode('$secret$salt')).toString();
-      if (hash.length < 32) {
-        ctx.value = '';
-        return;
-      }
 
       var cipherText = encrypted;
       if (cipherText.contains('%')) {
@@ -1527,9 +1497,9 @@ class PipelineInterpreter {
       RegExp? readyPattern;
       if (readyPatternText.isNotEmpty) {
         try {
-          readyPattern = RegExp(
+          readyPattern = _cachedRegExp(
             readyPatternText,
-            caseSensitive: !step.flag('readyIgnoreCase'),
+            ignoreCase: step.flag('readyIgnoreCase'),
             dotAll: true,
           );
         } catch (e) {
@@ -1578,7 +1548,7 @@ class PipelineInterpreter {
 
   /// `anime1Search`：从 Anime1 CloudFront catalog JSON 搜索番剧。
   Future<void> _opAnime1Search(PipelineStep step, _PipelineContext ctx) async {
-    ctx.beginSink();
+    ctx.sinkRuns++;
     final keyword = ctx.vars['keyword']?.toString().trim() ?? '';
     if (keyword.isEmpty) return;
 
@@ -1599,7 +1569,7 @@ class PipelineInterpreter {
 
   /// `anime1Detail`：从 Anime1 分类页抓取 episode tokens，分页拼接后构建 Source。
   Future<void> _opAnime1Detail(PipelineStep step, _PipelineContext ctx) async {
-    ctx.beginSink();
+    ctx.sinkRuns++;
     final seriesId = ctx.vars['seriesId']?.toString() ?? ctx.currentString;
     if (seriesId.isEmpty) return;
 
@@ -1625,7 +1595,7 @@ class PipelineInterpreter {
       sourceName: step.str('sourceName') ?? 'Anime1',
       episodeNameTemplate: step.str('episodeNameTemplate') ?? '第{index}集',
     );
-    ctx.emitSources(sources);
+    ctx._sources.addAll(sources);
   }
 
   /// `anime1Play`：调用 Anime1 play API 解析媒体直链与所需 cookie。
@@ -1678,6 +1648,7 @@ class PipelineInterpreter {
       ctx.host.toAbsolute(iframeUrl, ctx.baseUrl),
       priority: ctx.priority,
     );
+    SourceOperation.check();
 
     final charMapRaw = step.params['charMap'];
     final charMap = <String, String>{};
@@ -1744,7 +1715,7 @@ class PipelineInterpreter {
   /// `mode: series`（search 阶段）按番名分组产出 Series；
   /// `mode: episodes`（detail 阶段）按字幕组分组产出 Source。
   void _opTorrentRecords(PipelineStep step, _PipelineContext ctx) {
-    ctx.beginSink();
+    ctx.sinkRuns++;
     final html = ctx.currentString;
     if (html.trim().isEmpty) return;
 
@@ -1758,7 +1729,7 @@ class PipelineInterpreter {
         baseUrl: baseUrl,
         contextUrl: ctx.pageUrl,
       );
-      ctx.emitSources(sources);
+      ctx._sources.addAll(sources);
     } else {
       final series = TorrentRecordParser.parseSeries(
         html: html,
@@ -1873,12 +1844,7 @@ class PipelineInterpreter {
   }
 
   Map<String, dynamic>? _tryJsonObject(String? text) {
-    if (text == null || text.trim().isEmpty) return null;
-    try {
-      final decoded = jsonDecode(text);
-      return decoded is Map<String, dynamic> ? decoded : null;
-    } catch (_) {
-      return null;
-    }
+    final decoded = _asJson(text);
+    return decoded is Map<String, dynamic> ? decoded : null;
   }
 }

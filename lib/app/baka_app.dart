@@ -294,20 +294,11 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
         ),
         bottomNavigationBar: !Instances.isDesktopPlatform
             ? Obx(
-                () => AnimatedSlide(
-                  duration: navigationDuration,
-                  curve: Curves.easeOutCubic,
-                  offset: _appState.isBottomNavVisible.value
-                      ? Offset.zero
-                      : const Offset(0, 1),
-                  child: ExcludeSemantics(
-                    excluding: !_appState.isBottomNavVisible.value,
-                    child: AppBottomNavigation(
-                      currentIndex: _appState.currentPageIndex.value,
-                      onTap: _appState.changePage,
-                      items: _navItems,
-                    ),
-                  ),
+                () => AppBottomNavigation(
+                  visible: _appState.isBottomNavVisible.value,
+                  currentIndex: _appState.currentPageIndex.value,
+                  onTap: _appState.changePage,
+                  items: _navItems,
                 ),
               )
             : null,

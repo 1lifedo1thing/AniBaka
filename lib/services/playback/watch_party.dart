@@ -86,6 +86,13 @@ class WatchPartyService {
   @visibleForTesting
   bool get hasAttachedPlayer => _controller != null && _content != null;
 
+  WatchPartyMedia? get currentMedia {
+    final content = _content;
+    return content == null ? null : _currentMedia(content);
+  }
+
+  String? get currentCoverImageUrl => _content?.coverImageUrl;
+
   bool matchesAttachedMedia(WatchPartyMedia media) {
     final content = _content;
     return content != null &&

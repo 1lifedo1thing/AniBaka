@@ -1,13 +1,13 @@
 import 'dart:async';
-import 'package:baka/source/runtime/source_operation.dart';
-import 'package:baka/source/runtime/request_scheduler.dart';
-import 'package:baka/source/runtime/webview_task_queue.dart';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:baka/instance.dart';
+import 'package:baka/source/runtime/request_scheduler.dart';
+import 'package:baka/source/runtime/source_operation.dart';
+import 'package:baka/source/runtime/webview_task_queue.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_windows/webview_windows.dart' as webview_windows;
-import 'package:baka/instance.dart';
 
 /// Cancellation scope for queued background WebView work.
 ///
@@ -62,6 +62,7 @@ class WebViewAdapter {
   var RE_URL = /(?:https?:)?\/\/[^"'<>\s\\{}()]+?(?:\.(?:m3u8|mp4|flv|mkv|avi|ts|mknvideo)(?![\w.])|\/hls\/|\/video\/tos\/|type=m3u8|mime_?type=video|mime=video|sign\.byte|bytefcdn|\.aliyuncs\.com|\.myqcloud\.com|cloudflarestorage|objstorage|bilivideo\.com)[^"'<>\s\\{}()]*/i;
   var RE_URL_G = new RegExp(RE_URL.source, 'ig');
   var NESTED = ['url', 'u', 'src', 'file', 'video', 'videoUrl', 'play_url', 'path'];
+  var GLOBALS = ['info', 'stray', 'player', 'config', 'PlayConfig'];
 
   function clean(v) {
     if (typeof v !== 'string') return '';
@@ -90,10 +91,9 @@ class WebViewAdapter {
       return;
     }
 
-    var lower = s.toLowerCase();
-    if (!RE_BAD.test(lower)) {
+    if (!RE_BAD.test(s)) {
       for (var r = 0; r < RANKS.length; r++) {
-        if (RANKS[r].test(lower)) {
+        if (RANKS[r].test(s)) {
           if (r < S.rank || (r === S.rank && s.length < S.best.length)) {
             S.best = s;
             S.rank = r;
@@ -153,8 +153,8 @@ class WebViewAdapter {
     var raw = '';
     try { raw = el.src || el.getAttribute('src') || ''; } catch (e) {}
     if (!raw || RE_BAD.test(raw)) return;
-    var hint = ((el.id || '') + ' ' + (el.className || '') + ' ' + raw).toLowerCase();
-    if (!/(?:player|play|parser|jiexi|url=)/.test(hint)) return;
+    var hint = (el.id || '') + ' ' + (el.className || '') + ' ' + raw;
+    if (!/(?:player|play|parser|jiexi|url=)/i.test(hint)) return;
     try {
       var absolute = new URL(raw, location.href).href;
       if (/^https?:\/\//i.test(absolute) && absolute !== location.href) {
@@ -182,8 +182,7 @@ class WebViewAdapter {
         consider(node.currentSrc || node.src || node.data ||
           (node.getAttribute && (node.getAttribute('src') || node.getAttribute('data-src') || node.getAttribute('data'))), 1);
       }
-      var globals = [w.info, w.stray, w.player, w.config, w.PlayConfig];
-      for (var g = 0; g < globals.length; g++) scanObj(globals[g], 4);
+      for (var g = 0; g < GLOBALS.length; g++) scanObj(w[GLOBALS[g]], 4);
       var entries = w.performance.getEntriesByType('resource');
       var index = framePerfIndex.get(el) || 0;
       for (; index < entries.length; index++) consider(entries[index].name, 1);
@@ -285,8 +284,7 @@ class WebViewAdapter {
       }
     } catch (e) {}
     try {
-      var globals = [window.info, window.stray, window.player, window.config, window.PlayConfig];
-      for (var g = 0; g < globals.length; g++) scanObj(globals[g], 4);
+      for (var g = 0; g < GLOBALS.length; g++) scanObj(window[GLOBALS[g]], 4);
     } catch (e) {}
     try {
       var entries = performance.getEntriesByType('resource');
@@ -313,9 +311,9 @@ class WebViewAdapter {
   /// 嗅探器缺失（脚本尚未注入到当前文档）时返回哨兵值，由 Dart 侧补注入。
   static const String _snifferMissing = '__baka_missing__';
   static const String _snifferPollScript =
-      "(function(){var s=window.__bakaSniffer;return s?(s.best||s.scan()):'$_snifferMissing';})()";
+      "(function(){if(window.__bakaWebviewStale)return '';var s=window.__bakaSniffer;return s?(s.best||s.scan()):'$_snifferMissing';})()";
   static const String _snifferFollowFrameScript =
-      '(function(){var s=window.__bakaSniffer;return !!(s&&s.followFrame&&s.followFrame());})()';
+      "(function(){if(window.__bakaWebviewStale||document.readyState==='loading')return false;var s=window.__bakaSniffer;return !!(s&&s.followFrame&&s.followFrame());})()";
 
   /// 读取当前文档 JS 可见的 cookie（HttpOnly cookie 读不到，符合预期）。
   static const String _cookieReadScript =
@@ -324,14 +322,14 @@ class WebViewAdapter {
   /// 提取整页 HTML；复位占位页返回空串，避免误当作目标页面内容。
   static const String _htmlExtractScript = r'''
 (function () {
-  if (location.href === 'about:blank' || document.title === 'baka-webview-reset') return '';
+  if (window.__bakaWebviewStale || location.href === 'about:blank' || document.title === 'baka-webview-reset') return '';
   return document.documentElement ? document.documentElement.outerHTML : '';
 })()''';
 
   /// 读取目标文档加载状态；复位占位页返回空串（视作"尚未到达目标页"）。
   static const String _readyStateScript = r'''
 (function () {
-  if (location.href === 'about:blank' || document.title === 'baka-webview-reset') return '';
+  if (window.__bakaWebviewStale || location.href === 'about:blank' || document.title === 'baka-webview-reset') return '';
   return document.readyState || '';
 })()''';
 
@@ -383,9 +381,14 @@ class WebViewAdapter {
 })();
 ''';
 
+  static const String _mediaSnifferScript =
+      '$_muteMediaScript\n$_snifferScript';
+
   /// 复位时停止所有媒体播放（含可访问的同源 iframe）。
   static const String _stopMediaScript = r'''
 (function () {
+  // 导航尚未提交时旧文档仍可执行 JS，轮询不能再读取它的嗅探或 HTML 结果。
+  window.__bakaWebviewStale = true;
   function stop(doc) {
     if (!doc) return;
     doc.querySelectorAll('video, audio').forEach(function (m) {
@@ -406,8 +409,6 @@ class WebViewAdapter {
   static webview_windows.WebviewController? _desktopController;
   static WebViewController? _mobileController;
   static final _tasks = WebViewTaskQueue();
-  static Future<T> _stage<T>(Future<T> future) =>
-      SourceOperation.current?.wait(future) ?? future;
 
   static Future<webview_windows.WebviewController>
   _getDesktopController() async {
@@ -428,9 +429,7 @@ class WebViewAdapter {
       await controller.setUserAgent(desktopUserAgent);
       SourceOperation.check();
       // 文档创建期注入，覆盖 iframe 与页面最早期的请求：先静音，后嗅探。
-      await controller.addScriptToExecuteOnDocumentCreated(_muteMediaScript);
-      SourceOperation.check();
-      await controller.addScriptToExecuteOnDocumentCreated(_snifferScript);
+      await controller.addScriptToExecuteOnDocumentCreated(_mediaSnifferScript);
       SourceOperation.check();
     } catch (e) {
       disposeController();
@@ -451,29 +450,26 @@ class WebViewAdapter {
       controller.stop().catchError((_) {}),
     ]);
     SourceOperation.check();
-    await controller.loadStringContent(_blankPage).catchError((_) {});
+    await controller.loadStringContent(_blankPage);
     SourceOperation.check();
   }
 
   static List<MapEntry<String, String>> _parseCookieHeader(
     String? cookieHeader,
   ) {
-    if (cookieHeader == null || cookieHeader.trim().isEmpty) return const [];
-    return cookieHeader
-        .split(';')
-        .map((part) {
-          final separator = part.indexOf('=');
-          if (separator <= 0) return null;
-          final name = part.substring(0, separator).trim();
-          final value = part.substring(separator + 1).trim();
-          if (name.isEmpty) return null;
-          return MapEntry(name, value);
-        })
-        .whereType<MapEntry<String, String>>()
-        .toList(growable: false);
+    if (cookieHeader == null || cookieHeader.isEmpty) return const [];
+    final cookies = <MapEntry<String, String>>[];
+    for (final part in cookieHeader.split(';')) {
+      final separator = part.indexOf('=');
+      if (separator <= 0) continue;
+      final name = part.substring(0, separator).trim();
+      if (name.isEmpty) continue;
+      cookies.add(MapEntry(name, part.substring(separator + 1).trim()));
+    }
+    return cookies;
   }
 
-  /// 轮询目标文档的 `location.host`，确认控制器已停留在期望站点。
+  /// 轮询目标文档的 `location.hostname`，确认控制器已停留在期望站点。
   ///
   /// `WebviewController.url` 是单订阅流，每个控制器只能监听一次；共享控制器
   /// 会被多次 Cookie 播种任务复用，因此这里改为轮询文档自身的 host。
@@ -482,11 +478,14 @@ class WebViewAdapter {
     String host, {
     Duration timeout = const Duration(seconds: 10),
   }) async {
-    final deadline = DateTime.now().add(timeout);
-    while (DateTime.now().isBefore(deadline)) {
+    final watch = Stopwatch()..start();
+    final timeoutMicros = timeout.inMicroseconds;
+    while (watch.elapsedMicroseconds < timeoutMicros) {
       SourceOperation.check();
       try {
-        if (_cleanJsResult(await controller.executeScript('location.host')) ==
+        if (_cleanJsResult(
+              await controller.executeScript('location.hostname'),
+            ) ==
             host) {
           return true;
         }
@@ -516,8 +515,8 @@ class WebViewAdapter {
         await controller.executeScript(
           'document.cookie=${jsonEncode(assignment)}',
         );
-        SourceOperation.check();
       } catch (_) {}
+      SourceOperation.check();
     }
   }
 
@@ -577,9 +576,7 @@ class WebViewAdapter {
       timeout: timeout,
       owner: owner,
       onExpired: onCancelled,
-      cleanup: () async {
-        await reset?.call();
-      },
+      cleanup: () => reset?.call() ?? Future<void>.value(),
       discard: discard,
       action: (operation) async {
         var cancelled = false;
@@ -591,7 +588,7 @@ class WebViewAdapter {
           final cookies = _parseCookieHeader(cookieHeader);
           late Future<dynamic> Function(String) exec;
           if (Platform.isWindows) {
-            final controller = await _stage(_getDesktopController());
+            final controller = await operation.wait(_getDesktopController());
             desktop = controller;
             reset = () => _resetDesktop(controller);
             exec = controller.executeScript;
@@ -599,6 +596,9 @@ class WebViewAdapter {
             SourceOperation.check();
             if (cookies.isNotEmpty) {
               await _seedDesktopCookies(controller, Uri.parse(url), cookies);
+              SourceOperation.check();
+              // Cookie 播种页也可能仍可读取，导航提交前将其排除。
+              await controller.executeScript('window.__bakaWebviewStale=true');
               SourceOperation.check();
             }
             if (taskCancelled()) return onCancelled();
@@ -616,9 +616,7 @@ class WebViewAdapter {
                   .runJavaScript(_stopMediaScript)
                   .catchError((_) {});
               SourceOperation.check();
-              await controller
-                  .loadRequest(Uri.parse('about:blank'))
-                  .catchError((_) {});
+              await controller.loadRequest(Uri.parse('about:blank'));
               SourceOperation.check();
             };
             await controller.setJavaScriptMode(JavaScriptMode.unrestricted);
@@ -633,9 +631,11 @@ class WebViewAdapter {
             }
             void inject(String _) {
               if (!taskCancelled()) {
-                controller
-                    .runJavaScript('$_muteMediaScript\n$_snifferScript')
-                    .catchError((_) {});
+                unawaited(
+                  controller
+                      .runJavaScript(_mediaSnifferScript)
+                      .catchError((_) {}),
+                );
               }
             }
 
@@ -656,7 +656,7 @@ class WebViewAdapter {
           return await poll(
             (js) => taskCancelled() ? Future.value('') : exec(js),
             taskCancelled,
-          ).timeout(timeout, onTimeout: onTimeout);
+          );
         } catch (_) {
           return taskCancelled() ? onCancelled() : onTimeout();
         } finally {
@@ -686,23 +686,21 @@ class WebViewAdapter {
     Duration timeout,
     bool followEmbeddedPlayer,
   ) async {
-    final deadline = DateTime.now().add(timeout);
-    final followAfter = DateTime.now().add(const Duration(milliseconds: 1200));
+    final watch = Stopwatch()..start();
+    final timeoutMicros = timeout.inMicroseconds;
     var followedEmbeddedPlayer = false;
     var intervalMs = 250;
-    while (!cancelled() && DateTime.now().isBefore(deadline)) {
+    while (!cancelled() && watch.elapsedMicroseconds < timeoutMicros) {
       try {
         final url = _cleanJsResult(await exec(_snifferPollScript));
         if (url == _snifferMissing) {
-          await exec(_snifferScript);
+          await exec(_mediaSnifferScript);
         } else if (url.isNotEmpty) {
           return url;
         }
-        if (followEmbeddedPlayer &&
-            !followedEmbeddedPlayer &&
-            DateTime.now().isAfter(followAfter)) {
-          followedEmbeddedPlayer = true;
-          await exec(_snifferFollowFrameScript);
+        if (followEmbeddedPlayer && !followedEmbeddedPlayer) {
+          followedEmbeddedPlayer =
+              _cleanJsResult(await exec(_snifferFollowFrameScript)) == 'true';
         }
       } catch (_) {}
       await SourceOperation.delay(Duration(milliseconds: intervalMs));
@@ -733,13 +731,14 @@ class WebViewAdapter {
     required Duration settleDelay,
     bool Function(String html)? isReady,
   }) async {
-    final deadline = DateTime.now().add(timeout);
+    final watch = Stopwatch()..start();
+    final timeoutMicros = timeout.inMicroseconds;
 
     // 先等目标文档加载完成（复位页视作未到达），最多 6 秒，防止读到半截 HTML。
-    final loadWaitCap = DateTime.now().add(const Duration(seconds: 6));
+    final loadWaitMicros = const Duration(seconds: 6).inMicroseconds;
     while (!cancelled() &&
-        DateTime.now().isBefore(loadWaitCap) &&
-        DateTime.now().isBefore(deadline)) {
+        watch.elapsedMicroseconds < loadWaitMicros &&
+        watch.elapsedMicroseconds < timeoutMicros) {
       try {
         if (_cleanJsResult(await exec(_readyStateScript)) == 'complete') break;
       } catch (_) {}
@@ -750,7 +749,7 @@ class WebViewAdapter {
     if (settleDelay > Duration.zero) await SourceOperation.delay(settleDelay);
 
     var html = '';
-    while (!cancelled() && DateTime.now().isBefore(deadline)) {
+    while (!cancelled() && watch.elapsedMicroseconds < timeoutMicros) {
       try {
         final current = _cleanJsResult(await exec(_htmlExtractScript));
         if (current.isNotEmpty) {
@@ -766,7 +765,8 @@ class WebViewAdapter {
             try {
               await exec(
                 'try{var b=document.getElementById("smart-verify-btn");'
-                'if(b)b.click();}catch(e){}',
+                'if(b&&!b.disabled&&!b.__bakaVerifyClicked){'
+                'b.click();b.__bakaVerifyClicked=true;}}catch(e){}',
               );
             } catch (_) {}
           }

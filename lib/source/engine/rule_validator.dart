@@ -65,7 +65,7 @@ class RuleValidator {
   ) {
     for (var i = 0; i < steps.length; i++) {
       final step = steps[i];
-      final at = '$stage[$i] ${step.op}';
+      late final at = '$stage[$i] ${step.op}';
       if (!knownOps.contains(step.op)) {
         errors.add('$at: 未知 op');
         continue;
@@ -73,24 +73,15 @@ class RuleValidator {
 
       switch (step.op) {
         case 'regex':
-          final pattern = step.str('pattern') ?? '';
-          if (pattern.isEmpty) {
-            errors.add('$at: 缺少 pattern');
-          } else {
-            try {
-              RegExp(_regexValidationPattern(pattern));
-            } catch (_) {
-              errors.add('$at: 正则无法编译: $pattern');
-            }
-          }
-          break;
         case 'replace':
           final pattern = step.str('pattern') ?? '';
           if (pattern.isEmpty) {
             errors.add('$at: 缺少 pattern');
-          } else if (step.flag('regex')) {
+          } else if (step.op == 'regex' || step.flag('regex')) {
             try {
-              RegExp(_regexValidationPattern(pattern));
+              RegExp(
+                pattern.replaceAll(RuleLanguageSpec.templatePlaceholder, '0'),
+              );
             } catch (_) {
               errors.add('$at: 正则无法编译: $pattern');
             }
@@ -126,7 +117,12 @@ class RuleValidator {
           final readyRegex = step.str('readyRegex') ?? '';
           if (readyRegex.isNotEmpty) {
             try {
-              RegExp(_regexValidationPattern(readyRegex));
+              RegExp(
+                readyRegex.replaceAll(
+                  RuleLanguageSpec.templatePlaceholder,
+                  '0',
+                ),
+              );
             } catch (_) {
               errors.add('$at: readyRegex 无法编译: $readyRegex');
             }
@@ -150,19 +146,14 @@ class RuleValidator {
           }
           break;
         case 'searchList':
-          if (step.strList('selectors').isEmpty &&
+          final selectors = step.params['selectors'];
+          if (selectors is! String &&
+              (selectors is! List || selectors.isEmpty) &&
               step.str('listXPath') == null) {
             warnings.add('$at: 未提供 selectors / listXPath');
           }
           break;
       }
     }
-  }
-
-  static final RegExp _templatePlaceholderPattern =
-      RuleLanguageSpec.templatePlaceholder;
-
-  static String _regexValidationPattern(String pattern) {
-    return pattern.replaceAllMapped(_templatePlaceholderPattern, (_) => '0');
   }
 }

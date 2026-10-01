@@ -55,11 +55,24 @@ final _characterRequests =
 Map<String, dynamic>? peekBgmSubject(int subjectId) =>
     _subjectCache.peek(subjectId);
 
-Future<Map<String, dynamic>> getBgmSubject(int subjectId) => _subjectCache.get(
+Future<Map<String, dynamic>> getBgmSubject(
+  int subjectId, {
+  bool notifyOnError = true,
+}) => _subjectCache.get(
   subjectId,
   () => apiTransport.getJson<Map<String, dynamic>>(
     '$_bgmApiBase/v0/subjects/$subjectId',
+    notifyOnError: notifyOnError,
   ),
+);
+
+/// Pagination is needed for schedules of long-running series beyond episode 200.
+Future<Map<String, dynamic>> getBgmEpisodePage(
+  int subjectId, {
+  int offset = 0,
+}) => apiTransport.getJson<Map<String, dynamic>>(
+  '$_bgmApiBase/v0/episodes?subject_id=$subjectId&type=0&limit=200&offset=$offset',
+  notifyOnError: false,
 );
 
 Future<Map<String, dynamic>> getBgmEpisode(int episodeId) => apiTransport

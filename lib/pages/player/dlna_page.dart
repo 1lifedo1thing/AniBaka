@@ -1,4 +1,5 @@
 import 'package:baka/utils/duration_utils.dart';
+import 'package:baka/widgets/player/settings_panel.dart';
 import 'dart:async';
 
 import 'package:dlna_dart/dlna.dart';
@@ -298,248 +299,408 @@ class DlnaCastPanel extends StatelessWidget {
     c.videoList = videoList;
     c.animeTitle = animeTitle;
 
-    final theme = Theme.of(context);
+    final portrait = isBottomPlayerPanel(context);
+    final theme = playerPanelTheme(
+      Theme.of(context),
+      bottom: true,
+      compact: isCompactPlayerPanel(context) && !portrait,
+    );
+    final media = MediaQuery.of(context);
+    final height = portrait
+        ? (media.size.height - media.padding.top - media.size.width * 9 / 16)
+              .clamp(0.0, media.size.height * 0.74)
+        : (media.size.height - media.padding.top) * 0.9;
 
-    return Material(
-      color: theme.colorScheme.surface,
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-      clipBehavior: Clip.antiAlias,
-      child: SafeArea(
-        top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 12),
-            Container(
-              width: 36,
-              height: 4,
-              decoration: BoxDecoration(
-                color: theme.colorScheme.onSurfaceVariant.withValues(
-                  alpha: 0.4,
-                ),
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 12, 8),
-              child: Obx(() {
-                final connected = c.isConnected.value;
-                return Row(
-                  children: [
-                    Text(
-                      connected ? '投屏控制' : '选择设备',
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
+    return Theme(
+      data: theme,
+      child: Material(
+        color: theme.colorScheme.surfaceContainerLow,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
+        clipBehavior: Clip.antiAlias,
+        child: SizedBox(
+          height: height,
+          child: SafeArea(
+            top: false,
+            child: Column(
+              children: [
+                SizedBox(
+                  height: 24,
+                  child: Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.onSurfaceVariant.withValues(
+                          alpha: 0.4,
+                        ),
+                        borderRadius: BorderRadius.circular(2),
                       ),
                     ),
-                    const Spacer(),
-                    if (connected)
-                      TextButton(
-                        onPressed: c.stopCast,
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 12, 12),
+                  child: Row(
+                    children: [
+                      Expanded(
                         child: Text(
-                          '断开',
-                          style: TextStyle(color: theme.colorScheme.error),
+                          '投屏',
+                          style: theme.textTheme.headlineSmall?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
-                      )
-                    else
-                      IconButton(
-                        onPressed: c.startSearch,
-                        icon: const Icon(Icons.refresh_rounded, size: 20),
                       ),
-                  ],
-                );
-              }),
-            ),
-            Flexible(
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxHeight: MediaQuery.sizeOf(context).height * 0.6,
+                      IconButton.filledTonal(
+                        tooltip: '收起投屏面板',
+                        onPressed: () => Navigator.of(context).pop(),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ],
+                  ),
                 ),
-                child: Obx(
-                  () => c.isConnected.value
-                      ? _buildCastControls(context, c, theme)
-                      : _buildDeviceList(context, c, theme),
+                Expanded(
+                  child: Obx(
+                    () => c.isConnected.value
+                        ? _buildCastControls(c, theme)
+                        : _buildDeviceList(c, theme),
+                  ),
                 ),
-              ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildDeviceList(
-    BuildContext context,
-    DlnaController c,
-    ThemeData theme,
-  ) {
-    if (c.deviceList.isEmpty) {
-      final secondary = TextStyle(
-        fontSize: 13,
-        color: theme.colorScheme.onSurfaceVariant,
-      );
-      return Padding(
-        padding: const EdgeInsets.all(40),
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: c.isSearching.value
-                ? [
-                    const CircularProgressIndicator(),
-                    const SizedBox(height: 16),
-                    Text('正在搜索设备...', style: secondary),
-                  ]
-                : [
-                    Icon(
-                      Icons.tv_off_rounded,
-                      size: 48,
-                      color: theme.colorScheme.onSurfaceVariant,
+  Widget _buildDeviceList(DlnaController c, ThemeData theme) {
+    final colors = theme.colorScheme;
+    return CustomScrollView(
+      slivers: [
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 12, 12),
+          sliver: SliverToBoxAdapter(
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    c.isSearching.value ? '正在搜索设备' : '可用设备',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      color: colors.primary,
                     ),
-                    const SizedBox(height: 16),
-                    Text('未找到可用设备', style: secondary),
-                  ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: '重新搜索设备',
+                  onPressed: c.startSearch,
+                  icon: const Icon(Icons.refresh_rounded),
+                ),
+              ],
+            ),
           ),
         ),
-      );
-    }
-    return ListView.builder(
-      shrinkWrap: true,
-      padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-      itemCount: c.deviceList.length,
-      itemBuilder: (context, index) {
-        final dev = c.deviceList.values.elementAt(index);
-        return ListTile(
-          leading: Icon(Icons.tv_rounded, color: theme.colorScheme.primary),
-          title: Text(
-            dev.info.friendlyName,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
+        if (c.deviceList.isEmpty)
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 12, 24, 32),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  if (c.isSearching.value)
+                    const CircularProgressIndicator()
+                  else
+                    Icon(Icons.tv_off_rounded, size: 48, color: colors.primary),
+                  const SizedBox(height: 20),
+                  Text(
+                    c.isSearching.value ? '寻找附近的投屏设备' : '未找到可用设备',
+                    style: theme.textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '请确保手机与电视连接同一网络',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colors.onSurfaceVariant,
+                    ),
+                  ),
+                  if (!c.isSearching.value) ...[
+                    const SizedBox(height: 24),
+                    FilledButton.tonalIcon(
+                      onPressed: c.startSearch,
+                      icon: const Icon(Icons.refresh_rounded),
+                      label: const Text('重新搜索'),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          )
+        else
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
+            sliver: SliverList.builder(
+              itemCount: c.deviceList.length,
+              itemBuilder: (context, index) {
+                final dev = c.deviceList.values.elementAt(index);
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Material(
+                    color: colors.surfaceContainerHigh,
+                    borderRadius: BorderRadius.circular(24),
+                    clipBehavior: Clip.antiAlias,
+                    child: ListTile(
+                      minTileHeight: 76,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 4,
+                      ),
+                      leading: Icon(Icons.cast_rounded, color: colors.primary),
+                      title: Text(
+                        dev.info.friendlyName,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () {
+                        HapticFeedback.mediumImpact();
+                        c.selectDevice(dev);
+                      },
+                    ),
+                  ),
+                );
+              },
+            ),
           ),
-          trailing: Icon(
-            Icons.chevron_right_rounded,
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          onTap: () {
-            HapticFeedback.mediumImpact();
-            c.selectDevice(dev);
-          },
-        );
-      },
+      ],
     );
   }
 
-  Widget _buildCastControls(
-    BuildContext context,
-    DlnaController c,
-    ThemeData theme,
-  ) {
+  Widget _buildCastControls(DlnaController c, ThemeData theme) {
+    final colors = theme.colorScheme;
+    final groupShape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(24),
+    );
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(Icons.tv_rounded, color: theme.colorScheme.primary),
-            title: Text(
-              c.selectedDevice?.info.friendlyName ?? '',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-            ),
-            subtitle: Obx(
-              () => Text(
-                '${c.animeTitle} · P${c.currentEpisodeIndex.value + 1}',
-                maxLines: 1,
+          Material(
+            color: colors.surfaceContainerHigh,
+            shape: groupShape,
+            child: ListTile(
+              minTileHeight: 76,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+              leading: CircleAvatar(
+                radius: 24,
+                backgroundColor: colors.primaryContainer,
+                foregroundColor: colors.onPrimaryContainer,
+                child: const Icon(Icons.cast_connected_rounded),
+              ),
+              title: Text(
+                c.selectedDevice?.info.friendlyName ?? '投屏设备',
+                maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: theme.colorScheme.onSurfaceVariant,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
                 ),
               ),
-            ),
-            trailing: Obx(
-              () => c.isLoadingNext.value
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const SizedBox.shrink(),
+              subtitle: Text(
+                '已连接',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: colors.onSurfaceVariant,
+                ),
+              ),
             ),
           ),
-          const SizedBox(height: 8),
-          _buildSeekBar(c, theme),
-          const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Obx(
-                () => IconButton(
-                  iconSize: 32,
-                  onPressed: c.hasPrevEpisode
-                      ? () {
-                          HapticFeedback.lightImpact();
-                          c.playEpisodeAt(c.currentEpisodeIndex.value - 1);
-                        }
-                      : null,
-                  icon: const Icon(Icons.skip_previous_rounded),
-                ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 16, 8, 8),
+            child: Text(
+              '正在播放',
+              style: theme.textTheme.titleSmall?.copyWith(
+                color: colors.primary,
               ),
-              const SizedBox(width: 24),
-              Obx(
-                () => IconButton.filled(
-                  iconSize: 32,
-                  padding: const EdgeInsets.all(12),
-                  onPressed: () {
-                    HapticFeedback.mediumImpact();
-                    c.togglePlayPause();
-                  },
-                  icon: Icon(
-                    c.transportState.value == 'PLAYING'
-                        ? Icons.pause_rounded
-                        : Icons.play_arrow_rounded,
+            ),
+          ),
+          Material(
+            color: colors.surfaceContainerHigh,
+            shape: groupShape,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Obx(() {
+                    final index = c.currentEpisodeIndex.value;
+                    final episode = index >= 0 && index < c.videoList.length
+                        ? c.videoList[index].title
+                        : '第 ${index + 1} 集';
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${c.animeTitle} · $episode',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          c.isLoadingNext.value
+                              ? '正在切换剧集…'
+                              : switch (c.transportState.value) {
+                                  'ERROR' => '切集失败，请重试',
+                                  'PAUSED_PLAYBACK' => '已暂停',
+                                  'COMPLETED_ALL' => '已播放完全部剧集',
+                                  _ => '当前剧集',
+                                },
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colors.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    );
+                  }),
+                  _buildSeekBar(c, theme),
+                  const SizedBox(height: 8),
+                  Obx(() {
+                    final busy = c.isLoadingNext.value;
+                    final playing = c.transportState.value == 'PLAYING';
+                    final canToggle =
+                        playing || c.transportState.value == 'PAUSED_PLAYBACK';
+                    return Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        IconButton.filledTonal(
+                          tooltip: '上一集',
+                          iconSize: 28,
+                          style: IconButton.styleFrom(
+                            minimumSize: const Size(48, 48),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(18),
+                            ),
+                          ),
+                          onPressed: !busy && c.hasPrevEpisode
+                              ? () {
+                                  HapticFeedback.lightImpact();
+                                  c.playEpisodeAt(
+                                    c.currentEpisodeIndex.value - 1,
+                                  );
+                                }
+                              : null,
+                          icon: const Icon(Icons.skip_previous_rounded),
+                        ),
+                        const SizedBox(width: 12),
+                        IconButton.filled(
+                          tooltip: playing ? '暂停投屏' : '继续投屏',
+                          iconSize: 40,
+                          style: IconButton.styleFrom(
+                            minimumSize: const Size(72, 72),
+                            backgroundColor: colors.primary,
+                            foregroundColor: colors.onPrimary,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(24),
+                            ),
+                          ),
+                          onPressed: !busy && canToggle
+                              ? () {
+                                  HapticFeedback.mediumImpact();
+                                  c.togglePlayPause();
+                                }
+                              : null,
+                          icon: busy
+                              ? const SizedBox(
+                                  width: 28,
+                                  height: 28,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 3,
+                                  ),
+                                )
+                              : Icon(
+                                  playing
+                                      ? Icons.pause_rounded
+                                      : Icons.play_arrow_rounded,
+                                ),
+                        ),
+                        const SizedBox(width: 12),
+                        IconButton.filledTonal(
+                          tooltip: '下一集',
+                          iconSize: 28,
+                          style: IconButton.styleFrom(
+                            minimumSize: const Size(48, 48),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(18),
+                            ),
+                          ),
+                          onPressed: !busy && c.hasNextEpisode
+                              ? () {
+                                  HapticFeedback.lightImpact();
+                                  c.playEpisodeAt(
+                                    c.currentEpisodeIndex.value + 1,
+                                  );
+                                }
+                              : null,
+                          icon: const Icon(Icons.skip_next_rounded),
+                        ),
+                      ],
+                    );
+                  }),
+                ],
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 16, 8, 8),
+            child: Text(
+              '播放设置',
+              style: theme.textTheme.titleSmall?.copyWith(
+                color: colors.primary,
+              ),
+            ),
+          ),
+          Material(
+            color: colors.surfaceContainerHigh,
+            shape: groupShape,
+            clipBehavior: Clip.antiAlias,
+            child: Obx(
+              () => SwitchListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                title: Text('自动播放下一集', style: theme.textTheme.bodyLarge),
+                subtitle: Text(
+                  c.hasNextEpisode
+                      ? '剩余 ${c.videoList.length - c.currentEpisodeIndex.value - 1} 集'
+                      : '已是最后一集',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colors.onSurfaceVariant,
                   ),
                 ),
+                value: c.autoNextEnabled.value,
+                onChanged: (v) {
+                  HapticFeedback.selectionClick();
+                  c.autoNextEnabled.value = v;
+                },
               ),
-              const SizedBox(width: 24),
-              Obx(
-                () => IconButton(
-                  iconSize: 32,
-                  onPressed: c.hasNextEpisode
-                      ? () {
-                          HapticFeedback.lightImpact();
-                          c.playEpisodeAt(c.currentEpisodeIndex.value + 1);
-                        }
-                      : null,
-                  icon: const Icon(Icons.skip_next_rounded),
+            ),
+          ),
+          const SizedBox(height: 18),
+          Material(
+            color: colors.surfaceContainerHigh,
+            shape: groupShape,
+            clipBehavior: Clip.antiAlias,
+            child: ListTile(
+              minTileHeight: 56,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 20),
+              leading: Icon(Icons.tv_off_rounded, color: colors.primary),
+              title: Text(
+                '断开投屏',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  color: colors.primary,
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Obx(
-            () => SwitchListTile.adaptive(
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              title: const Text('自动播放下一集', style: TextStyle(fontSize: 14)),
-              subtitle: c.hasNextEpisode
-                  ? Text(
-                      '剩余 ${c.videoList.length - c.currentEpisodeIndex.value - 1} 集',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    )
-                  : null,
-              value: c.autoNextEnabled.value,
-              onChanged: (v) {
-                HapticFeedback.selectionClick();
-                c.autoNextEnabled.value = v;
-              },
+              onTap: c.stopCast,
             ),
           ),
         ],
@@ -551,40 +712,42 @@ class DlnaCastPanel extends StatelessWidget {
     return Obx(() {
       final pos = c.currentPosition.value;
       final dur = c.totalDuration.value;
+      final seekable = dur > Duration.zero && !c.isLoadingNext.value;
       final progress = dur.inMilliseconds > 0
           ? (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0)
           : 0.0;
-      final timeStyle = TextStyle(
-        fontSize: 12,
+      final timeStyle = theme.textTheme.bodySmall?.copyWith(
         color: theme.colorScheme.onSurfaceVariant,
         fontFeatures: const [FontFeature.tabularFigures()],
       );
-
       return Column(
         children: [
           Slider(
             value: progress,
-            onChangeStart: (_) => c.isSeeking.value = true,
-            onChanged: (v) {
-              c.currentPosition.value = Duration(
-                milliseconds: (v * dur.inMilliseconds).round(),
-              );
-            },
-            onChangeEnd: (v) {
-              c.seekTo(
-                Duration(milliseconds: (v * dur.inMilliseconds).round()),
-              );
-            },
+            semanticFormatterCallback: (_) =>
+                '${pos.toTimeString()} / ${dur.toTimeString()}',
+            onChangeStart: seekable ? (_) => c.isSeeking.value = true : null,
+            onChanged: seekable
+                ? (v) {
+                    c.currentPosition.value = Duration(
+                      milliseconds: (v * dur.inMilliseconds).round(),
+                    );
+                  }
+                : null,
+            onChangeEnd: seekable
+                ? (v) {
+                    c.seekTo(
+                      Duration(milliseconds: (v * dur.inMilliseconds).round()),
+                    );
+                  }
+                : null,
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(pos.toTimeString(), style: timeStyle),
-                Text(dur.toTimeString(), style: timeStyle),
-              ],
-            ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(pos.toTimeString(), style: timeStyle),
+              Text(dur.toTimeString(), style: timeStyle),
+            ],
           ),
         ],
       );

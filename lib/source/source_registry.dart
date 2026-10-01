@@ -29,9 +29,7 @@ class AdapterDescriptor {
     this.idPattern,
   });
 
-  AdapterBase? createAdapter() {
-    return factory();
-  }
+  AdapterBase? createAdapter() => factory();
 
   int resolveNumericId(String seriesId) {
     final idStr = idPattern != null
@@ -156,15 +154,14 @@ class AdapterRegistry {
         (isBuiltinSource(source) || isCustomSource(source));
   }
 
-  static AdapterBase? createAdapter(String key) {
-    return descriptorFor(key)?.createAdapter();
-  }
+  static AdapterBase? createAdapter(String key) =>
+      descriptorFor(key)?.factory();
 }
 
 int stableSourceId(String input) {
   var hash = 0x811c9dc5;
-  for (final unit in input.codeUnits) {
-    hash ^= unit;
+  for (var index = 0; index < input.length; index++) {
+    hash ^= input.codeUnitAt(index);
     hash = (hash * 0x01000193) & 0x7fffffff;
   }
   return hash == 0 ? input.length + 1 : hash;

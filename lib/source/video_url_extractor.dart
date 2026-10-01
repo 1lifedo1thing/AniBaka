@@ -1,13 +1,6 @@
 import 'dart:convert';
 
 /// Video URL extraction and validation utilities.
-///
-/// Replaces the 404-line VideoUrlMixin with ~120 lines of stateless functions.
-/// Key simplifications:
-/// - 3 overlapping regex patterns → 2 complementary patterns (single pass)
-/// - 8 boolean classifiers (isPosterUrl, isAdUrl, isPlayableVideoUrl, …) → 1 `isPlayable`
-/// - No dual content-variant scan; normalize once, scan once
-/// - No candidate Set + sort; first m3u8 wins, else first playable
 class VideoUrlExtractor {
   VideoUrlExtractor._();
 
@@ -92,8 +85,8 @@ class VideoUrlExtractor {
   }
 
   static bool isSignedCdnUrl(String url) {
-    final lower = url.toLowerCase();
-    return _cdnSignedRegex.hasMatch(lower) || _hasExpiringSign(url, lower);
+    return _cdnSignedRegex.hasMatch(url) ||
+        _hasExpiringSign(url, url.toLowerCase());
   }
 
   /// 按需生成 / 临时缓存形态的媒体路径：`/temp/2607/01.mp4`、`/cache/...`、
@@ -246,22 +239,18 @@ class VideoUrlExtractor {
       }
     }
 
+    String? keyedFallback;
     for (final match in _kvPattern.allMatches(searchSpace)) {
       final url = match.group(1) ?? '';
       if (isPlayable(url)) {
         final abs = toAbsolute(url, pageUrl);
         if (abs.contains('.m3u8')) return abs;
-        // Continue scanning for m3u8 but keep first as fallback
-        final best = _scanDirect(searchSpace, pageUrl);
-        return best.isNotEmpty ? best : abs;
+        keyedFallback = abs;
+        break;
       }
     }
 
-    return _scanDirect(searchSpace, pageUrl);
-  }
-
-  static String _scanDirect(String searchSpace, String pageUrl) {
-    String? fallback;
+    String? directFallback;
     for (final match in _directPattern.allMatches(searchSpace)) {
       final raw = match.group(0) ?? '';
       // Check nested URL in query params (e.g. `/player?url=...m3u8`)
@@ -270,17 +259,17 @@ class VideoUrlExtractor {
       final url = nested ?? raw;
       final abs = toAbsolute(url, pageUrl);
       if (abs.contains('.m3u8')) return abs;
-      fallback ??= abs;
+      directFallback ??= abs;
     }
-    return fallback ?? '';
+    return directFallback ?? keyedFallback ?? '';
   }
 
   static String? _extractNestedUrl(String playerUrl) {
     if (!playerUrl.contains('?')) return null;
     try {
-      final uri = Uri.parse(playerUrl);
+      final parameters = Uri.parse(playerUrl).queryParameters;
       for (final key in _queryParamKeys) {
-        final value = uri.queryParameters[key];
+        final value = parameters[key];
         if (value == null || value.isEmpty) continue;
         var decoded = value;
         if (decoded.contains('%')) {
@@ -331,8 +320,9 @@ class VideoUrlExtractor {
     if (preserveMagnet && text.startsWith('magnet:')) return text;
     if (text.startsWith('url=')) text = text.substring(4);
 
-    if ((text.startsWith('"') && text.endsWith('"')) ||
-        (text.startsWith("'") && text.endsWith("'"))) {
+    if (text.length > 1 &&
+        ((text.startsWith('"') && text.endsWith('"')) ||
+            (text.startsWith("'") && text.endsWith("'")))) {
       text = text.substring(1, text.length - 1);
     }
 

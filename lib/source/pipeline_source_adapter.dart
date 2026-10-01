@@ -1,7 +1,6 @@
 import 'package:baka/source/runtime/source_operation.dart';
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:dio_cookie_manager/dio_cookie_manager.dart';
@@ -46,7 +45,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
   Future<void>? _playCookieBarrier;
   Timer? _playbackKeepAliveTimer;
   int _playbackKeepAliveGeneration = 0;
-  int? _playbackKeepAliveInFlightGeneration;
+  CancelToken? _playbackKeepAliveRequest;
   _HlsSession? _hlsSession;
   SourceOperation? _hlsPreparation;
   int _hlsGeneration = 0;
@@ -64,9 +63,6 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
 
   /// 单个分片指纹探测的超时；探不到按「与正片一致」处理，不阻塞播放。
   static const Duration _hlsProbeTimeout = Duration(seconds: 8);
-
-  /// 播放管线重试前的冷却：站点凭证刚被拒时立刻重跑往往还是同一次会话状态。
-  static const Duration _playRetryDelay = Duration(milliseconds: 400);
 
   /// 前缀取够后主动断连的取消理由。
   static const String _hlsProbeCancelReason = 'HLS 指纹探测已取够前缀';
@@ -129,11 +125,15 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
   }
 
   @override
-  Map<String, String> get mediaValidationHeaders {
-    final headers = Map<String, String>.from(rule.headers)
-      ..removeWhere((_, value) => value.isEmpty);
-    return headers.isEmpty ? super.mediaValidationHeaders : headers;
-  }
+  Map<String, String> get mediaValidationHeaders => _mediaValidationHeaders;
+
+  late final Map<String, String> _mediaValidationHeaders =
+      rule.headers.values.every((value) => value.isEmpty)
+      ? super.mediaValidationHeaders
+      : Map.unmodifiable({
+          for (final entry in rule.headers.entries)
+            if (entry.value.isNotEmpty) entry.key: entry.value,
+        });
 
   @override
   Future<List<Series>> search(String query, {bool enhanceWithBgm = true}) =>
@@ -182,17 +182,11 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
   );
 
   @override
-  Future<String> getDownloadUrl(String episodeId) =>
-      runOperation(() => _getDownloadUrl(episodeId));
-
-  Future<String> _getDownloadUrl(String episodeId) {
-    final future = !_playFeatures.usesCookies
-        ? _interpreter.runPlay(rule, this, episodeId)
-        : _withPlayCookieSnapshot(
-            () => _interpreter.runPlay(rule, this, episodeId),
-          );
-    return future.whenComplete(_dropParseCache);
-  }
+  Future<String> getDownloadUrl(String episodeId) => runOperation(
+    () => _withPlayCookieSnapshot(
+      () => _interpreter.runPlay(rule, this, episodeId),
+    ).whenComplete(_dropParseCache),
+  );
 
   @override
   Future<({String url, Map<String, String> httpHeaders})> resolvePlaybackMedia(
@@ -226,16 +220,15 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
     final attempts = maxAttempts < 1 ? 1 : maxAttempts;
     return _withPlayCookieSnapshot(() async {
       for (var attempt = 0; attempt < attempts; attempt++) {
+        SourceOperation.check();
         final media = await _interpreter.runPlayMedia(rule, this, episodeId);
+        SourceOperation.check();
         if (media.url.isEmpty) {
           debugPrint('$name: 播放管线第 ${attempt + 1}/$attempts 次未得到媒体地址');
-          if (attempt + 1 < attempts) {
-            // 解析为空多半是站点凭证/会话过期，重跑整条 play 管线会重新申请一次。
-            await SourceOperation.delay(_playRetryDelay);
-          }
           continue;
         }
         final headers = await _resolveMediaHeaders(media);
+        SourceOperation.check();
         if (skipValidation) {
           return (url: media.url, httpHeaders: headers);
         }
@@ -244,21 +237,17 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
           timeout: reachTimeout,
           headers: headers,
         );
+        SourceOperation.check();
         if (verdict == MediaReachabilityVerdict.unknown) {
           debugPrint(
             '$name: 动态媒体结论不确定（超时/临时缺失/网络异常），保留待播放器验证: '
             '${media.url}',
           );
-          return (url: media.url, httpHeaders: headers);
         }
-        if (verdict == MediaReachabilityVerdict.reachable) {
+        if (verdict != MediaReachabilityVerdict.rejected) {
           return (url: media.url, httpHeaders: headers);
         }
         debugPrint('$name: 动态媒体被服务器拒绝，丢弃: ${media.url}');
-        if (attempt + 1 < attempts) {
-          // 直链被拒也可能是签名过期：重跑一次拿到新直链再验证。
-          await SourceOperation.delay(_playRetryDelay);
-        }
       }
       return (url: '', httpHeaders: const <String, String>{});
     }).whenComplete(_dropParseCache);
@@ -308,26 +297,23 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
     }
 
     final generation = ++_playbackKeepAliveGeneration;
+    final expectedBody = step.str('expectedBody')?.trim();
     await _sendPlaybackKeepAlive(
       generation,
       keepAliveUri,
       headers,
-      step.str('expectedBody')?.trim(),
+      expectedBody,
     );
     if (generation != _playbackKeepAliveGeneration) return;
 
-    final intervalSeconds = (step.intValue('intervalSeconds') ?? 10)
-        .clamp(1, 300)
-        .toInt();
+    final intervalSeconds = (step.intValue('intervalSeconds') ?? 10).clamp(
+      1,
+      300,
+    );
     _playbackKeepAliveTimer = Timer.periodic(
       Duration(seconds: intervalSeconds),
       (_) => unawaited(
-        _sendPlaybackKeepAlive(
-          generation,
-          keepAliveUri,
-          headers,
-          step.str('expectedBody')?.trim(),
-        ),
+        _sendPlaybackKeepAlive(generation, keepAliveUri, headers, expectedBody),
       ),
     );
   }
@@ -338,14 +324,19 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
     bool? filterHlsAds,
     void Function(String message)? onHlsAdFilterStatus,
     void Function(String key)? onTimelinePrepared,
-  }) => runOperation(
-    () => _preparePlaybackMedia(
-      media,
-      filterHlsAds: filterHlsAds,
-      onHlsAdFilterStatus: onHlsAdFilterStatus,
-      onTimelinePrepared: onTimelinePrepared,
-    ),
-  );
+  }) => runOperation(() async {
+    final preparation = SourceOperation.current!;
+    try {
+      return await _preparePlaybackMedia(
+        media,
+        filterHlsAds: filterHlsAds,
+        onHlsAdFilterStatus: onHlsAdFilterStatus,
+        onTimelinePrepared: onTimelinePrepared,
+      );
+    } finally {
+      if (identical(_hlsPreparation, preparation)) _hlsPreparation = null;
+    }
+  });
 
   Future<({String url, Map<String, String> httpHeaders})> _preparePlaybackMedia(
     ({String url, Map<String, String> httpHeaders}) media, {
@@ -483,7 +474,6 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
       return prepared;
     } finally {
       budget.close();
-      if (identical(_hlsPreparation, preparation)) _hlsPreparation = null;
     }
   }
 
@@ -562,17 +552,22 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
       final stream = response.data?.stream;
       if (stream == null) return null;
 
-      final prefix = BytesBuilder(copy: false);
+      final prefix = Uint8List(_hlsProbePrefixBytes);
+      var length = 0;
       try {
         await for (final chunk in stream) {
-          prefix.add(chunk);
+          final remaining = prefix.length - length;
+          final count = chunk.length > remaining ? remaining : chunk.length;
+          prefix.setRange(length, length + count, chunk);
+          length += count;
           // 服务器忽略 Range 时不必把整片读进内存。
-          if (prefix.length >= _hlsProbePrefixBytes) break;
+          if (length == prefix.length) break;
         }
       } catch (_) {
         // 主动断连可能让流以错误收尾；已经攒到的前缀仍然可用。
       }
-      return MpegTsFingerprint.read(prefix.toBytes());
+      SourceOperation.check();
+      return MpegTsFingerprint.read(Uint8List.sublistView(prefix, 0, length));
     }
 
     return read()
@@ -607,6 +602,8 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
     _playbackKeepAliveGeneration++;
     _playbackKeepAliveTimer?.cancel();
     _playbackKeepAliveTimer = null;
+    _playbackKeepAliveRequest?.cancel('playback keep-alive stopped');
+    _playbackKeepAliveRequest = null;
     _hlsGeneration++;
     _hlsPreparation?.cancel();
     _hlsPreparation = null;
@@ -624,7 +621,6 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
     try {
       if (generation != _hlsGeneration ||
           SourceOperation.current!.isCancelled) {
-        await server.close(force: true);
         throw const RequestCancelledException();
       }
       final secret = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
@@ -643,7 +639,6 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
       );
       if (!materialized.contains('#EXTM3U') ||
           !materialized.contains('#EXT-X-ENDLIST')) {
-        await server.close(force: true);
         throw const FormatException('incomplete VOD manifest');
       }
 
@@ -803,13 +798,15 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
     String? expectedBody,
   ) async {
     if (generation != _playbackKeepAliveGeneration ||
-        _playbackKeepAliveInFlightGeneration == generation) {
+        _playbackKeepAliveRequest != null) {
       return;
     }
-    _playbackKeepAliveInFlightGeneration = generation;
+    final cancelToken = CancelToken();
+    _playbackKeepAliveRequest = cancelToken;
     try {
       final response = await dio.getUri<String>(
         url,
+        cancelToken: cancelToken,
         options: Options(
           headers: headers,
           responseType: ResponseType.plain,
@@ -832,19 +829,21 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
         debugPrint('${rule.id}: playback keep-alive failed: $error');
       }
     } finally {
-      if (_playbackKeepAliveInFlightGeneration == generation) {
-        _playbackKeepAliveInFlightGeneration = null;
+      if (identical(_playbackKeepAliveRequest, cancelToken)) {
+        _playbackKeepAliveRequest = null;
       }
     }
   }
 
   Future<T> _withPlayCookieSnapshot<T>(Future<T> Function() action) async {
     if (!_playFeatures.usesCookies) return action();
-    final previous = _playCookieBarrier ?? Future<void>.value();
-    final next = previous.then((_) {
-      SourceOperation.check();
-      return action();
-    });
+    SourceOperation.check();
+    final next =
+        _playCookieBarrier?.then((_) {
+          SourceOperation.check();
+          return action();
+        }) ??
+        Future<T>.sync(action);
     // Keep the barrier ordered even if a queued caller stops waiting early.
     _playCookieBarrier = next.then<void>((_) {}, onError: (Object _) {});
     return SourceOperation.current?.wait(next) ?? next;
@@ -853,10 +852,12 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
   Future<Map<String, String>> _resolveMediaHeaders(
     PipelinePlayResult media,
   ) async {
-    final headers = media.mediaHeaders.isEmpty
-        ? Map<String, String>.from(rule.headers)
-        : Map<String, String>.from(media.mediaHeaders);
-    headers.removeWhere((_, value) => value.isEmpty);
+    final headers = <String, String>{
+      for (final entry
+          in (media.mediaHeaders.isEmpty ? rule.headers : media.mediaHeaders)
+              .entries)
+        if (entry.value.isNotEmpty) entry.key: entry.value,
+    };
     if (headers.isEmpty) headers.addAll(super.mediaValidationHeaders);
     if (VideoUrlExtractor.isSignedCdnUrl(media.url)) {
       headers.removeWhere((key, _) => key.toLowerCase() == 'referer');
@@ -867,13 +868,15 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
 
     try {
       final exactNames = media.cookieNames.toSet();
-      final prefixes = media.cookiePrefixes.where((p) => p.isNotEmpty).toList();
       final cookies = await _cookieJar.loadForRequest(Uri.parse(media.url));
+      SourceOperation.check();
       final filtered = <String, String>{};
       for (final cookie in cookies) {
         final allowed =
             exactNames.contains(cookie.name) ||
-            prefixes.any((p) => cookie.name.startsWith(p));
+            media.cookiePrefixes.any(
+              (prefix) => prefix.isNotEmpty && cookie.name.startsWith(prefix),
+            );
         if (allowed && cookie.value.isNotEmpty) {
           filtered[cookie.name] = cookie.value;
         }
@@ -882,17 +885,23 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
           .map((entry) => '${entry.key}=${entry.value}')
           .join('; ');
       if (cookieHeader.isNotEmpty) {
-        final cookieKey = headers.keys.cast<String?>().firstWhere(
-          (key) => key?.toLowerCase() == 'cookie',
-          orElse: () => null,
-        );
-        if (cookieKey == null || (headers[cookieKey] ?? '').trim().isEmpty) {
-          headers['Cookie'] = cookieHeader;
+        var cookieKey = 'Cookie';
+        for (final key in headers.keys) {
+          if (key.toLowerCase() == 'cookie') {
+            cookieKey = key;
+            break;
+          }
+        }
+        final existing = headers[cookieKey];
+        if (existing == null || existing.trim().isEmpty) {
+          headers[cookieKey] = cookieHeader;
         } else {
-          headers[cookieKey] = '${headers[cookieKey]}; $cookieHeader';
+          headers[cookieKey] = '$existing; $cookieHeader';
         }
       }
-    } catch (_) {}
+    } catch (_) {
+      SourceOperation.check();
+    }
     return headers;
   }
 
@@ -1076,15 +1085,13 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
         final href = linkNode?.attributes['href'] ?? '';
         if (href.isEmpty) continue;
         final name =
-            (nameXPath.isEmpty
-                ? node.node.text
-                : node.queryXPath(nameXPath).node?.text) ??
-            '';
+            ((nameXPath.isEmpty
+                        ? node.node.text
+                        : node.queryXPath(nameXPath).node?.text) ??
+                    '')
+                .trim();
         results.add(
-          Series(
-            toAbsolute(href, baseUrl),
-            name.trim().isEmpty ? '未知标题' : name.trim(),
-          ),
+          Series(toAbsolute(href, baseUrl), name.isEmpty ? '未知标题' : name),
         );
       }
     } catch (e) {
@@ -1194,6 +1201,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
       );
       SourceOperation.check();
       if (cookies.isNotEmpty) await _storeWebViewCookies(url, cookies);
+      SourceOperation.check();
       return html;
     } catch (e) {
       SourceOperation.check();
@@ -1218,12 +1226,14 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
       }
       if (cookies.isNotEmpty) await _cookieJar.saveFromResponse(uri, cookies);
     } catch (e) {
+      SourceOperation.check();
       debugPrint('$name: WebView Cookie 同步失败: $e');
     }
   }
 
   @override
   Future<String> sniffWithWebview(String url) async {
+    if (!allowWebview) return '';
     try {
       final cookieHeader = rule.headers.entries
           .where((entry) => entry.key.toLowerCase() == 'cookie')
@@ -1238,6 +1248,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
           ) ??
           '';
     } catch (e) {
+      SourceOperation.check();
       debugPrint('$name: WebView 嗅探失败: $e');
       return '';
     }
@@ -1355,12 +1366,14 @@ class RemoteMediaRedirectResolver {
           return remoteUrl;
         } finally {
           detach?.call();
+          request.abort();
         }
       }
       debugPrint(
         '[RemoteMediaResolver] too many redirects for ${original.host}',
       );
     } catch (error) {
+      SourceOperation.check();
       debugPrint('[RemoteMediaResolver] ${original.host} failed: $error');
     }
     return remoteUrl;
@@ -1392,8 +1405,14 @@ class _HlsSession {
   Future<void> close() => _closing ??= _close();
   Future<void> _close() async {
     operation.cancel();
-    await subscription?.cancel();
-    await server.close(force: true);
-    operation.close();
+    try {
+      await subscription?.cancel();
+    } finally {
+      try {
+        await server.close(force: true);
+      } finally {
+        operation.close();
+      }
+    }
   }
 }

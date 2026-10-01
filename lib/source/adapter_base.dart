@@ -3,7 +3,6 @@ import 'package:baka/source/runtime/request_scheduler.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
@@ -48,6 +47,7 @@ abstract class AdapterBase {
   }
 
   Dio? _dio;
+  final Map<String, Object> _pendingDownloadUrls = {};
   AdapterBase(this.name);
 
   /// Signed media sources can opt out when their token and playback requests
@@ -93,8 +93,11 @@ abstract class AdapterBase {
 
   /// Releases source-scoped background work when its owning service closes.
   void dispose() {
+    if (_disposed) return;
     _disposed = true;
+    onIdle = null;
     _lifetime.cancel();
+    _pendingDownloadUrls.clear();
     _cache.removeWhere((key, _) => identical(key.$1, this));
     _dio?.close(force: true);
     _dio = null;
@@ -165,42 +168,60 @@ abstract class AdapterBase {
       }
     }
 
-    final url = await _getDownloadUrlWithRetry(
-      episodeId,
-      maxAttempts: maxAttempts,
-    );
-    if (url.isEmpty) {
-      debugPrint('$name: resolveDownloadUrl(episodeId: $episodeId) 解析结果为空');
-      return '';
-    }
-
-    debugPrint(
-      '$name: resolveDownloadUrl 得到URL: $url, isSignedCdn=${VideoUrlExtractor.isSignedCdnUrl(url)}, validatesOwnUrls=$validatesOwnUrls',
-    );
-    if (!skipValidation && !validatesOwnUrls) {
-      final verdict = await probeMediaReachability(url, timeout: reachTimeout);
-      if (verdict == MediaReachabilityVerdict.rejected) {
-        debugPrint('$name: 直链被服务器拒绝，丢弃: $url');
+    // Invalidating or starting a newer refresh must prevent this parse from
+    // restoring a stale URL after its asynchronous work finishes.
+    final pending = Object();
+    _pendingDownloadUrls[episodeId] = pending;
+    try {
+      final url = await _getDownloadUrlWithRetry(
+        episodeId,
+        maxAttempts: maxAttempts,
+      );
+      SourceOperation.check();
+      if (url.isEmpty) {
+        debugPrint('$name: resolveDownloadUrl(episodeId: $episodeId) 解析结果为空');
         return '';
       }
-      if (verdict == MediaReachabilityVerdict.unknown) {
-        debugPrint('$name: 直链结论不确定（超时/临时缺失/网络异常），保留待播放器验证: $url');
+
+      debugPrint('$name: resolveDownloadUrl 得到URL: $url');
+      if (!skipValidation && !validatesOwnUrls) {
+        final verdict = await probeMediaReachability(
+          url,
+          timeout: reachTimeout,
+        );
+        if (verdict == MediaReachabilityVerdict.rejected) {
+          debugPrint('$name: 直链被服务器拒绝，丢弃: $url');
+          return '';
+        }
+        if (verdict == MediaReachabilityVerdict.unknown) {
+          debugPrint('$name: 直链结论不确定（超时/临时缺失/网络异常），保留待播放器验证: $url');
+        }
+      }
+
+      SourceOperation.check();
+      if (_disposed) throw const RequestCancelledException();
+      if (identical(_pendingDownloadUrls[episodeId], pending)) {
+        if (_cache.length >= _cacheLimit && !_cache.containsKey(key)) {
+          _cache.remove(_cache.keys.first);
+        }
+        _cache[key] = (
+          url: url,
+          expiresAt:
+              DateTime.now().millisecondsSinceEpoch + _cacheTtl.inMilliseconds,
+        );
+      }
+      return url;
+    } finally {
+      if (identical(_pendingDownloadUrls[episodeId], pending)) {
+        _pendingDownloadUrls.remove(episodeId);
       }
     }
-
-    SourceOperation.check();
-    if (_disposed) throw const RequestCancelledException();
-    if (_cache.length >= _cacheLimit) _cache.remove(_cache.keys.first);
-    _cache[key] = (
-      url: url,
-      expiresAt:
-          DateTime.now().millisecondsSinceEpoch + _cacheTtl.inMilliseconds,
-    );
-    return url;
   }
 
-  void invalidateDownloadUrl(String episodeId) =>
-      _cache.remove((this, episodeId));
+  void invalidateDownloadUrl(String episodeId) {
+    _pendingDownloadUrls.remove(episodeId);
+    _cache.remove((this, episodeId));
+  }
 
   /// 探测媒体 URL 是否真正可拉取（自动匹配认领前必须通过）。
   Future<bool> isPlaybackUrlReachable(String url, {Duration? timeout}) =>
@@ -217,6 +238,8 @@ abstract class AdapterBase {
     Duration? timeout,
     Map<String, String>? headers,
   }) async {
+    SourceOperation.check();
+    if (_disposed) throw const RequestCancelledException();
     final value = url.trim();
     if (value.isEmpty) return MediaReachabilityVerdict.rejected;
     final lower = value.toLowerCase();
@@ -244,11 +267,16 @@ abstract class AdapterBase {
       _reachCache.remove(key);
     }
 
+    // Snapshot before awaiting so mutable caller headers cannot change the
+    // request or make its cached verdict describe another credential set.
+    final probeHeaders = Map<String, String>.of(effectiveHeaders);
     final verdict = await _probeDirectUrl(
       value,
       timeout: timeout,
-      headers: effectiveHeaders,
+      headers: probeHeaders,
     );
+    SourceOperation.check();
+    if (_disposed) throw const RequestCancelledException();
     // 只缓存明确结论。「未知」一旦被负缓存，同一个可用地址会在之后数分钟
     // 里持续被误杀（负缓存 TTL 是 8 分钟）；临时媒体地址随时可能被重新
     // 生成，同样不做负缓存。
@@ -270,7 +298,7 @@ abstract class AdapterBase {
             DateTime.now().millisecondsSinceEpoch +
             (ok ? _reachCacheTtl : _reachNegCacheTtl).inMilliseconds,
         timeoutMs: probeTimeoutMs,
-        headers: Map.of(effectiveHeaders),
+        headers: probeHeaders,
       );
     }
     return verdict;
@@ -401,21 +429,24 @@ abstract class AdapterBase {
     CancelToken cancelToken,
   ) async {
     const limit = 2048;
-    final bytes = BytesBuilder(copy: false);
+    final bytes = Uint8List(limit);
+    var length = 0;
     var text = '';
     await for (final chunk in body.stream) {
-      final remaining = limit - bytes.length;
-      bytes.add(
-        chunk.length <= remaining
-            ? chunk
-            : Uint8List.sublistView(chunk, 0, remaining),
+      if (chunk.isEmpty) continue;
+      final remaining = limit - length;
+      final count = chunk.length < remaining ? chunk.length : remaining;
+      bytes.setRange(length, length + count, chunk);
+      length += count;
+      text = utf8.decode(
+        Uint8List.sublistView(bytes, 0, length),
+        allowMalformed: true,
       );
-      text = utf8.decode(bytes.toBytes(), allowMalformed: true);
-      if (_playlistLooksAlive(200, text) || _playlistLooksRejected(text)) {
+      if (_playlistPrefixVerdict(text) != MediaReachabilityVerdict.unknown) {
         cancelToken.cancel('playlist prefix complete');
         return (text: text, truncated: false);
       }
-      if (bytes.length == limit) {
+      if (length == limit) {
         cancelToken.cancel('playlist prefix limit');
         return (text: text, truncated: true);
       }
@@ -423,14 +454,20 @@ abstract class AdapterBase {
     return (text: text, truncated: false);
   }
 
-  static bool _playlistLooksRejected(String text) {
+  static MediaReachabilityVerdict _playlistPrefixVerdict(String text) {
     final value = text.trimLeft();
     final upper = (value.length > 128 ? value.substring(0, 128) : value)
         .toUpperCase();
-    return upper.startsWith('<!DOCTYPE') ||
+    if (upper.startsWith('<!DOCTYPE') ||
         upper.contains('<HTML') ||
         upper.startsWith('{') ||
-        upper.startsWith('[');
+        upper.startsWith('[')) {
+      return MediaReachabilityVerdict.rejected;
+    }
+    if (upper.contains('#EXT') || value.contains('#EXT')) {
+      return MediaReachabilityVerdict.reachable;
+    }
+    return MediaReachabilityVerdict.unknown;
   }
 
   Future<MediaReachabilityVerdict> _probeDirectUrl(
@@ -438,7 +475,6 @@ abstract class AdapterBase {
     required Map<String, String> headers,
     Duration? timeout,
   }) async {
-    if (!url.startsWith('http')) return MediaReachabilityVerdict.rejected;
     if (VideoUrlExtractor.looksLikeNonMedia(url)) {
       return MediaReachabilityVerdict.rejected;
     }
@@ -468,12 +504,8 @@ abstract class AdapterBase {
           readPlaylist: true,
         );
         final prefix = resp.data as ({String text, bool truncated});
-        if (_playlistLooksAlive(resp.statusCode, prefix.text)) {
-          return MediaReachabilityVerdict.reachable;
-        }
-        if (_playlistLooksRejected(prefix.text)) {
-          return MediaReachabilityVerdict.rejected;
-        }
+        final verdict = _playlistPrefixVerdict(prefix.text);
+        if (verdict != MediaReachabilityVerdict.unknown) return verdict;
         if (prefix.truncated) return MediaReachabilityVerdict.unknown;
         // 临时媒体上的播放列表同样可能尚未生成或本次未放行：保留待播放器验证。
         if (VideoUrlExtractor.isOnDemandMediaPath(url) &&
@@ -534,18 +566,6 @@ abstract class AdapterBase {
       // A timeout or transport failure does not establish a dead URL.
       return MediaReachabilityVerdict.unknown;
     }
-  }
-
-  static bool _playlistLooksAlive(int? statusCode, String? body) {
-    final code = statusCode ?? 0;
-    if (code != 200 && code != 206) return false;
-    final text = body?.trimLeft() ?? '';
-    if (text.isEmpty) return false;
-    if (_playlistLooksRejected(text)) return false;
-    final head = text.length > 128 ? text.substring(0, 128) : text;
-    final upper = head.toUpperCase();
-    if (upper.contains('#EXT')) return true;
-    return text.contains('#EXT');
   }
 
   Future<({String url, Map<String, String> httpHeaders})> resolvePlaybackMedia(
@@ -614,6 +634,7 @@ class RetryInterceptor extends Interceptor {
   }
 
   bool _shouldRetry(DioException e) {
+    if (e.requestOptions.cancelToken?.isCancelled ?? false) return false;
     if (e.requestOptions.method.toUpperCase() != 'GET') return false;
     switch (e.type) {
       case DioExceptionType.connectionTimeout:

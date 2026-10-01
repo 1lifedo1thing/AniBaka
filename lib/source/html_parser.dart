@@ -59,59 +59,11 @@ class HtmlParser {
     final link = _findLink(element, detailPattern);
     if (link == null) return null;
 
-    if (!_isUsableLink(link, detailPattern)) return null;
     final href = link.attributes['href'] ?? '';
-
-    final name = _extractTitle(element, link);
+    final img = element.querySelector('img');
+    final name = _extractTitle(element, link, img);
     if (name.isEmpty) return null;
 
-    return Series(
-      VideoUrlExtractor.toAbsolute(href, baseUrl),
-      name,
-      image: _extractImage(element, baseUrl),
-    );
-  }
-
-  static Element? _findLink(Element element, String? detailPattern) {
-    for (final selector in _titleLinkSelectors) {
-      try {
-        final matches = element.querySelectorAll(selector);
-        for (final link in matches) {
-          if (_isUsableLink(link, detailPattern)) return link;
-        }
-      } catch (_) {}
-    }
-    if (element.localName == 'a' && _isUsableLink(element, detailPattern)) {
-      return element;
-    }
-    return element.querySelector('a');
-  }
-
-  static bool _isUsableLink(Element link, String? detailPattern) {
-    final href = link.attributes['href'] ?? '';
-    if (href.isEmpty || href.startsWith('javascript')) return false;
-    if (detailPattern != null && !href.contains(detailPattern)) return false;
-    return true;
-  }
-
-  static String _extractTitle(Element element, Element link) {
-    final title = link.attributes['title']?.trim() ?? '';
-    if (title.length > 1 && title.length < 100) return title;
-
-    final header =
-        element.querySelector('h1, h2, h3, h4, .title')?.text.trim() ?? '';
-    if (header.length > 1 && header.length < 100) return header;
-
-    final alt = element.querySelector('img')?.attributes['alt']?.trim() ?? '';
-    if (alt.length > 1 && alt.length < 100) return alt;
-
-    final text = link.text.trim();
-    if (text.length > 1 && text.length < 100) return text;
-    return '';
-  }
-
-  static String? _extractImage(Element element, String baseUrl) {
-    final img = element.querySelector('img');
     final src =
         img?.attributes['data-original'] ??
         img?.attributes['data-src'] ??
@@ -121,9 +73,49 @@ class HtmlParser {
         element.attributes['data-original'] ??
         element.attributes['data-src'] ??
         element.attributes['src'];
-    return (src != null && src.isNotEmpty)
-        ? VideoUrlExtractor.toAbsolute(src, baseUrl)
-        : null;
+    return Series(
+      VideoUrlExtractor.toAbsolute(href, baseUrl),
+      name,
+      image: src != null && src.isNotEmpty
+          ? VideoUrlExtractor.toAbsolute(src, baseUrl)
+          : null,
+    );
+  }
+
+  static Element? _findLink(Element element, String? detailPattern) {
+    for (final selector in _titleLinkSelectors) {
+      for (final link in element.querySelectorAll(selector)) {
+        if (_isUsableLink(link, detailPattern)) return link;
+      }
+    }
+    if (element.localName == 'a' && _isUsableLink(element, detailPattern)) {
+      return element;
+    }
+    final link = element.querySelector('a');
+    return link != null && _isUsableLink(link, detailPattern) ? link : null;
+  }
+
+  static bool _isUsableLink(Element link, String? detailPattern) {
+    final href = link.attributes['href'] ?? '';
+    if (href.isEmpty || href.startsWith('javascript')) return false;
+    if (detailPattern != null && !href.contains(detailPattern)) return false;
+    return true;
+  }
+
+  static String _extractTitle(Element element, Element link, Element? img) {
+    final title = link.attributes['title']?.trim() ?? '';
+    if (title.length > 1 && title.length < 100) return title;
+
+    final header =
+        element.querySelector('h1, h2, h3, h4, .title')?.text.trim() ?? '';
+    if (header.length > 1 && header.length < 100) return header;
+
+    final alt = img?.attributes['alt']?.trim() ?? '';
+    if (alt.length > 1 && alt.length < 100) return alt;
+
+    final text = link.text.trim();
+    if (text.length > 1 && text.length < 100) return text;
+    return '';
   }
 
   static List<Series> _fallbackByDetailLinks(
@@ -189,13 +181,16 @@ class HtmlParser {
       if (containers.isEmpty) continue;
 
       final sources = <Source>[];
+      final seen = <String>{};
+      var sourceIndex = 0;
       for (final container in containers) {
         final episodes = _extractEpisodes(container, baseUrl);
         if (episodes.isEmpty) continue;
-        sources.add(Source(episodes, _sourceName(sources.length, labels)));
+        final index = sourceIndex++;
+        if (!seen.add(episodes.map((e) => e.episodeId).join('\x00'))) continue;
+        sources.add(Source(episodes, _sourceName(index, labels)));
       }
-      final deduped = _dedupe(sources);
-      if (deduped.isNotEmpty) return deduped;
+      if (sources.isNotEmpty) return sources;
     }
     return [];
   }
@@ -247,19 +242,17 @@ class HtmlParser {
 
     for (var i = 0; i < hrefs.length; i++) {
       final normalized = hrefs[i].replaceAll(r'\/', '/');
-      var found = false;
       for (final pattern in _explicitEpisodePatterns) {
         final match = pattern.firstMatch(normalized);
         if (match != null) {
           final n = int.tryParse(match.group(1) ?? '');
           if (n != null && n > 0) {
             numbers[i] = n;
-            found = true;
             break;
           }
         }
       }
-      if (found) continue;
+      if (numbers[i] != null) continue;
 
       for (final pattern in _tuplePatterns) {
         final match = pattern.firstMatch(normalized);
@@ -316,14 +309,5 @@ class HtmlParser {
       if (label.isNotEmpty && label.length < 50) return label;
     }
     return '播放源 ${index + 1}';
-  }
-
-  static List<Source> _dedupe(List<Source> sources) {
-    final seen = <String>{};
-    return [
-      for (final source in sources)
-        if (seen.add(source.episodes.map((e) => e.episodeId).join('\x00')))
-          source,
-    ];
   }
 }

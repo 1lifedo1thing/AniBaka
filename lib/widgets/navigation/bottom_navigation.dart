@@ -19,11 +19,13 @@ class AppBottomNavigation extends StatefulWidget {
   final int currentIndex;
   final ValueChanged<int> onTap;
   final List<AppNavItem> items;
+  final bool visible;
 
   const AppBottomNavigation({
     required this.currentIndex,
     required this.onTap,
     required this.items,
+    this.visible = true,
     super.key,
   });
 
@@ -72,6 +74,7 @@ class _AppBottomNavigationState extends State<AppBottomNavigation> {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final reduceMotion = context.reduceMotion;
+    final safeBottom = MediaQuery.paddingOf(context).bottom;
     final isDark = colors.brightness == Brightness.dark;
 
     final activeIndex = _dragIndex ?? widget.currentIndex.toDouble();
@@ -101,9 +104,15 @@ class _AppBottomNavigationState extends State<AppBottomNavigation> {
       ],
     );
 
-    return SafeArea(
+    final navigation = SafeArea(
       top: false,
-      minimum: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+      bottom: false,
+      minimum: EdgeInsets.fromLTRB(
+        16,
+        0,
+        16,
+        safeBottom < 10 ? 10 - safeBottom : 0,
+      ),
       child: Center(
         heightFactor: 1,
         child: ConstrainedBox(
@@ -235,6 +244,34 @@ class _AppBottomNavigationState extends State<AppBottomNavigation> {
                 },
               ),
             ),
+          ),
+        ),
+      ),
+    );
+    // Scaffold includes this layout height in the body's bottom inset. A paint
+    // translation alone leaves an empty navigation-sized strip after hiding.
+    return SafeArea(
+      top: false,
+      left: false,
+      right: false,
+      child: TweenAnimationBuilder<double>(
+        tween: Tween(end: widget.visible ? 1.0 : 0.0),
+        duration: reduceMotion
+            ? Duration.zero
+            : const Duration(milliseconds: 300),
+        curve: Curves.easeOutCubic,
+        builder: (context, height, child) => ClipRect(
+          child: Align(
+            alignment: Alignment.topCenter,
+            heightFactor: height,
+            child: child,
+          ),
+        ),
+        child: IgnorePointer(
+          ignoring: !widget.visible,
+          child: ExcludeSemantics(
+            excluding: !widget.visible,
+            child: navigation,
           ),
         ),
       ),

@@ -5,10 +5,72 @@ import 'package:flutter/services.dart';
 bool isCompactPlayerPanel(BuildContext context) =>
     MediaQuery.sizeOf(context).shortestSide < 600;
 
+bool isBottomPlayerPanel(BuildContext context) {
+  final size = MediaQuery.sizeOf(context);
+  return size.width < 600 && size.height > size.width;
+}
+
 EdgeInsets playerPanelContentPadding(BuildContext context) =>
-    isCompactPlayerPanel(context)
+    isBottomPlayerPanel(context)
+    ? const EdgeInsets.fromLTRB(12, 0, 12, 16)
+    : isCompactPlayerPanel(context)
     ? const EdgeInsets.fromLTRB(8, 4, 8, 12)
     : const EdgeInsets.fromLTRB(16, 12, 16, 24);
+
+ThemeData playerPanelTheme(
+  ThemeData theme, {
+  required bool bottom,
+  required bool compact,
+}) {
+  final colors = ColorScheme.fromSeed(
+    seedColor: theme.colorScheme.primary,
+    brightness: Brightness.dark,
+  );
+  return theme.copyWith(
+    iconTheme: const IconThemeData(color: Colors.white),
+    iconButtonTheme: IconButtonThemeData(
+      style: IconButton.styleFrom(foregroundColor: colors.onSecondaryContainer),
+    ),
+    brightness: Brightness.dark,
+    materialTapTargetSize: bottom
+        ? MaterialTapTargetSize.padded
+        : theme.materialTapTargetSize,
+    visualDensity: compact ? VisualDensity.compact : theme.visualDensity,
+    colorScheme: colors,
+    textTheme: theme.textTheme.apply(
+      bodyColor: Colors.white,
+      displayColor: Colors.white,
+    ),
+    sliderTheme: SliderThemeData(
+      trackHeight: compact ? 10 : 16,
+      trackGap: compact ? 4 : 6,
+      tickMarkShape: SliderTickMarkShape.noTickMark,
+      trackShape: const GappedSliderTrackShape(),
+      thumbShape: const HandleThumbShape(),
+      thumbSize: WidgetStatePropertyAll(Size(4, compact ? 28 : 36)),
+      activeTrackColor: colors.primary,
+      inactiveTrackColor: colors.surfaceContainerHighest.withValues(alpha: 0.7),
+      thumbColor: colors.primary,
+      showValueIndicator: ShowValueIndicator.onDrag,
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+    ),
+    switchTheme: SwitchThemeData(
+      thumbIcon: WidgetStateProperty.resolveWith(
+        (states) => states.contains(WidgetState.selected)
+            ? Icon(Icons.check_rounded, size: 16, color: colors.primary)
+            : null,
+      ),
+    ),
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(
+        minimumSize: Size(44, compact ? 40 : 48),
+        backgroundColor: colors.secondaryContainer.withValues(alpha: 0.66),
+        foregroundColor: colors.onSecondaryContainer,
+        shape: const StadiumBorder(),
+      ),
+    ),
+  );
+}
 
 Future<void> showPlayerSettingsPanel(BuildContext context, Widget child) {
   if (context.findAncestorStateOfType<_PlayerSettingsPanelState>() != null) {
@@ -16,77 +78,64 @@ Future<void> showPlayerSettingsPanel(BuildContext context, Widget child) {
   }
 
   final theme = Theme.of(context);
-  final colors = ColorScheme.fromSeed(
-    seedColor: theme.colorScheme.primary,
-    brightness: Brightness.dark,
-  );
-  return showDialog(
+  return showGeneralDialog<void>(
     context: context,
+    barrierDismissible: true,
+    barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
     barrierColor: Colors.transparent,
-    builder: (context) {
-      final screenWidth = MediaQuery.sizeOf(context).width;
-      final compact = isCompactPlayerPanel(context);
-      final width = compact
+    transitionDuration: const Duration(milliseconds: 280),
+    transitionBuilder: (context, animation, secondaryAnimation, child) =>
+        FadeTransition(
+          opacity: animation,
+          child: SlideTransition(
+            position:
+                Tween<Offset>(
+                  begin: isBottomPlayerPanel(context)
+                      ? const Offset(0, 0.25)
+                      : const Offset(0.15, 0),
+                  end: Offset.zero,
+                ).animate(
+                  CurvedAnimation(
+                    parent: animation,
+                    curve: Curves.easeOutCubic,
+                  ),
+                ),
+            child: child,
+          ),
+        ),
+    pageBuilder: (context, animation, secondaryAnimation) {
+      final media = MediaQuery.of(context);
+      final screenWidth = media.size.width;
+      final bottom = isBottomPlayerPanel(context);
+      final compact = isCompactPlayerPanel(context) && !bottom;
+      final width = bottom
+          ? screenWidth
+          : compact
           ? (screenWidth * (screenWidth < 600 ? 0.88 : 0.38))
                 .clamp(280.0, 340.0)
                 .clamp(0.0, screenWidth)
           : (screenWidth * 0.55).clamp(400.0, 560.0);
       return Theme(
-        data: theme.copyWith(
-          iconTheme: const IconThemeData(color: Colors.white),
-          iconButtonTheme: IconButtonThemeData(
-            style: IconButton.styleFrom(
-              foregroundColor: colors.onSecondaryContainer,
-            ),
-          ),
-          brightness: Brightness.dark,
-          visualDensity: compact ? VisualDensity.compact : theme.visualDensity,
-          colorScheme: colors,
-          textTheme: theme.textTheme.apply(
-            bodyColor: Colors.white,
-            displayColor: Colors.white,
-          ),
-          sliderTheme: SliderThemeData(
-            trackHeight: compact ? 10 : 16,
-            trackGap: compact ? 4 : 6,
-            tickMarkShape: SliderTickMarkShape.noTickMark,
-            trackShape: const GappedSliderTrackShape(),
-            thumbShape: const HandleThumbShape(),
-            thumbSize: WidgetStatePropertyAll(Size(4, compact ? 28 : 36)),
-            activeTrackColor: colors.primary,
-            inactiveTrackColor: colors.surfaceContainerHighest.withValues(
-              alpha: 0.7,
-            ),
-            thumbColor: colors.primary,
-            showValueIndicator: ShowValueIndicator.onDrag,
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-          ),
-          switchTheme: SwitchThemeData(
-            thumbIcon: WidgetStateProperty.resolveWith(
-              (states) => states.contains(WidgetState.selected)
-                  ? Icon(Icons.check_rounded, size: 16, color: colors.primary)
+        data: playerPanelTheme(theme, bottom: bottom, compact: compact),
+        child: SafeArea(
+          bottom: false,
+          child: Dialog(
+            backgroundColor: Colors.transparent,
+            surfaceTintColor: Colors.transparent,
+            insetPadding: EdgeInsets.zero,
+            constraints: BoxConstraints.tightFor(
+              width: width,
+              height: bottom
+                  ? (media.size.height -
+                            media.padding.top -
+                            screenWidth * 9 / 16)
+                        .clamp(0.0, media.size.height * 0.74)
                   : null,
             ),
+            alignment: bottom ? Alignment.bottomCenter : Alignment.centerRight,
+            elevation: 0,
+            child: _PlayerSettingsPanel(child: child),
           ),
-          filledButtonTheme: FilledButtonThemeData(
-            style: FilledButton.styleFrom(
-              minimumSize: Size(44, compact ? 40 : 48),
-              backgroundColor: colors.secondaryContainer.withValues(
-                alpha: 0.66,
-              ),
-              foregroundColor: colors.onSecondaryContainer,
-              shape: const StadiumBorder(),
-            ),
-          ),
-        ),
-        child: Dialog(
-          backgroundColor: Colors.transparent,
-          surfaceTintColor: Colors.transparent,
-          insetPadding: EdgeInsets.zero,
-          constraints: BoxConstraints.tightFor(width: width),
-          alignment: Alignment.centerRight,
-          elevation: 0,
-          child: _PlayerSettingsPanel(child: child),
         ),
       );
     },
@@ -112,8 +161,29 @@ class _PlayerSettingsPanel extends StatefulWidget {
 
 class _PlayerSettingsPanelState extends State<_PlayerSettingsPanel> {
   late NavigatorState _navigator;
+  double _dragOffset = 0;
+  bool _dragging = false;
 
   void close() => Navigator.of(context).pop();
+
+  void startDrag(DragStartDetails details) => setState(() => _dragging = true);
+
+  void updateDrag(DragUpdateDetails details) => setState(() {
+    _dragOffset = (_dragOffset + details.delta.dy).clamp(0, 240);
+  });
+
+  void endDrag(DragEndDetails details) {
+    if (_dragOffset > 80 || details.velocity.pixelsPerSecond.dy > 700) {
+      close();
+    } else {
+      cancelDrag();
+    }
+  }
+
+  void cancelDrag() => setState(() {
+    _dragOffset = 0;
+    _dragging = false;
+  });
 
   @override
   Widget build(BuildContext context) => CallbackShortcuts(
@@ -128,11 +198,20 @@ class _PlayerSettingsPanelState extends State<_PlayerSettingsPanel> {
     },
     child: NavigatorPopHandler<void>(
       onPopWithResult: (_) => _navigator.pop(),
-      child: Navigator(
-        onGenerateInitialRoutes: (navigator, _) {
-          _navigator = navigator;
-          return [_panelRoute(widget.child)];
-        },
+      child: AnimatedContainer(
+        duration: _dragging ? Duration.zero : const Duration(milliseconds: 200),
+        curve: Curves.easeOutCubic,
+        transform: Matrix4.translationValues(
+          0,
+          isBottomPlayerPanel(context) ? _dragOffset : 0,
+          0,
+        ),
+        child: Navigator(
+          onGenerateInitialRoutes: (navigator, _) {
+            _navigator = navigator;
+            return [_panelRoute(widget.child)];
+          },
+        ),
       ),
     ),
   );
@@ -147,6 +226,77 @@ class PanelContainer extends StatelessWidget {
   Widget build(BuildContext context) {
     final panel = context.findAncestorStateOfType<_PlayerSettingsPanelState>();
     final canGoBack = panel != null && (ModalRoute.canPopOf(context) ?? false);
+    final bottom = isBottomPlayerPanel(context);
+    if (bottom) {
+      final colors = Theme.of(context).colorScheme;
+      return Material(
+        color: colors.surfaceContainerLow,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
+        clipBehavior: Clip.antiAlias,
+        child: SafeArea(
+          top: false,
+          child: Column(
+            children: [
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onVerticalDragStart: panel?.startDrag,
+                onVerticalDragUpdate: panel?.updateDrag,
+                onVerticalDragEnd: panel?.endDrag,
+                onVerticalDragCancel: panel?.cancelDrag,
+                child: Column(
+                  children: [
+                    SizedBox(
+                      height: 24,
+                      width: double.infinity,
+                      child: Center(
+                        child: Container(
+                          width: 32,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: colors.onSurfaceVariant,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 0, 12, 4),
+                      child: Row(
+                        children: [
+                          if (canGoBack) ...[
+                            IconButton(
+                              tooltip: '返回上一级',
+                              onPressed: () => Navigator.of(context).pop(),
+                              icon: const Icon(Icons.arrow_back_rounded),
+                            ),
+                            const SizedBox(width: 8),
+                          ],
+                          Expanded(
+                            child: Text(
+                              title,
+                              style: Theme.of(context).textTheme.headlineSmall
+                                  ?.copyWith(fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                          IconButton.filledTonal(
+                            tooltip: '关闭设置',
+                            onPressed:
+                                panel?.close ??
+                                () => Navigator.of(context).pop(),
+                            icon: const Icon(Icons.close_rounded),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(child: child),
+            ],
+          ),
+        ),
+      );
+    }
     return LayoutBuilder(
       builder: (context, constraints) {
         // The empty leading space lets the scrim dissolve into the video without
@@ -278,12 +428,20 @@ class PanelSectionTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: EdgeInsets.only(bottom: isCompactPlayerPanel(context) ? 4 : 8),
+    padding: isBottomPlayerPanel(context)
+        ? const EdgeInsets.fromLTRB(8, 0, 8, 6)
+        : EdgeInsets.only(bottom: isCompactPlayerPanel(context) ? 4 : 8),
     child: Text(
       title,
       style: TextStyle(
-        color: Colors.white,
-        fontSize: isCompactPlayerPanel(context) ? 14 : 16,
+        color: isBottomPlayerPanel(context)
+            ? Theme.of(context).colorScheme.primary
+            : Colors.white,
+        fontSize: isBottomPlayerPanel(context)
+            ? 15
+            : isCompactPlayerPanel(context)
+            ? 14
+            : 16,
         fontWeight: FontWeight.w700,
       ),
     ),
@@ -295,18 +453,36 @@ class PanelSettingsGroup extends StatelessWidget {
   const PanelSettingsGroup({required this.children, super.key});
 
   @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: children,
-  );
+  Widget build(BuildContext context) {
+    final content = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: children,
+    );
+    if (!isBottomPlayerPanel(context)) return content;
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerHigh,
+      borderRadius: BorderRadius.circular(24),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        child: content,
+      ),
+    );
+  }
 }
 
 class PanelDivider extends StatelessWidget {
   const PanelDivider({super.key});
 
   @override
-  Widget build(BuildContext context) =>
-      SizedBox(height: isCompactPlayerPanel(context) ? 4 : 8);
+  Widget build(BuildContext context) => isBottomPlayerPanel(context)
+      ? Divider(
+          height: 12,
+          color: Theme.of(
+            context,
+          ).colorScheme.outlineVariant.withValues(alpha: 0.4),
+        )
+      : SizedBox(height: isCompactPlayerPanel(context) ? 4 : 8);
 }
 
 class PanelSliderTile extends StatelessWidget {
@@ -363,10 +539,15 @@ class PanelSliderTile extends StatelessWidget {
                 ),
                 child: Text(
                   valueLabel,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 13,
-                    fontFeatures: [ui.FontFeature.tabularFigures()],
+                  style: TextStyle(
+                    color: isBottomPlayerPanel(context)
+                        ? colors.primary
+                        : Colors.white,
+                    fontSize: isBottomPlayerPanel(context) ? 15 : 13,
+                    fontWeight: isBottomPlayerPanel(context)
+                        ? FontWeight.w600
+                        : null,
+                    fontFeatures: const [ui.FontFeature.tabularFigures()],
                   ),
                 ),
               ),
@@ -503,7 +684,11 @@ class PanelSwitchTile extends StatelessWidget {
                       title,
                       style: TextStyle(
                         color: Colors.white,
-                        fontSize: isCompactPlayerPanel(context) ? 14 : 15,
+                        fontSize: isBottomPlayerPanel(context)
+                            ? 16
+                            : isCompactPlayerPanel(context)
+                            ? 14
+                            : 15,
                         fontWeight: FontWeight.w500,
                       ),
                     ),
@@ -525,7 +710,9 @@ class PanelSwitchTile extends StatelessWidget {
               Switch(
                 value: value,
                 onChanged: onChanged,
-                materialTapTargetSize: isCompactPlayerPanel(context)
+                materialTapTargetSize:
+                    isCompactPlayerPanel(context) &&
+                        !isBottomPlayerPanel(context)
                     ? MaterialTapTargetSize.shrinkWrap
                     : MaterialTapTargetSize.padded,
               ),

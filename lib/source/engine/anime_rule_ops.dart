@@ -9,7 +9,7 @@ import 'package:baka/source/models/source.dart';
 typedef Anime1PageFetcher = Future<String> Function(String url);
 
 final class _TokenNode {
-  final children = <int, _TokenNode>{};
+  Map<int, _TokenNode>? children;
   String? value;
 }
 
@@ -138,7 +138,6 @@ class AnimeRuleOps {
 
     final visitedPages = <String>{};
     final seenTokens = <String>{};
-    final tokens = <String>[];
     String? pageUrl = firstPageUrl;
     for (
       var page = 0;
@@ -154,13 +153,23 @@ class AnimeRuleOps {
         tokenAttribute: tokenAttribute,
         nextSelector: nextSelector,
       );
-      for (final token in parsed.tokens) {
-        if (seenTokens.add(token)) tokens.add(token);
-      }
+      seenTokens.addAll(parsed.tokens);
       pageUrl = parsed.nextPageUrl;
     }
 
-    return reverse ? tokens.reversed.toList(growable: false) : tokens;
+    final tokens = seenTokens.toList(growable: !reverse);
+    if (reverse) {
+      for (
+        var left = 0, right = tokens.length - 1;
+        left < right;
+        left++, right--
+      ) {
+        final token = tokens[left];
+        tokens[left] = tokens[right];
+        tokens[right] = token;
+      }
+    }
+    return tokens;
   }
 
   /// Converts ordered Anime1 request tokens into the standard one-line source.
@@ -251,10 +260,11 @@ class AnimeRuleOps {
     String encoded,
     Map<String, String> charMap,
   ) {
-    if (encoded.trim().isEmpty || charMap.isEmpty) return '';
+    final input = encoded.trim();
+    if (input.isEmpty || charMap.isEmpty) return '';
     final String decoded;
     try {
-      decoded = utf8.decode(base64.decode(base64.normalize(encoded.trim())));
+      decoded = utf8.decode(base64.decode(base64.normalize(input)));
     } catch (_) {
       return '';
     }
@@ -264,7 +274,7 @@ class AnimeRuleOps {
       if (entry.key.isEmpty) continue;
       var node = root;
       for (var i = 0; i < entry.key.length; i++) {
-        node = node.children.putIfAbsent(
+        node = (node.children ??= <int, _TokenNode>{}).putIfAbsent(
           entry.key.codeUnitAt(i),
           _TokenNode.new,
         );
@@ -278,7 +288,7 @@ class AnimeRuleOps {
       String? replacement;
       var end = offset;
       for (var cursor = offset; cursor < decoded.length; cursor++) {
-        final child = node.children[decoded.codeUnitAt(cursor)];
+        final child = node.children?[decoded.codeUnitAt(cursor)];
         if (child == null) break;
         node = child;
         if (node.value != null) {
@@ -305,13 +315,17 @@ class AnimeRuleOps {
     final question = normalized.indexOf('?');
     if (question < 0 || question + 1 >= normalized.length) return '';
     final fragment = normalized.indexOf('#', question + 1);
-    final query = normalized.substring(
-      question + 1,
-      fragment < 0 ? normalized.length : fragment,
-    );
-    for (final part in query.split('&')) {
-      final separator = part.indexOf('=');
-      final rawName = separator < 0 ? part : part.substring(0, separator);
+    final queryEnd = fragment < 0 ? normalized.length : fragment;
+    var start = question + 1;
+    while (start < queryEnd) {
+      final ampersand = normalized.indexOf('&', start);
+      final end = ampersand < 0 || ampersand > queryEnd ? queryEnd : ampersand;
+      var equals = start;
+      while (equals < end && normalized.codeUnitAt(equals) != 0x3d) {
+        equals++;
+      }
+      final hasValue = equals < end;
+      final rawName = normalized.substring(start, hasValue ? equals : end);
       String name;
       try {
         name = Uri.decodeQueryComponent(rawName);
@@ -319,8 +333,9 @@ class AnimeRuleOps {
         name = rawName;
       }
       if (name == parameter) {
-        return separator < 0 ? '' : part.substring(separator + 1);
+        return hasValue ? normalized.substring(equals + 1, end) : '';
       }
+      start = end + 1;
     }
     return '';
   }

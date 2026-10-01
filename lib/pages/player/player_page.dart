@@ -362,7 +362,9 @@ class _PlayerPageState extends State<PlayerPage>
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      useSafeArea: true,
       backgroundColor: Colors.transparent,
+      barrierColor: Colors.transparent,
       builder: (ctx) => DlnaCastPanel(
         datasource: castUrl,
         animeTitle: _svc.data['title']?.toString() ?? '',
