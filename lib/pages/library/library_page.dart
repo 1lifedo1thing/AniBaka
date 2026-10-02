@@ -24,6 +24,10 @@ class LibraryPage extends StatefulWidget {
 }
 
 class _LibraryPageState extends State<LibraryPage> {
+  static int _nextHeroScope = 0;
+
+  // Collection IDs may be zero, shared, or repeated in another mounted library.
+  final int _heroScope = _nextHeroScope++;
   List<Map<String, dynamic>> _historyList = [];
   List<AnimeCollection> _collectionList = [];
   CollectionStats? _stats;
@@ -436,7 +440,11 @@ class _LibraryPageState extends State<LibraryPage> {
         _getGridCrossAxisCount(context) * 3,
         (context, index) => AppSkeletonizer(
           enabled: true,
-          child: _CollectionCard(collection: _dummyCollection, onTap: () {}),
+          child: _CollectionCard(
+            collection: _dummyCollection,
+            heroTag: 'collection_loading_${_heroScope}_$index',
+            onTap: () {},
+          ),
         ),
       );
     }
@@ -455,6 +463,7 @@ class _LibraryPageState extends State<LibraryPage> {
       final item = _collectionList[index];
       return _CollectionCard(
         collection: item,
+        heroTag: 'collection_${_heroScope}_$index',
         onTap: () => _handleCollectionCardTap(item),
       );
     });
@@ -486,7 +495,7 @@ class _LibraryPageState extends State<LibraryPage> {
   }
 
   void _handleHistoryCardTap(Map data) {
-    _navigateToPlayer(Map<String, dynamic>.from(data), posIndex: data['index']);
+    _navigateToPlayer(PlaybackRequest.fromHistory(data));
   }
 
   void _handleCollectionCardTap(AnimeCollection collection) {
@@ -495,25 +504,22 @@ class _LibraryPageState extends State<LibraryPage> {
     if (id == null || id <= 0) return;
 
     final title = collection.displayTitle;
-    _navigateToPlayer({
-      'id': id,
-      'title': title.isEmpty && !hasPostId ? '加载中...' : title,
-      'content': collection.displayCover,
-      'image': collection.displayCover,
-      if (collection.bgmId != null) 'bgmId': collection.bgmId,
-      if (!hasPostId) 'source': 'bgm',
-    });
+    _navigateToPlayer(
+      PlaybackRequest.fromMap({
+        'id': id,
+        'title': title.isEmpty && !hasPostId ? '加载中...' : title,
+        'content': collection.displayCover,
+        'image': collection.displayCover,
+        if (collection.bgmId != null) 'bgmId': collection.bgmId,
+        if (!hasPostId) 'source': 'bgm',
+      }),
+    );
   }
 
-  void _navigateToPlayer(Map<String, dynamic> data, {int? posIndex}) {
+  void _navigateToPlayer(PlaybackRequest request) {
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (_) => PlayerPage(
-          request: PlaybackRequest.fromMap(data),
-          posIndex: posIndex,
-        ),
-      ),
+      MaterialPageRoute(builder: (_) => PlayerPage(request: request)),
     ).then((_) {
       if (!mounted) return;
       setState(() => _historyList = historyRepository.getHistoryList());
@@ -607,9 +613,14 @@ class _HistoryCard extends StatelessWidget {
 
 class _CollectionCard extends StatelessWidget {
   final AnimeCollection collection;
+  final String heroTag;
   final VoidCallback onTap;
 
-  const _CollectionCard({required this.collection, required this.onTap});
+  const _CollectionCard({
+    required this.collection,
+    required this.heroTag,
+    required this.onTap,
+  });
 
   static const _statusColors = {
     1: Color(0xFF34D399),
@@ -634,8 +645,7 @@ class _CollectionCard extends StatelessWidget {
       'title': title.isNotEmpty ? title : '未知番剧',
       'content': collection.displayCover,
       'url': collection.displayCover,
-      '_heroTag':
-          'collection_${collection.postId ?? collection.bgmId ?? collection.hashCode}',
+      '_heroTag': heroTag,
     };
 
     String? remainingText;

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:baka/models/skip_segment.dart';
+import 'package:baka/models/skip_selection.dart';
 import 'package:baka/services/playback/skip_segments.dart';
 
 import 'package:flutter/material.dart';
@@ -19,7 +20,9 @@ import 'package:baka/utils/duration_utils.dart';
 const String mediacodecEmbedRenderer = 'mediacodec_embed';
 
 class PlaybackController {
-  PlaybackController();
+  PlaybackController() {
+    timeline.addListener(_validateSkipSelection);
+  }
 
   static const videoFitTypes = <({BoxFit fit, String description})>[
     (fit: BoxFit.contain, description: '画面'),
@@ -37,6 +40,11 @@ class PlaybackController {
 
   Player? _player;
   final skipData = ValueNotifier<SkipData>(const SkipData());
+  final skipSelection = ValueNotifier<SkipSelection?>(null);
+  bool _playingBeforeSkipSelection = false;
+  int? _pendingSelectionSeek;
+  bool _selectionSeeking = false;
+  int _selectionGeneration = 0;
   final skipService = SkipSegmentsService();
   final _skipSession = SkipSession();
   SkipContext? _skipContext;
@@ -393,6 +401,9 @@ class PlaybackController {
     bool fromSkip = false,
   }) async {
     if (_disposed || (!_roomCanControl && _roomConnected && !remote)) return;
+    // Calibration seeks move the video for inspection, not watch progress.
+    // Capture this before awaiting the native seek: editing can end meanwhile.
+    final previewingSelection = skipSelection.value != null;
     if (!fromSkip) {
       _skipSession.seek(target.inMilliseconds);
       _skipReturnPosition = null;
@@ -404,11 +415,11 @@ class PlaybackController {
     }
     final resumeAfterSeek = _eofReached;
     await _performSeek(target, updatePreview: !fromSlider);
-    if (resumeAfterSeek) {
+    if (resumeAfterSeek && !previewingSelection) {
       _eofReached = false;
       await play();
     }
-    if (!_seekEvents.isClosed) _seekEvents.add(target);
+    if (!previewingSelection && !_seekEvents.isClosed) _seekEvents.add(target);
   }
 
   Future<void> _performSeek(
@@ -493,6 +504,7 @@ class PlaybackController {
     _roomRateLocked = connected;
     _updateSkipSuggestion();
     if (!canControlPlayback) {
+      cancelSkipSelection(restorePlayback: false);
       userActionCancelSkip();
       hideJumpPrompt();
     }
@@ -585,12 +597,13 @@ class PlaybackController {
 
   void setControlsVisible(bool visible) {
     if (_disposed) return;
+    if (skipSelection.value != null) visible = true;
     if (overlay.value.controlsLocked && visible) return;
     if (overlay.value.controlsVisible != visible) {
       overlay.value = overlay.value.copyWith(controlsVisible: visible);
     }
     _hideControlsTimer?.cancel();
-    if (visible) {
+    if (visible && skipSelection.value == null) {
       _hideControlsTimer = Timer(const Duration(seconds: 3), () {
         if (_disposed || timeline.value.seeking) return;
         overlay.value = overlay.value.copyWith(controlsVisible: false);
@@ -602,6 +615,7 @@ class PlaybackController {
 
   void setControlsLocked(bool locked) {
     if (_disposed || overlay.value.controlsLocked == locked) return;
+    if (locked && skipSelection.value != null) return;
     overlay.value = overlay.value.copyWith(
       controlsLocked: locked,
       controlsVisible: locked ? false : true,
@@ -666,6 +680,7 @@ class PlaybackController {
   }
 
   void setSkipContext(SkipContext? context) {
+    cancelSkipSelection(restorePlayback: false);
     _skipGeneration++;
     _skipDuration = 0;
     _skipSession.reset();
@@ -715,11 +730,21 @@ class PlaybackController {
     final local = skipService.mergeLocal(
       context,
       duration,
-      skipData.value.segments.where((s) => s.origin != 'local').toList(),
+      skipData.value.editableSegments
+          .where((s) => s.origin != 'local')
+          .toList(),
     );
     skipData.value = SkipData(
       context: context,
       segments: local,
+      availableSegments: skipService.mergeLocal(
+        context,
+        duration,
+        skipData.value.editableSegments
+            .where((s) => s.origin != 'local')
+            .toList(),
+        includeDisabled: true,
+      ),
       message: skipData.value.message,
     );
     _skipSession.install(local, timeline.value.position.inMilliseconds);
@@ -731,6 +756,7 @@ class PlaybackController {
   }
 
   void _updateSkipState(Duration position) {
+    if (skipSelection.value != null) return;
     if (_skipContext == null || _skipContext!.isFirstEpisode) {
       if (overlay.value.skipState == SkipState.waiting) {
         _setSkipState(SkipState.idle);
@@ -785,6 +811,158 @@ class PlaybackController {
   }
 
   void userActionSkip() => _skipCurrentSegment(automatic: false);
+
+  bool beginSkipSelection(String type) {
+    final context = _skipContext;
+    final duration = timeline.value.duration.inMilliseconds;
+    if (_disposed ||
+        !canControlPlayback ||
+        context == null ||
+        duration <= 0 ||
+        (type != 'op' && type != 'ed') ||
+        skipSelection.value?.saving == true) {
+      return false;
+    }
+    final previous = skipSelection.value;
+    final ranges = <String, SkipRange>{...?previous?.ranges};
+    ranges.putIfAbsent(type, () {
+      final segment = skipData.value.editableSegments
+          .where((s) => s.type == type && s.fits(duration))
+          .firstOrNull;
+      if (segment != null) {
+        return (startMs: segment.startMs, endMs: segment.endMs);
+      }
+      final start = timeline.value.position.inMilliseconds.clamp(
+        0,
+        duration - 1,
+      );
+      return (
+        startMs: start,
+        endMs: (start + 90000).clamp(start + 1, duration),
+      );
+    });
+    if (previous == null) {
+      _selectionGeneration++;
+      _playingBeforeSkipSelection = core.value.playing;
+      hideJumpPrompt();
+      _skipCancelHideTimer?.cancel();
+      _setSkipState(SkipState.idle);
+      overlay.value = overlay.value.copyWith(
+        controlsLocked: false,
+        showDanmakuInput: false,
+        showSkipSuggestion: false,
+      );
+    }
+    skipSelection.value = SkipSelection(
+      context: context,
+      durationMs: duration,
+      type: type,
+      ranges: ranges,
+      changed: previous?.changed ?? {},
+    );
+    if (previous == null) unawaited(pause());
+    setControlsVisible(true);
+    return true;
+  }
+
+  void _validateSkipSelection() {
+    final selection = skipSelection.value;
+    if (selection != null &&
+        selection.durationMs != timeline.value.duration.inMilliseconds) {
+      cancelSkipSelection(restorePlayback: false);
+    }
+  }
+
+  void updateSkipSelection(int startMs, int endMs) {
+    final selection = skipSelection.value;
+    if (_disposed ||
+        selection == null ||
+        selection.saving ||
+        !canControlPlayback) {
+      return;
+    }
+    final start = startMs.clamp(0, selection.durationMs - 1);
+    final end = endMs.clamp(start + 1, selection.durationMs);
+    final old = selection.range;
+    if (old.startMs == start && old.endMs == end) return;
+    skipSelection.value = selection.copyWith(
+      ranges: {
+        ...selection.ranges,
+        selection.type: (startMs: start, endMs: end),
+      },
+      changed: {...selection.changed, selection.type},
+    );
+    _pendingSelectionSeek = old.startMs != start ? start : end;
+    if (!_selectionSeeking) unawaited(_seekSelectionBoundary());
+  }
+
+  Future<void> _seekSelectionBoundary() async {
+    _selectionSeeking = true;
+    final context = skipSelection.value?.context;
+    final generation = _selectionGeneration;
+    try {
+      // Keep the latest drag position while the native player is seeking.
+      await pause();
+      while (!_disposed &&
+          generation == _selectionGeneration &&
+          identical(_skipContext, context) &&
+          skipSelection.value != null &&
+          _pendingSelectionSeek != null) {
+        final target = _pendingSelectionSeek!;
+        _pendingSelectionSeek = null;
+        await seek(Duration(milliseconds: target), fromSlider: true);
+      }
+    } finally {
+      _selectionSeeking = false;
+      if (!_disposed &&
+          skipSelection.value != null &&
+          _pendingSelectionSeek != null) {
+        unawaited(_seekSelectionBoundary());
+      }
+    }
+  }
+
+  Future<bool> finishSkipSelection() async {
+    final selection = skipSelection.value;
+    if (_disposed ||
+        selection == null ||
+        selection.saving ||
+        !canControlPlayback) {
+      return false;
+    }
+    final saving = selection.copyWith(saving: true);
+    skipSelection.value = saving;
+    try {
+      for (final type in {...selection.changed, selection.type}) {
+        if (_disposed ||
+            !identical(skipSelection.value, saving) ||
+            !identical(_skipContext, selection.context)) {
+          return false;
+        }
+        await skipService.saveLocal(selection.context, selection.segment(type));
+      }
+      if (_disposed || !identical(skipSelection.value, saving)) return false;
+      // Refresh installs local markers synchronously before the network lookup.
+      unawaited(refreshSkipSegments(force: true));
+      cancelSkipSelection();
+      return true;
+    } catch (_) {
+      if (!_disposed && identical(skipSelection.value, saving)) {
+        skipSelection.value = selection;
+      }
+      rethrow;
+    }
+  }
+
+  void cancelSkipSelection({bool restorePlayback = true}) {
+    if (_disposed || skipSelection.value == null) return;
+    _selectionGeneration++;
+    _pendingSelectionSeek = null;
+    skipSelection.value = null;
+    setControlsVisible(true);
+    if (restorePlayback && _playingBeforeSkipSelection) unawaited(play());
+    _playingBeforeSkipSelection = false;
+  }
 
   void previewSkipSegment(SkipSegment segment) {
     if (!canControlPlayback ||
@@ -1223,6 +1401,7 @@ class PlaybackController {
     overlay.dispose();
     toastRevision.dispose();
     skipData.dispose();
+    skipSelection.dispose();
     preferences.dispose();
     mediaInfo.dispose();
     enhancement.dispose();

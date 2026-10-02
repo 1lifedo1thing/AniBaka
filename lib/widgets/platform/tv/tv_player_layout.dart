@@ -30,6 +30,7 @@ class TvPlayerLayout extends StatefulWidget {
   final void Function(int) onUrlChanged;
   final VoidCallback onWatchPartyPressed;
   final bool isSearching;
+  final Widget? initialFailure;
 
   const TvPlayerLayout({
     required this.data,
@@ -43,6 +44,7 @@ class TvPlayerLayout extends StatefulWidget {
     required this.onUrlChanged,
     required this.onWatchPartyPressed,
     this.isSearching = false,
+    this.initialFailure,
     this.sourceNames,
     super.key,
   });
@@ -53,6 +55,7 @@ class TvPlayerLayout extends StatefulWidget {
 
 class _TvPlayerLayoutState extends State<TvPlayerLayout> {
   bool _showOverlay = false;
+  bool _editingSkip = false;
   _Panel _panel = _Panel.none;
   Timer? _overlayTimer;
   Timer? _clockTimer;
@@ -67,6 +70,7 @@ class _TvPlayerLayoutState extends State<TvPlayerLayout> {
   @override
   void initState() {
     super.initState();
+    ctr.skipSelection.addListener(_onSkipSelectionChanged);
     _log('TV player layout created');
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _playerFocusNode.requestFocus();
@@ -90,6 +94,7 @@ class _TvPlayerLayoutState extends State<TvPlayerLayout> {
 
   @override
   void dispose() {
+    ctr.skipSelection.removeListener(_onSkipSelectionChanged);
     _log(
       'TV player layout disposed: overlay=$_showOverlay panel=${_panel.name}',
     );
@@ -104,6 +109,7 @@ class _TvPlayerLayoutState extends State<TvPlayerLayout> {
   }
 
   void _showControls() {
+    if (_editingSkip) return;
     if (!_showOverlay) {
       _log('Control overlay shown');
       setState(() => _showOverlay = true);
@@ -114,11 +120,24 @@ class _TvPlayerLayoutState extends State<TvPlayerLayout> {
   }
 
   void _hideControls() {
+    if (_editingSkip) return;
     if (!_showOverlay && _panel == _Panel.none) return;
     _log('Control overlay hidden: previousPanel=${_panel.name}');
     _overlayTimer?.cancel();
     _clockTimer?.cancel();
     setState(() {
+      _showOverlay = false;
+      _panel = _Panel.none;
+    });
+  }
+
+  void _onSkipSelectionChanged() {
+    final editing = ctr.skipSelection.value != null;
+    if (editing == _editingSkip || !mounted) return;
+    _overlayTimer?.cancel();
+    _clockTimer?.cancel();
+    setState(() {
+      _editingSkip = editing;
       _showOverlay = false;
       _panel = _Panel.none;
     });
@@ -199,6 +218,7 @@ class _TvPlayerLayoutState extends State<TvPlayerLayout> {
   }
 
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (_editingSkip) return KeyEventResult.ignored;
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final key = event.logicalKey;
 
@@ -263,11 +283,17 @@ class _TvPlayerLayoutState extends State<TvPlayerLayout> {
 
   @override
   Widget build(BuildContext context) {
-    final canPop = !_showOverlay && _panel == _Panel.none;
+    final canPop = !_editingSkip && !_showOverlay && _panel == _Panel.none;
     return PopScope(
       canPop: canPop,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
+        if (_editingSkip) {
+          if (ctr.skipSelection.value?.saving != true) {
+            ctr.cancelSkipSelection();
+          }
+          return;
+        }
         if (_panel != _Panel.none) {
           _closePanel();
         } else if (_showOverlay) {
@@ -353,7 +379,9 @@ class _TvPlayerLayoutState extends State<TvPlayerLayout> {
         if (failed) {
           return _buildErrorState();
         }
-        if (!widget.inited) return _buildLoadingState();
+        if (!widget.inited) {
+          return widget.initialFailure ?? _buildLoadingState();
+        }
         return BakaPlayer(
           canSearchSource: true,
           danmakuEnabled: true,

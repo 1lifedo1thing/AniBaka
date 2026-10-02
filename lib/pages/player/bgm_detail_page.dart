@@ -134,31 +134,53 @@ class _BgmDetailPageState extends State<BgmDetailPage> {
   Widget _buildBody(ThemeData theme) {
     if (_error) return _buildError(theme);
 
-    return ListView(
+    return CustomScrollView(
       controller: widget.scrollController,
-      padding: const EdgeInsets.fromLTRB(20, 24, 20, 40),
-      children: [
-        _buildHeader(theme),
-        _buildSectionTitle('简介'),
-        _buildSummary(theme),
-        if (_tags.isNotEmpty) ...[_buildSectionTitle('标签'), _buildTags(theme)],
-        if (_infobox.isNotEmpty) ...[
-          _buildSectionTitle('详细信息'),
-          _buildInfobox(theme),
-        ],
-        if (widget.subjectId != null) ...[
-          const SizedBox(height: 24),
-          Center(
-            child: TextButton.icon(
-              onPressed: () => launchUrlString(
-                'https://bgm.tv/subject/${widget.subjectId}',
-                mode: LaunchMode.externalApplication,
-              ),
-              icon: const Icon(Icons.open_in_new_rounded, size: 16),
-              label: const Text('在 Bangumi 上查看更多'),
+      slivers: [
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(20, 24, 20, 0),
+          sliver: SliverList.list(
+            children: [
+              _buildHeader(theme),
+              _buildSectionTitle('简介'),
+              _buildSummary(theme),
+              if (_tags.isNotEmpty) ...[
+                _buildSectionTitle('标签'),
+                _buildTags(theme),
+              ],
+              if (_infobox.isNotEmpty) _buildSectionTitle('详细信息'),
+            ],
+          ),
+        ),
+        if (_infobox.isNotEmpty)
+          SliverPadding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            sliver: SliverList.builder(
+              itemCount: _infobox.length,
+              itemBuilder: (context, index) =>
+                  _buildInfoboxItem(_infobox[index], theme),
             ),
           ),
-        ],
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 40),
+          sliver: SliverToBoxAdapter(
+            child: widget.subjectId == null
+                ? const SizedBox.shrink()
+                : Padding(
+                    padding: const EdgeInsets.only(top: 24),
+                    child: Center(
+                      child: TextButton.icon(
+                        onPressed: () => launchUrlString(
+                          'https://bgm.tv/subject/${widget.subjectId}',
+                          mode: LaunchMode.externalApplication,
+                        ),
+                        icon: const Icon(Icons.open_in_new_rounded, size: 16),
+                        label: const Text('在 Bangumi 上查看更多'),
+                      ),
+                    ),
+                  ),
+          ),
+        ),
       ],
     );
   }
@@ -305,21 +327,24 @@ class _BgmDetailPageState extends State<BgmDetailPage> {
       height: 1.8,
       color: theme.colorScheme.onSurface.withValues(alpha: 0.75),
     );
-    return MarkdownBody(
-      data: _summary,
-      selectable: true,
-      styleSheet: MarkdownStyleSheet(
-        p: bodyStyle,
-        blockquote: bodyStyle,
-        a: TextStyle(color: theme.colorScheme.primary),
-        blockquoteDecoration: const BoxDecoration(),
-        blockquotePadding: EdgeInsets.zero,
+    // Share selection across paragraphs without a nested EditableText/Scrollable
+    // for each paragraph in a long synopsis.
+    return SelectionArea(
+      child: MarkdownBody(
+        data: _summary,
+        styleSheet: MarkdownStyleSheet(
+          p: bodyStyle,
+          blockquote: bodyStyle,
+          a: TextStyle(color: theme.colorScheme.primary),
+          blockquoteDecoration: const BoxDecoration(),
+          blockquotePadding: EdgeInsets.zero,
+        ),
+        onTapLink: (_, url, _) {
+          if (url != null) {
+            launchUrlString(url, mode: LaunchMode.externalApplication);
+          }
+        },
       ),
-      onTapLink: (_, url, _) {
-        if (url != null) {
-          launchUrlString(url, mode: LaunchMode.externalApplication);
-        }
-      },
     );
   }
 
@@ -343,36 +368,30 @@ class _BgmDetailPageState extends State<BgmDetailPage> {
     );
   }
 
-  Widget _buildInfobox(ThemeData theme) {
-    return Column(
-      children: _infobox.map((item) {
-        final dynamic v = item['value'];
-        final valueStr = v is List
-            ? v.map((i) => (i is Map ? i['v'] : i).toString()).join(' / ')
-            : v.toString();
+  Widget _buildInfoboxItem(Map<String, dynamic> item, ThemeData theme) {
+    final dynamic v = item['value'];
+    final valueStr = v is List
+        ? v.map((i) => (i is Map ? i['v'] : i).toString()).join(' / ')
+        : v.toString();
 
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 8),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(
-                width: 80,
-                child: Text(
-                  item['key'].toString(),
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 80,
+            child: Text(
+              item['key'].toString(),
+              style: TextStyle(
+                fontSize: 13,
+                color: theme.colorScheme.onSurfaceVariant,
               ),
-              Expanded(
-                child: Text(valueStr, style: const TextStyle(fontSize: 13)),
-              ),
-            ],
+            ),
           ),
-        );
-      }).toList(),
+          Expanded(child: Text(valueStr, style: const TextStyle(fontSize: 13))),
+        ],
+      ),
     );
   }
 }

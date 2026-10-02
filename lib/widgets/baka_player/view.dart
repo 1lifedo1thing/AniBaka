@@ -5,6 +5,7 @@ import 'package:baka/services/playback/dlss_global_playback.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/models/playback_state.dart';
+import 'package:baka/models/skip_selection.dart';
 import 'package:baka/pages/search/search_controller.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:baka/app/platform_page_route.dart';
@@ -621,6 +622,12 @@ class _BakaPlayerState extends State<BakaPlayer> {
 
     if (event is KeyDownEvent || event is KeyRepeatEvent) {
       if (event.logicalKey == LogicalKeyboardKey.escape) {
+        if (controller.skipSelection.value != null) {
+          if (!controller.skipSelection.value!.saving) {
+            controller.cancelSkipSelection();
+          }
+          return KeyEventResult.handled;
+        }
         if (widget.full) {
           _triggerFullScreen();
           return KeyEventResult.handled;
@@ -740,6 +747,26 @@ class _BakaPlayerState extends State<BakaPlayer> {
   }
 
   Widget _buildControlsOverlay(bool isWide) {
+    // Keep the editor mounted while its compact OP/ED dropdown is open.
+    return ValueSelector<SkipSelection?, bool>(
+      valueListenable: widget.controller.skipSelection,
+      select: (selection) => selection != null,
+      builder: (context, selecting) => selecting
+          ? Align(
+              alignment: Alignment.bottomCenter,
+              child: BottomControl(
+                controller: widget.controller,
+                triggerFullScreen: _triggerFullScreen,
+                isFullScreen: widget.full,
+                isWideLayout: isWide,
+                updatesEnabled: true,
+              ),
+            )
+          : _buildNormalControlsOverlay(isWide),
+    );
+  }
+
+  Widget _buildNormalControlsOverlay(bool isWide) {
     // Settings use a translucent surface; controls underneath would bleed
     // through its header and search results even though they cannot be used.
     if (!(ModalRoute.isCurrentOf(context) ?? true)) {
@@ -1328,7 +1355,14 @@ class _BakaPlayerState extends State<BakaPlayer> {
     }
   }
 
-  Widget _buildLockButton() {
+  Widget _buildLockButton() => ValueSelector<SkipSelection?, bool>(
+    valueListenable: widget.controller.skipSelection,
+    select: (selection) => selection != null,
+    builder: (context, selecting) =>
+        selecting ? const SizedBox.shrink() : _buildNormalLockButton(),
+  );
+
+  Widget _buildNormalLockButton() {
     return ValueSelector<PlayerOverlayState, (bool, bool)>(
       valueListenable: widget.controller.overlay,
       select: (state) => (state.controlsVisible, state.controlsLocked),

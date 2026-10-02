@@ -30,10 +30,18 @@ Future<List<Map<String, dynamic>>> getPost(
 Future<Map<String, dynamic>> getPostDetail(
   int pid, {
   Future<void>? abortTrigger,
-}) => apiTransport.getData<Map<String, dynamic>>(
-  '$host/post/$pid',
-  abortTrigger: abortTrigger,
-);
+}) async {
+  // The post endpoint returns a successful envelope with data:null when the
+  // post does not exist. Keep malformed/missing data as a protocol error.
+  final detail = await apiTransport.getData<Map<String, dynamic>?>(
+    '$host/post/$pid',
+    abortTrigger: abortTrigger,
+  );
+  if (detail == null) {
+    throw const ApiException('条目不存在或已删除', statusCode: 404);
+  }
+  return detail;
+}
 
 Future<List<Map<String, dynamic>>> getSearch(String? key) async =>
     (await apiTransport.getData<List<dynamic>>(

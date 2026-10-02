@@ -511,23 +511,27 @@ class _CommentCardState extends State<_CommentCard> {
     if (raw != _rawContent || _style != widget.markdownStyle) {
       _rawContent = raw;
       _style = widget.markdownStyle;
-      _body = MarkdownBody(
-        selectable: true,
-        data: CommentListState.processContent(raw),
-        onTapLink: (text, url, title) {
-          if (url == null) return;
-          if (widget.onTapLink != null) {
-            widget.onTapLink!(text, url, title);
-          } else if (!url.startsWith('time')) {
-            launchUrlString(
-              url.startsWith('gv') ? 'https://www.anibaka.com/play/$url' : url,
-              mode: LaunchMode.externalApplication,
-            );
-          }
-        },
-        styleSheetTheme: MarkdownStyleSheetBaseTheme.platform,
-        styleSheet: widget.markdownStyle,
-        sizedImageBuilder: (config) => _buildMarkdownImage(config.uri, theme),
+      // Keep selection while avoiding one EditableText/Scrollable per paragraph.
+      _body = SelectionArea(
+        child: MarkdownBody(
+          data: CommentListState.processContent(raw),
+          onTapLink: (text, url, title) {
+            if (url == null) return;
+            if (widget.onTapLink != null) {
+              widget.onTapLink!(text, url, title);
+            } else if (!url.startsWith('time')) {
+              launchUrlString(
+                url.startsWith('gv')
+                    ? 'https://www.anibaka.com/play/$url'
+                    : url,
+                mode: LaunchMode.externalApplication,
+              );
+            }
+          },
+          styleSheetTheme: MarkdownStyleSheetBaseTheme.platform,
+          styleSheet: widget.markdownStyle,
+          sizedImageBuilder: (config) => _buildMarkdownImage(config.uri, theme),
+        ),
       );
     }
     final isVip = (comment['uviptime'] as num? ?? 0) > nowSeconds;

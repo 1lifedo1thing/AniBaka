@@ -105,10 +105,14 @@ final class AniBakaApi {
   static Future<bool> deleteCollectionByBgmId(int bgmId) =>
       _deleted('$_baseUrl/bgm-collection/$bgmId');
 
-  static Future<PlayHistory?> savePlayHistory(PlayHistory history) => _read(
+  static Future<PlayHistory?> savePlayHistory(
+    PlayHistory history, {
+    bool notifyOnError = true,
+  }) => _read(
     apiTransport.postData<Map<String, dynamic>>(
       '$_baseUrl/play-history',
       history.toJson(),
+      notifyOnError: notifyOnError,
     ),
     PlayHistory.fromJson,
   );

@@ -93,13 +93,14 @@ class SkipSegmentsService {
   List<SkipSegment> mergeLocal(
     SkipContext context,
     int duration,
-    List<SkipSegment> remote,
-  ) {
+    List<SkipSegment> remote, {
+    bool includeDisabled = false,
+  }) {
     final local = _read()[context.localKey] as Map? ?? {};
     final result = <SkipSegment>[];
     for (final type in ['op', 'ed']) {
       final value = local[type];
-      if (local['disabled_$type'] == true) continue;
+      if (!includeDisabled && local['disabled_$type'] == true) continue;
       if (value is Map) {
         final segment = SkipSegment.fromJson(Map<String, dynamic>.from(value));
         if (segment.fits(duration)) {
@@ -144,6 +145,12 @@ class SkipSegmentsService {
     return SkipData(
       context: context,
       segments: mergeLocal(context, duration, remote),
+      availableSegments: mergeLocal(
+        context,
+        duration,
+        remote,
+        includeDisabled: true,
+      ),
       message: message,
     );
   }

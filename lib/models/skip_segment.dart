@@ -104,10 +104,14 @@ class SkipData {
   const SkipData({
     this.context,
     this.segments = const [],
+    this.availableSegments,
     this.message = '等待视频信息',
   });
   final SkipContext? context;
   final List<SkipSegment> segments;
+  // Includes disabled intervals so settings can still inspect and edit them.
+  final List<SkipSegment>? availableSegments;
+  List<SkipSegment> get editableSegments => availableSegments ?? segments;
   final String message;
 }
 

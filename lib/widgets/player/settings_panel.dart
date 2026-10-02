@@ -115,28 +115,67 @@ Future<void> showPlayerSettingsPanel(BuildContext context, Widget child) {
                 .clamp(280.0, 340.0)
                 .clamp(0.0, screenWidth)
           : (screenWidth * 0.55).clamp(400.0, 560.0);
+      final dialog = SafeArea(
+        bottom: false,
+        child: Dialog(
+          backgroundColor: Colors.transparent,
+          surfaceTintColor: Colors.transparent,
+          insetPadding: EdgeInsets.zero,
+          constraints: BoxConstraints.tightFor(
+            width: width,
+            height: bottom
+                ? (media.size.height - media.padding.top - screenWidth * 9 / 16)
+                      .clamp(0.0, media.size.height * 0.74)
+                : null,
+          ),
+          alignment: bottom ? Alignment.bottomCenter : Alignment.centerRight,
+          elevation: 0,
+          child: _PlayerSettingsPanel(child: child),
+        ),
+      );
+      // Finish the fade before the controls, including the right safe inset.
+      final panelStart =
+          ((screenWidth - media.padding.right - width) / screenWidth).clamp(
+            0.0,
+            1.0,
+          );
       return Theme(
         data: playerPanelTheme(theme, bottom: bottom, compact: compact),
-        child: SafeArea(
-          bottom: false,
-          child: Dialog(
-            backgroundColor: Colors.transparent,
-            surfaceTintColor: Colors.transparent,
-            insetPadding: EdgeInsets.zero,
-            constraints: BoxConstraints.tightFor(
-              width: width,
-              height: bottom
-                  ? (media.size.height -
-                            media.padding.top -
-                            screenWidth * 9 / 16)
-                        .clamp(0.0, media.size.height * 0.74)
-                  : null,
-            ),
-            alignment: bottom ? Alignment.bottomCenter : Alignment.centerRight,
-            elevation: 0,
-            child: _PlayerSettingsPanel(child: child),
-          ),
-        ),
+        child: compact
+            ? Stack(
+                children: [
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: const [
+                              Color(0x00090E16),
+                              Color(0x10090E16),
+                              Color(0x38090E16),
+                              Color(0x70090E16),
+                              Color(0xAA090E16),
+                              Color(0xCC090E16),
+                              Color(0xDB090E16),
+                            ],
+                            stops: [
+                              0,
+                              panelStart * 0.2,
+                              panelStart * 0.4,
+                              panelStart * 0.65,
+                              panelStart * 0.85,
+                              panelStart,
+                              1,
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  dialog,
+                ],
+              )
+            : dialog,
       );
     },
   );
@@ -217,10 +256,25 @@ class _PlayerSettingsPanelState extends State<_PlayerSettingsPanel> {
   );
 }
 
+void closePlayerSettingsPanel(BuildContext context) {
+  final panel = context.findAncestorStateOfType<_PlayerSettingsPanelState>();
+  if (panel != null) {
+    panel.close();
+  } else if (Navigator.of(context).canPop()) {
+    Navigator.of(context).pop();
+  }
+}
+
 class PanelContainer extends StatelessWidget {
   final String title;
   final Widget child;
-  const PanelContainer({required this.title, required this.child, super.key});
+  final List<Widget> actions;
+  const PanelContainer({
+    required this.title,
+    required this.child,
+    this.actions = const [],
+    super.key,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -278,6 +332,7 @@ class PanelContainer extends StatelessWidget {
                                   ?.copyWith(fontWeight: FontWeight.w600),
                             ),
                           ),
+                          ...actions,
                           IconButton.filledTonal(
                             tooltip: '关闭设置',
                             onPressed:
@@ -299,23 +354,26 @@ class PanelContainer extends StatelessWidget {
     }
     return LayoutBuilder(
       builder: (context, constraints) {
-        // The empty leading space lets the scrim dissolve into the video without
-        // fading the controls or creating a visible drawer edge.
+        // Compact panels use the route-wide scrim behind the navigator.
+        // Desktop panels keep their fade in the empty leading space.
         final compact = isCompactPlayerPanel(context);
         final leading = compact
             ? 12.0
             : (constraints.maxWidth < 400 ? 20.0 : 64.0);
         return DecoratedBox(
           decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: const [
-                Color(0x00090E16),
-                Color(0x8F090E16),
-                Color(0xA1090E16),
-                Color(0xB8090E16),
-              ],
-              stops: [0, (leading + 8) / constraints.maxWidth, 0.5, 1],
-            ),
+            color: compact && panel == null ? const Color(0xCC090E16) : null,
+            gradient: compact
+                ? null
+                : LinearGradient(
+                    colors: const [
+                      Color(0x00090E16),
+                      Color(0x8F090E16),
+                      Color(0xA1090E16),
+                      Color(0xB8090E16),
+                    ],
+                    stops: [0, (leading + 8) / constraints.maxWidth, 0.5, 1],
+                  ),
           ),
           child: Material(
             type: MaterialType.transparency,
@@ -352,6 +410,7 @@ class PanelContainer extends StatelessWidget {
                                 ),
                               ),
                             ),
+                            ...actions,
                             IconButton.filledTonal(
                               tooltip: '关闭设置',
                               style: IconButton.styleFrom(
@@ -450,7 +509,12 @@ class PanelSectionTitle extends StatelessWidget {
 
 class PanelSettingsGroup extends StatelessWidget {
   final List<Widget> children;
-  const PanelSettingsGroup({required this.children, super.key});
+  final double borderRadius;
+  const PanelSettingsGroup({
+    required this.children,
+    this.borderRadius = 24,
+    super.key,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -461,7 +525,7 @@ class PanelSettingsGroup extends StatelessWidget {
     if (!isBottomPlayerPanel(context)) return content;
     return Material(
       color: Theme.of(context).colorScheme.surfaceContainerHigh,
-      borderRadius: BorderRadius.circular(24),
+      borderRadius: BorderRadius.circular(borderRadius),
       clipBehavior: Clip.antiAlias,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),

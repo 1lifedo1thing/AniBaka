@@ -1,15 +1,36 @@
 import 'dart:async';
-
-import 'package:baka/api/api_config.dart';
-import 'package:baka/api/bgm.dart';
 import 'package:baka/core/api_transport.dart';
+import 'package:baka/api/bgm.dart';
 import 'package:baka/models/skip_segment.dart';
+import 'package:baka/models/playback_state.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:baka/utils/duration_utils.dart';
 import 'package:baka/widgets/player/skip_segment_track.dart';
 import 'package:baka/widgets/baka_player/controller.dart';
 import 'package:baka/widgets/player/settings_panel.dart';
 import 'package:flutter/material.dart';
+
+String _time(int ms) => Duration(milliseconds: ms).toTimeString();
+
+class _SkipDivider extends StatelessWidget {
+  const _SkipDivider({this.height = 16});
+  final double height;
+
+  @override
+  Widget build(BuildContext context) => Divider(
+    height: height,
+    thickness: 1,
+    color: Theme.of(context).colorScheme.outlineVariant.withValues(alpha: 0.75),
+  );
+}
+
+void _editInVideo(BuildContext context, PlaybackController ctrl, String type) {
+  if (ctrl.beginSkipSelection(type)) {
+    closePlayerSettingsPanel(context);
+  } else {
+    showSnackBar('请等待视频就绪，且需要有播放控制权限');
+  }
+}
 
 class SkipSegmentsPanel extends StatefulWidget {
   const SkipSegmentsPanel({required this.controller, super.key});
@@ -27,38 +48,15 @@ class SkipSegmentsPanel extends StatefulWidget {
 }
 
 class _SkipSegmentsPanelState extends State<SkipSegmentsPanel> {
-  final _start = TextEditingController();
-  final _end = TextEditingController();
-  String _type = 'op';
   bool _busy = false;
-  String? _draftKey;
   PlaybackController get ctrl => widget.controller;
 
   @override
   void initState() {
     super.initState();
-    _draftKey = ctrl.skipContext?.localKey;
-    ctrl.skipData.addListener(_onEpisodeChanged);
-    // The settings summary may still be mounted behind this route.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(ctrl.refreshSkipSegments(force: true));
+      if (mounted) unawaited(_run(() => ctrl.refreshSkipSegments(force: true)));
     });
-  }
-
-  void _onEpisodeChanged() {
-    final key = ctrl.skipContext?.localKey;
-    if (_draftKey == key) return;
-    _draftKey = key;
-    _start.clear();
-    _end.clear();
-  }
-
-  @override
-  void dispose() {
-    ctrl.skipData.removeListener(_onEpisodeChanged);
-    _start.dispose();
-    _end.dispose();
-    super.dispose();
   }
 
   Future<void> _run(Future<void> Function() action) async {
@@ -67,51 +65,11 @@ class _SkipSegmentsPanelState extends State<SkipSegmentsPanel> {
     try {
       await action();
     } catch (error) {
-      showSnackBar('$error');
+      if (mounted) showSnackBar('$error', isError: true);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
-
-  SkipSegment _draft() {
-    final start = double.tryParse(_start.text);
-    final end = double.tryParse(_end.text);
-    if (start == null || end == null || !start.isFinite || !end.isFinite) {
-      throw const FormatException('请输入有效的起止秒数');
-    }
-    final value = SkipSegment(
-      id: 'local:$_type',
-      type: _type,
-      startMs: (start * 1000).round(),
-      endMs: (end * 1000).round(),
-      durationMs: ctrl.timeline.value.duration.inMilliseconds,
-      origin: 'local',
-      automatic: true,
-      status: 'personal',
-    );
-    if (!value.valid) throw const FormatException('需要满足：0 ≤ 起点 < 终点 ≤ 视频时长');
-    return value;
-  }
-
-  Future<void> _save({required bool share}) => _run(() async {
-    final context = ctrl.skipContext;
-    if (context == null) throw const FormatException('请先打开视频');
-    final value = _draft();
-    await ctrl.skipService.saveLocal(context, value);
-    if (identical(ctrl.skipContext, context)) {
-      await ctrl.refreshSkipSegments(force: true);
-    }
-    if (share) {
-      if (!apiTransport.session.isLoggedIn) {
-        throw const FormatException('已保存在本机；登录后可共享');
-      }
-      await ctrl.skipService.submit(context, value);
-      if (identical(ctrl.skipContext, context)) {
-        await ctrl.refreshSkipSegments(force: true);
-      }
-    }
-    showSnackBar(share ? '已共享，其他用户确认后生效' : '已保存当前片源标注');
-  });
 
   Future<void> _bind() async {
     final original = ctrl.skipContext;
@@ -253,364 +211,687 @@ class _SkipSegmentsPanelState extends State<SkipSegmentsPanel> {
     }
   }
 
-  String _time(int ms) => Duration(milliseconds: ms).toTimeString();
-
-  Widget _segment(SkipContext context, SkipSegment segment) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 12),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          '${segment.label}  ${_time(segment.startMs)} → ${_time(segment.endMs)}',
-          style: TextStyle(
-            color: SkipSegmentColors.forType(segment.type),
-            fontSize: 15,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          '${switch (segment.origin) {
-            'local' => '本机',
-            'aniskip' => 'AniSkip',
-            _ => '社区',
-          }} · '
-          '${segment.automatic ? '可自动跳过' : '待确认'} · ${segment.confirms} 人确认 / ${segment.reports} 人报错',
-          style: const TextStyle(
-            color: Color(0xFFD4DCE5),
-            fontSize: 12,
-            height: 1.5,
-          ),
-        ),
-        Wrap(
-          spacing: 6,
-          children: [
-            TextButton(
-              onPressed: ctrl.canControlPlayback && !context.isFirstEpisode
-                  ? () => ctrl.previewSkipSegment(segment)
-                  : null,
-              child: const Text('手动跳过'),
-            ),
-            TextButton(
-              onPressed: () => setState(() {
-                _type = segment.type;
-                _start.text = (segment.startMs / 1000).toStringAsFixed(3);
-                _end.text = (segment.endMs / 1000).toStringAsFixed(3);
-              }),
-              child: const Text('校正'),
-            ),
-            if (segment.origin != 'local') ...[
-              for (final accurate in [true, false])
-                TextButton(
-                  onPressed: _busy
-                      ? null
-                      : () => _run(() async {
-                          if (!apiTransport.session.isLoggedIn) {
-                            throw const FormatException('请先登录再反馈');
-                          }
-                          await ctrl.skipService.feedback(
-                            context,
-                            segment,
-                            accurate,
-                          );
-                          if (identical(context, ctrl.skipContext)) {
-                            await ctrl.refreshSkipSegments(force: true);
-                          }
-                          showSnackBar('已提交反馈');
-                        }),
-                  child: Text(accurate ? '准确' : '有误'),
-                ),
-            ],
-          ],
-        ),
-      ],
-    ),
-  );
-
-  @override
-  Widget build(BuildContext context) => PanelContainer(
-    title: '片头片尾区间',
-    child: ValueListenableBuilder<SkipData>(
-      valueListenable: ctrl.skipData,
-      builder: (context, data, _) {
-        final current = data.context;
-        final disabled = current == null
-            ? <String>{}
-            : ctrl.skipService.disabledTypes(current);
-        return ListView(
-          padding: playerPanelContentPadding(context),
-          children: [
-            const PanelSectionTitle('本集区间'),
-            Text(
-              data.message,
-              style: const TextStyle(
-                color: Color(0xFFD4DCE5),
-                fontSize: 12,
-                height: 1.5,
+  Widget _segment(SkipContext current, SkipData data, String type) {
+    final segment = data.editableSegments
+        .where((s) => s.type == type)
+        .firstOrNull;
+    final disabled = ctrl.skipService.disabledTypes(current).contains(type);
+    final color = SkipSegmentColors.forType(type);
+    final label = type == 'op' ? '片头' : '片尾';
+    final canEdit =
+        ctrl.canControlPlayback && ctrl.timeline.value.duration > Duration.zero;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 7, right: 12),
+                child: Icon(Icons.circle, size: 16, color: color),
               ),
-            ),
-            if (current != null) ...[
-              Text(current.bound ? '已绑定 Bangumi 剧集' : '尚未绑定剧集'),
-              Wrap(
-                children: [
-                  TextButton(
-                    onPressed: _busy ? null : _bind,
-                    child: const Text('绑定 / 更正剧集'),
-                  ),
-                  TextButton(
-                    onPressed: _busy
-                        ? null
-                        : () =>
-                              _run(() => ctrl.refreshSkipSegments(force: true)),
-                    child: const Text('刷新'),
-                  ),
-                ],
-              ),
-              for (final segment in data.segments) _segment(current, segment),
-              SizedBox(height: isCompactPlayerPanel(context) ? 12 : 24),
-              const PanelSectionTitle('校正区间'),
-              SegmentedButton<String>(
-                segments: const [
-                  ButtonSegment(value: 'op', label: Text('片头')),
-                  ButtonSegment(value: 'ed', label: Text('片尾')),
-                ],
-                selected: {_type},
-                onSelectionChanged: (value) =>
-                    setState(() => _type = value.single),
-              ),
-              const SizedBox(height: 12),
-              for (final field in [(_start, '起点'), (_end, '终点')])
-                Row(
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
-                      child: TextField(
-                        controller: field.$1,
-                        keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
-                        ),
-                        decoration: InputDecoration(
-                          labelText: '${field.$2}（秒）',
-                          filled: true,
-                          fillColor: const Color(0x6630445B),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(20),
-                            borderSide: BorderSide.none,
-                          ),
-                        ),
+                    Text(
+                      label,
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
-                    TextButton(
-                      onPressed: () => field.$1.text =
-                          (ctrl.timeline.value.position.inMilliseconds / 1000)
-                              .toStringAsFixed(3),
-                      child: Text('记录${field.$2}'),
+                    const SizedBox(height: 4),
+                    Text(
+                      segment == null
+                          ? '未设置'
+                          : '${_time(segment.startMs)} – ${_time(segment.endMs)}',
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
                     ),
                   ],
                 ),
-              Wrap(
-                spacing: 8,
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  TextButton(
-                    onPressed: ctrl.canControlPlayback
-                        ? () => _run(() async {
-                            final value = _draft();
-                            await ctrl.seek(
-                              Duration(milliseconds: value.startMs),
-                            );
-                            await ctrl.play();
-                          })
-                        : null,
-                    child: const Text('预览起点'),
+                  Flex(
+                    direction: MediaQuery.textScalerOf(context).scale(1) > 1.3
+                        ? Axis.vertical
+                        : Axis.horizontal,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('跳过', style: Theme.of(context).textTheme.labelSmall),
+                      const SizedBox(width: 4),
+                      Semantics(
+                        label: '当前片源$label跳过',
+                        child: Switch(
+                          key: ValueKey('skip-enabled-$type'),
+                          value: !disabled,
+                          onChanged: _busy
+                              ? null
+                              : (enabled) => _run(() async {
+                                  await ctrl.skipService.disable(
+                                    current,
+                                    type,
+                                    !enabled,
+                                  );
+                                  if (identical(current, ctrl.skipContext)) {
+                                    await ctrl.refreshSkipSegments(force: true);
+                                  }
+                                }),
+                        ),
+                      ),
+                    ],
                   ),
-                  TextButton(
-                    onPressed: ctrl.canControlPlayback
-                        ? () => _run(() async {
-                            final value = _draft();
-                            await ctrl.seek(
-                              Duration(
-                                milliseconds: (value.endMs - 3000).clamp(
-                                  value.startMs,
-                                  value.endMs,
-                                ),
-                              ),
-                            );
-                            await ctrl.play();
-                          })
-                        : null,
-                    child: const Text('预览终点'),
+                  if (!disabled && segment != null && !segment.automatic)
+                    const Text(
+                      '暂不自动跳过',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: SkipSegmentColors.ending,
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+          const _SkipDivider(height: 24),
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              TextButton.icon(
+                key: ValueKey('edit-skip-$type'),
+                onPressed: canEdit && !_busy
+                    ? () => _editInVideo(context, ctrl, type)
+                    : null,
+                icon: const Icon(Icons.tune_rounded, size: 18),
+                label: Text(segment == null ? '在视频中选择' : '在视频中调整'),
+              ),
+              if (segment != null)
+                TextButton(
+                  key: ValueKey('skip-details-$type'),
+                  onPressed: () => showPlayerSettingsPanel(
+                    context,
+                    SkipSegmentDetailsPanel(
+                      controller: ctrl,
+                      type: type,
+                      sourceKey: current.localKey,
+                    ),
                   ),
-                  FilledButton(
-                    onPressed: _busy ? null : () => _save(share: false),
-                    child: const Text('保存本机'),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text('区间详情'),
+                          Text('来源与反馈', style: TextStyle(fontSize: 11)),
+                        ],
+                      ),
+                      Icon(Icons.chevron_right_rounded, size: 20),
+                    ],
                   ),
-                  OutlinedButton(
-                    onPressed: _busy ? null : () => _save(share: true),
-                    child: const Text('保存并共享'),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<SkipData>(
+    valueListenable: ctrl.skipData,
+    builder: (context, data, _) {
+      final current = data.context;
+      final colors = Theme.of(context).colorScheme;
+      final number = current?.episodeNumber;
+      final episode = number == null
+          ? '当前片源'
+          : '第 ${number == number.roundToDouble() ? number.toInt() : number} 集';
+      return PanelContainer(
+        title: '片头片尾',
+        actions: [
+          IconButton.filledTonal(
+            tooltip: '刷新区间',
+            onPressed: _busy
+                ? null
+                : () => _run(() => ctrl.refreshSkipSegments(force: true)),
+            icon: const Icon(Icons.refresh_rounded),
+          ),
+        ],
+        child: ListView(
+          padding: playerPanelContentPadding(context),
+          children: [
+            if (_busy) const LinearProgressIndicator(),
+            ValueListenableBuilder<PlaybackPreferences>(
+              valueListenable: ctrl.preferences,
+              builder: (context, preferences, _) => PanelSettingsGroup(
+                borderRadius: 16,
+                children: [
+                  PanelSwitchTile(
+                    title: '自动跳过',
+                    subtitle: '使用本机或已确认区间\n第 1 集保留片头片尾',
+                    value: preferences.enableSkipOpEd,
+                    onChanged: (value) => _run(
+                      () => ctrl.updatePreferences(
+                        preferences.copyWith(enableSkipOpEd: value),
+                      ),
+                    ),
                   ),
                 ],
               ),
-              for (final type in ['op', 'ed'])
-                PanelSwitchTile(
-                  title: '当前片源禁用${type == 'op' ? '片头' : '片尾'}跳过',
-                  value: disabled.contains(type),
-                  onChanged: (value) => _run(() async {
-                    await ctrl.skipService.disable(current, type, value);
-                    if (identical(current, ctrl.skipContext)) {
-                      await ctrl.refreshSkipSegments(force: true);
-                    }
-                  }),
+            ),
+            const SizedBox(height: 16),
+            if (current != null) ...[
+              PanelSettingsGroup(
+                borderRadius: 16,
+                children: [
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('当前剧集'),
+                    subtitle: Text(
+                      '$episode · ${current.bound ? '已绑定 Bangumi' : '尚未绑定剧集'}',
+                    ),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '绑定 / 更正',
+                          style: TextStyle(color: colors.primary, fontSize: 12),
+                        ),
+                        const Icon(Icons.chevron_right_rounded, size: 18),
+                      ],
+                    ),
+                    onTap: _busy ? null : _bind,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 8),
+                child: Text(
+                  '本集区间',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
                 ),
-              const SizedBox(height: 12),
-              const Text(
-                '标注仅适用于当前片源；共享后需另外两位用户确认。片尾终点应保留彩蛋与预告。',
-                style: TextStyle(
-                  color: Color(0xFFD4DCE5),
-                  fontSize: 12,
-                  height: 1.5,
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
+                child: Text(
+                  '已获取 ${data.editableSegments.length} 个区间',
+                  style: TextStyle(
+                    color: colors.onSurfaceVariant,
+                    fontSize: 12,
+                  ),
                 ),
+              ),
+              PanelSettingsGroup(
+                borderRadius: 16,
+                children: [
+                  _segment(current, data, 'op'),
+                  const _SkipDivider(),
+                  _segment(current, data, 'ed'),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '开关仅对当前片源生效',
+                style: TextStyle(color: colors.onSurfaceVariant, fontSize: 12),
               ),
             ],
-            if (apiTransport.session.user.value.level & 8 != 0)
-              TextButton(
-                onPressed: () => showDialog(
-                  context: context,
-                  builder: (_) => const _SkipAdminDialog(),
+            if (data.editableSegments.isEmpty ||
+                data.message.contains('失败') ||
+                data.message.contains('暂不可用'))
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Text(
+                  data.message,
+                  style: TextStyle(
+                    color: colors.onSurfaceVariant,
+                    fontSize: 13,
+                  ),
                 ),
-                child: const Text('管理共享标注与映射'),
               ),
-            if (_busy) const LinearProgressIndicator(),
+            const _SkipDivider(height: 24),
+            Text(
+              '未设置区间时，可在视频中直接选择。\n片尾结束位置请保留彩蛋与预告。',
+              style: TextStyle(
+                color: colors.onSurfaceVariant,
+                fontSize: 12,
+                height: 1.6,
+              ),
+            ),
           ],
-        );
-      },
-    ),
+        ),
+      );
+    },
   );
 }
 
-class _SkipAdminDialog extends StatefulWidget {
-  const _SkipAdminDialog();
+class SkipSegmentDetailsPanel extends StatefulWidget {
+  const SkipSegmentDetailsPanel({
+    required this.controller,
+    required this.type,
+    required this.sourceKey,
+    super.key,
+  });
+  final PlaybackController controller;
+  final String type;
+  final String sourceKey;
+
   @override
-  State<_SkipAdminDialog> createState() => _SkipAdminDialogState();
+  State<SkipSegmentDetailsPanel> createState() =>
+      _SkipSegmentDetailsPanelState();
 }
 
-class _SkipAdminDialogState extends State<_SkipAdminDialog> {
-  List<Map<String, dynamic>> _rows = [];
-  String? _error;
+class _SkipSegmentDetailsPanelState extends State<SkipSegmentDetailsPanel> {
   bool _busy = false;
-  final _fields = List.generate(4, (_) => TextEditingController());
-  @override
-  void initState() {
-    super.initState();
-    unawaited(_load());
-  }
+  PlaybackController get ctrl => widget.controller;
 
-  @override
-  void dispose() {
-    for (final field in _fields) {
-      field.dispose();
-    }
-    super.dispose();
-  }
-
-  Future<void> _load() => _run(() async {
-    final json = await apiTransport.getData<Map<String, dynamic>>(
-      '${ApiConfig.host}/api/v1/admin/skip-segments',
-    );
-    _rows = (json['segments'] as List)
-        .map((e) => Map<String, dynamic>.from(e as Map))
-        .toList();
-  });
   Future<void> _run(Future<void> Function() action) async {
     if (!mounted || _busy) return;
-    setState(() {
-      _busy = true;
-      _error = null;
-    });
+    setState(() => _busy = true);
     try {
       await action();
-    } catch (e) {
-      _error = '$e';
+    } catch (error) {
+      if (mounted) showSnackBar('$error', isError: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
-    if (mounted) setState(() => _busy = false);
   }
 
+  Future<void> _save(
+    SkipContext current,
+    SkipSegment segment, {
+    required bool share,
+  }) => _run(() async {
+    if (!identical(current, ctrl.skipContext) ||
+        !segment.fits(ctrl.timeline.value.duration.inMilliseconds)) {
+      throw const FormatException('视频已切换，请重新选择区间');
+    }
+    final local = SkipSegment(
+      id: 'local:${segment.type}',
+      type: segment.type,
+      startMs: segment.startMs,
+      endMs: segment.endMs,
+      durationMs: segment.durationMs,
+      origin: 'local',
+      automatic: true,
+      status: 'personal',
+    );
+    await ctrl.skipService.saveLocal(current, local);
+    if (!identical(current, ctrl.skipContext)) return;
+    if (share) {
+      if (!apiTransport.session.isLoggedIn) {
+        unawaited(ctrl.refreshSkipSegments(force: true));
+        throw const FormatException('已保存到本机；登录后可共享');
+      }
+      try {
+        await ctrl.skipService.submit(current, local);
+      } catch (error) {
+        unawaited(ctrl.refreshSkipSegments(force: true));
+        throw FormatException('已保存到本机；共享失败：$error');
+      }
+    }
+    if (identical(current, ctrl.skipContext)) {
+      unawaited(ctrl.refreshSkipSegments(force: true));
+    }
+    showSnackBar(share ? '已保存并共享，其他用户确认后生效' : '已保存到本机');
+  });
+
+  Future<void> _feedback(
+    SkipContext current,
+    SkipSegment segment,
+    bool accurate,
+  ) => _run(() async {
+    if (!apiTransport.session.isLoggedIn) {
+      throw const FormatException('请先登录再反馈');
+    }
+    if (!identical(current, ctrl.skipContext)) return;
+    await ctrl.skipService.feedback(current, segment, accurate);
+    if (identical(current, ctrl.skipContext)) {
+      await ctrl.refreshSkipSegments(force: true);
+    }
+    showSnackBar('已提交反馈');
+  });
+
+  Future<void> _preview(SkipContext current, SkipSegment segment, bool end) =>
+      _run(() async {
+        final target = end
+            ? (segment.endMs - 3000).clamp(segment.startMs, segment.endMs)
+            : segment.startMs;
+        await ctrl.seek(Duration(milliseconds: target));
+        if (!mounted || !identical(current, ctrl.skipContext)) return;
+        await ctrl.play();
+        if (mounted) closePlayerSettingsPanel(context);
+      });
+
   @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: const Text('共享标注管理'),
-    content: SizedBox(
-      width: 620,
-      height: 520,
-      child: ListView(
-        children: [
-          const Text('精确集数映射（拆分条目、SP 或跨季编号）'),
-          for (var i = 0; i < 4; i++)
-            TextField(
-              controller: _fields[i],
-              decoration: InputDecoration(
-                labelText: [
-                  'Bangumi 条目 ID',
-                  'Bangumi 剧集 ID',
-                  'MAL ID',
-                  'MAL 集数',
-                ][i],
-              ),
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-            ),
-          TextButton(
-            onPressed: _busy
-                ? null
-                : () => _run(() async {
-                    await apiTransport.putData<Map<String, dynamic>>(
-                      '${ApiConfig.host}/api/v1/admin/skip-mapping',
-                      {
-                        'bgm_id': int.tryParse(_fields[0].text),
-                        'episode_id': int.tryParse(_fields[1].text),
-                        'mal_id': int.tryParse(_fields[2].text),
-                        'mal_episode': double.tryParse(_fields[3].text),
-                      },
-                    );
-                    showSnackBar('已保存映射');
-                  }),
-            child: const Text('保存映射'),
-          ),
-          if (_error != null) Text(_error!),
-          if (_busy) const LinearProgressIndicator(),
-          for (final row in _rows)
-            ListTile(
-              title: Text(
-                '番剧 ${row['bgm_id']} / 集 ${row['episode_id']} · ${row['type']}',
-              ),
-              subtitle: Text(
-                '${row['start_ms']}–${row['end_ms']} ms · ${row['status']}\n${row['confirms']} 确认 / ${row['reports']} 报错',
-              ),
-              trailing: PopupMenuButton<String>(
-                enabled: !_busy,
-                onSelected: (value) async {
-                  await _run(() async {
-                    await apiTransport.putData<Map<String, dynamic>>(
-                      '${ApiConfig.host}/api/v1/admin/skip-segments/${row['id']}',
-                      {'status': value},
-                    );
-                  });
-                  await _load();
-                },
-                itemBuilder: (_) => const [
-                  PopupMenuItem(value: 'approved', child: Text('确认')),
-                  PopupMenuItem(value: 'rejected', child: Text('撤销')),
-                  PopupMenuItem(value: 'candidate', child: Text('恢复待确认')),
+  Widget build(BuildContext context) => ValueListenableBuilder<SkipData>(
+    valueListenable: ctrl.skipData,
+    builder: (context, data, _) {
+      final current = data.context;
+      final label = widget.type == 'op' ? '片头' : '片尾';
+      final segment = data.editableSegments
+          .where((s) => s.type == widget.type)
+          .firstOrNull;
+      if (current?.localKey != widget.sourceKey || segment == null) {
+        return PanelContainer(
+          title: '$label区间',
+          child: const Center(child: Text('视频或区间已变更，请返回重新选择')),
+        );
+      }
+      final colors = Theme.of(context).colorScheme;
+      final canPreview =
+          !_busy &&
+          ctrl.canControlPlayback &&
+          segment.fits(ctrl.timeline.value.duration.inMilliseconds);
+      final actionShape = RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+      );
+      final outlinedStyle = OutlinedButton.styleFrom(
+        shape: actionShape,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+      );
+      final source = switch (segment.origin) {
+        'local' => '本机标注',
+        'aniskip' => 'AniSkip',
+        _ => '社区标注',
+      };
+      return PanelContainer(
+        title: '$label区间',
+        child: Column(
+          children: [
+            if (_busy) const LinearProgressIndicator(),
+            Expanded(
+              child: ListView(
+                padding: playerPanelContentPadding(context).copyWith(bottom: 8),
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.circle,
+                        size: 12,
+                        color: SkipSegmentColors.forType(widget.type),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(label),
+                      const Spacer(),
+                      Text(
+                        '时长 ${_time(segment.endMs - segment.startMs)}',
+                        style: TextStyle(
+                          color: colors.onSurfaceVariant,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${_time(segment.startMs)} – ${_time(segment.endMs)}',
+                    style: const TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w600,
+                      fontFeatures: [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  FilledButton.tonalIcon(
+                    style: FilledButton.styleFrom(shape: actionShape),
+                    onPressed: canPreview
+                        ? () => _editInVideo(context, ctrl, widget.type)
+                        : null,
+                    icon: const Icon(Icons.tune_rounded, size: 18),
+                    label: const Text('在视频中调整'),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '拖动进度条两端，完成后保存到本机。',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: colors.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const PanelSectionTitle('试看区间'),
+                  PanelSettingsGroup(
+                    borderRadius: 16,
+                    children: [
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          Widget preview(bool end) => TextButton.icon(
+                            key: ValueKey(
+                              end ? 'preview-skip-end' : 'preview-skip-start',
+                            ),
+                            style: TextButton.styleFrom(
+                              foregroundColor: colors.onSurface,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                                vertical: 8,
+                              ),
+                              alignment: Alignment.centerLeft,
+                              minimumSize: const Size(0, 56),
+                            ),
+                            onPressed: canPreview
+                                ? () => _preview(current!, segment, end)
+                                : null,
+                            icon: const Icon(
+                              Icons.play_arrow_outlined,
+                              size: 24,
+                            ),
+                            label: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(end ? '试看终点' : '试看起点'),
+                                const SizedBox(height: 3),
+                                Text(
+                                  end
+                                      ? '从终点前 3 秒播放'
+                                      : '从 ${_time(segment.startMs)} 开始播放',
+                                  style: TextStyle(
+                                    color: colors.onSurfaceVariant,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                          if (constraints.maxWidth < 280 ||
+                              MediaQuery.textScalerOf(context).scale(1) > 1.3) {
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                preview(false),
+                                const _SkipDivider(),
+                                preview(true),
+                              ],
+                            );
+                          }
+                          return Row(
+                            children: [
+                              Expanded(child: preview(false)),
+                              SizedBox(
+                                height: 48,
+                                child: VerticalDivider(
+                                  width: 16,
+                                  thickness: 1,
+                                  color: colors.outlineVariant.withValues(
+                                    alpha: 0.75,
+                                  ),
+                                ),
+                              ),
+                              Expanded(child: preview(true)),
+                            ],
+                          );
+                        },
+                      ),
+                      const _SkipDivider(),
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        visualDensity: VisualDensity.compact,
+                        minTileHeight: 44,
+                        leading: const Icon(Icons.skip_next_rounded),
+                        title: const Text('手动跳过'),
+                        trailing: const Icon(
+                          Icons.chevron_right_rounded,
+                          size: 20,
+                        ),
+                        onTap: canPreview && !current!.isFirstEpisode
+                            ? () {
+                                ctrl.previewSkipSegment(segment);
+                                closePlayerSettingsPanel(context);
+                              }
+                            : null,
+                      ),
+                      if (current!.isFirstEpisode)
+                        Text(
+                          '第 1 集保留片头片尾',
+                          style: TextStyle(
+                            color: colors.onSurfaceVariant,
+                            fontSize: 12,
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  const PanelSectionTitle('区间来源'),
+                  PanelSettingsGroup(
+                    borderRadius: 16,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        child: Row(
+                          children: [
+                            Expanded(child: Text(source)),
+                            Text(
+                              segment.origin == 'local'
+                                  ? '仅本机'
+                                  : segment.automatic
+                                  ? '已确认'
+                                  : '待确认',
+                              style: TextStyle(
+                                color: segment.automatic
+                                    ? SkipSegmentColors.opening
+                                    : SkipSegmentColors.ending,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (segment.origin != 'local') ...[
+                        Text(
+                          '${segment.confirms} 人确认 · ${segment.reports} 人报错',
+                          style: TextStyle(
+                            color: colors.onSurfaceVariant,
+                            fontSize: 12,
+                          ),
+                        ),
+                        const _SkipDivider(height: 12),
+                        const Text('这个区间准确吗？', style: TextStyle(fontSize: 13)),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                style: outlinedStyle,
+                                onPressed: _busy
+                                    ? null
+                                    : () => _feedback(current, segment, true),
+                                icon: const Icon(
+                                  Icons.thumb_up_outlined,
+                                  size: 18,
+                                ),
+                                label: const Text('准确'),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                style: outlinedStyle,
+                                onPressed: _busy
+                                    ? null
+                                    : () => _feedback(current, segment, false),
+                                icon: const Icon(Icons.flag_outlined, size: 18),
+                                label: const Text('有误'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
                 ],
               ),
             ),
-        ],
-      ),
-    ),
-    actions: [
-      TextButton(onPressed: _busy ? null : _load, child: const Text('刷新')),
-      TextButton(
-        onPressed: () => Navigator.pop(context),
-        child: const Text('关闭'),
-      ),
-    ],
+            Padding(
+              padding: playerPanelContentPadding(
+                context,
+              ).copyWith(top: 8, bottom: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final local = OutlinedButton.icon(
+                        style: outlinedStyle,
+                        onPressed: _busy
+                            ? null
+                            : () => _save(current, segment, share: false),
+                        icon: const Icon(Icons.save_alt_rounded, size: 18),
+                        label: const Text('保存到本机'),
+                      );
+                      final share = FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: colors.primary,
+                          foregroundColor: colors.onPrimary,
+                          shape: actionShape,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                        ),
+                        onPressed: _busy
+                            ? null
+                            : () => _save(current, segment, share: true),
+                        icon: const Icon(Icons.ios_share_rounded, size: 18),
+                        label: const Text('保存并共享'),
+                      );
+                      if (constraints.maxWidth < 280 ||
+                          MediaQuery.textScalerOf(context).scale(1) > 1.3) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [local, const SizedBox(height: 8), share],
+                        );
+                      }
+                      return Row(
+                        children: [
+                          Expanded(child: local),
+                          const SizedBox(width: 12),
+                          Expanded(child: share),
+                        ],
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '登录后可反馈或共享，另需 2 位用户确认。\n仅适用于当前集、当前片源。',
+                    style: TextStyle(
+                      color: colors.onSurfaceVariant,
+                      fontSize: 11,
+                      height: 1.4,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    },
   );
 }

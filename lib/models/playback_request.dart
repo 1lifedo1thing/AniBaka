@@ -32,6 +32,21 @@ class PlaybackRequest {
     },
   );
 
+  /// Older cloud history stored a Bangumi ID in `id` without a source marker.
+  /// It must be matched to a source instead of being queried as a site post.
+  factory PlaybackRequest.fromHistory(Map data) {
+    final source = (data['source'] as String? ?? '').trim();
+    final bgmId = int.tryParse('${data['bgmId']}') ?? 0;
+    final legacyCloud =
+        source.isEmpty && bgmId > 0 && int.tryParse('${data['id']}') == bgmId;
+    return PlaybackRequest.fromMap({
+      ...data,
+      'source': legacyCloud ? 'bgm' : source,
+      'currPlayIndex': data['index'],
+      'currUrl': data['url'],
+    });
+  }
+
   static const _typedKeys = {
     'source',
     'videos',

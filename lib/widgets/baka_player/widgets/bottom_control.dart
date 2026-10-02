@@ -1,6 +1,8 @@
 import 'package:audio_video_progress_bar/audio_video_progress_bar.dart';
 import 'package:baka/models/playback_state.dart';
 import 'package:baka/widgets/player/skip_segment_track.dart';
+import 'package:baka/models/skip_selection.dart';
+import 'package:baka/widgets/player/skip_selection_controls.dart';
 import 'package:baka/widgets/common/value_selector.dart';
 import '../controller.dart';
 import 'package:baka/utils/duration_utils.dart';
@@ -32,7 +34,26 @@ class BottomControl extends StatelessWidget {
   void _keepControlsAwake() => controller.setControlsVisible(true);
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ValueListenableBuilder<SkipSelection?>(
+    valueListenable: controller.skipSelection,
+    builder: (context, selection, _) => selection == null
+        ? _buildControls(context)
+        : Padding(
+            padding: EdgeInsets.fromLTRB(
+              isWideLayout ? 32 : 8,
+              0,
+              isWideLayout ? 32 : 8,
+              8,
+            ),
+            child: SkipSelectionControls(
+              controller: controller,
+              onFullscreen: triggerFullScreen,
+              isFullScreen: isFullScreen,
+            ),
+          ),
+  );
+
+  Widget _buildControls(BuildContext context) {
     final colorTheme = Theme.of(context).colorScheme.primary;
     final isWide = isWideLayout;
     final paddingH = isWide ? 32.0 : 8.0;

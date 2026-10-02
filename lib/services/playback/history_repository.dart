@@ -2,12 +2,14 @@ import 'package:baka/models/playback_request.dart';
 import 'package:baka/models/bgm.dart';
 import 'package:baka/utils/json_values.dart';
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:hive/hive.dart';
 
 import 'package:baka/api/anibaka_api.dart';
 import 'package:baka/core/account_session.dart';
 import 'package:baka/core/app_storage.dart';
+import 'package:baka/core/http_request.dart';
 import 'package:baka/models/play_history.dart';
 import 'package:baka/services/account/bangumi_session.dart';
 
@@ -28,6 +30,23 @@ class HistoryRepository {
   static const _platform = 'app';
 
   final Map<String, List<Map<String, dynamic>>> _memory = {};
+
+  void _logUploadFailure(Object error) {
+    var detail = '';
+    if (error is ApiException && error.responseBody != null) {
+      try {
+        final body = jsonDecode(error.responseBody!);
+        final message = body is Map ? body['message'] ?? body['msg'] : null;
+        if (message is String && message.isNotEmpty) {
+          detail =
+              '；${message.length > 500 ? message.substring(0, 500) : message}';
+        }
+      } on FormatException {
+        // Do not fill playback logs with proxy HTML.
+      }
+    }
+    debugPrint('上传播放历史失败（本地已保存）: $error$detail');
+  }
 
   String _localKey(Map record) {
     final bgm = toInt(record['bgmId']);
@@ -86,11 +105,17 @@ class HistoryRepository {
     final ep = r.episodeId;
     return {
       'id': r.videoId.toString(),
+      // Cloud records have no adapter catalog or source identity. A Bangumi
+      // subject can be matched again; its video_id is not a reliable post ID.
+      'source': bgmId != null && bgmId > 0 ? 'bgm' : 'history',
       'title': r.videoTitle,
       'content': r.videoCover ?? '',
       'index': ep == null ? null : (ep > 0 ? ep - 1 : 0),
       'position': r.playProgress * 1000,
       'duration': r.videoDuration * 1000,
+      'isFinished':
+          r.videoDuration > 0 &&
+          r.playProgress / r.videoDuration >= _completionThreshold,
       'watchTime':
           r.updatedAt?.millisecondsSinceEpoch ??
           DateTime.now().millisecondsSinceEpoch,
@@ -230,8 +255,14 @@ class HistoryRepository {
         final remoteTime = remote.updatedAt?.millisecondsSinceEpoch ?? 0;
         final localTime = (local?['watchTime'] as int?) ?? 0;
         if (local == null || remoteTime >= localTime) {
-          final next = _fromRemote(remote);
-          if (local != null) next['url'] = local['url'] ?? 1;
+          final next = {...?local, ..._fromRemote(remote)};
+          if (local != null) {
+            // Update progress without discarding this device's playback route.
+            final request = PlaybackRequest.fromHistory(local);
+            next['id'] = local['id'];
+            next['source'] = request.source;
+            next['url'] = local['url'] ?? 1;
+          }
           map[key] = next;
         }
       }
@@ -303,9 +334,10 @@ class HistoryRepository {
       final remote = _toRemote(record);
       if (remote != null && session.token.isNotEmpty) {
         unawaited(
-          AniBakaApi.savePlayHistory(remote).catchError((Object error) {
-            // Local history is already saved; cloud sync is best effort here.
-            debugPrint('上传播放历史失败: $error');
+          AniBakaApi.savePlayHistory(remote, notifyOnError: false).catchError((
+            Object error,
+          ) {
+            _logUploadFailure(error);
             return null;
           }),
         );

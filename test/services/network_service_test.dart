@@ -135,6 +135,42 @@ void main() {
     },
   );
 
+  test(
+    'missing post is distinct from malformed data and network failure',
+    () async {
+      var notices = 0;
+      var body = '{"code":200,"data":null}';
+      useClient(
+        MockClient((request) async {
+          expect(request.url.path, '/post/42');
+          return http.Response(body, 200);
+        }),
+        onError: (_) => notices++,
+      );
+
+      await expectLater(
+        getPostDetail(42),
+        throwsA(
+          isA<ApiException>()
+              .having((error) => error.statusCode, 'status', 404)
+              .having((error) => error.message, 'message', '条目不存在或已删除'),
+        ),
+      );
+      expect(notices, 0);
+      for (final malformed in [
+        '{"code":200}',
+        '{"code":200,"data":[]}',
+        '{"code":200,"data":"invalid"}',
+      ]) {
+        body = malformed;
+        await expectLater(getPostDetail(42), throwsFormatException);
+      }
+      expect(notices, 3);
+      body = '{"code":200,"data":{"id":42,"title":"Available"}}';
+      expect((await getPostDetail(42))['id'], 42);
+    },
+  );
+
   test('post queries preserve signed URLs and omit null parameters', () async {
     final requests = <Uri>[];
     useClient(

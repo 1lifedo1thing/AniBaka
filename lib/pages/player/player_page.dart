@@ -153,6 +153,9 @@ class _PlayerPageState extends State<PlayerPage>
   VideoSourceSearchController? _sourceSearchController;
 
   Future<void> _savePlayback({bool seeked = false}) async {
+    // OP/ED calibration may pause, seek to the ending, or enter the background.
+    // Those preview positions must not replace watch progress or mark it watched.
+    if (ctr.skipSelection.value != null) return;
     try {
       await _progress?.save(
         ctr.timeline.value,
@@ -195,7 +198,8 @@ class _PlayerPageState extends State<PlayerPage>
     ctr.core.addListener(_onPlaybackCoreChanged);
     ctr.onHlsAdFilterChanged = _reloadHlsFilter;
 
-    final shouldAutoMatch = !_isLocalSource && widget.autoMatch;
+    final shouldAutoMatch =
+        !_isLocalSource && (widget.autoMatch || _svc.needsSourceMatch);
     if (shouldAutoMatch) {
       _startHeadlessAutoMatch();
     } else {
@@ -204,12 +208,15 @@ class _PlayerPageState extends State<PlayerPage>
   }
 
   void _startHeadlessAutoMatch() {
-    _autoMatchController = VideoSourceSearchController(
+    if (!mounted || _autoMatchController != null) return;
+    _terminalFailure = null;
+    late final VideoSourceSearchController search;
+    search = VideoSourceSearchController(
       seedData: _svc.buildSourceSeedData(),
       autoMatchMode: true,
       targetEpisodeIndex: currPlayIndex,
       onMatchFound: (resolvedData) {
-        if (!mounted) return;
+        if (!mounted || !identical(_autoMatchController, search)) return;
         final elapsed = _autoMatchController?.lastAutoMatchDuration;
         if (elapsed != null) {
           debugPrint(
@@ -223,14 +230,25 @@ class _PlayerPageState extends State<PlayerPage>
         unawaited(_adoptPlaybackSource(resolvedData));
       },
       onMatchFailed: () {
-        if (!mounted) return;
+        if (!mounted || !identical(_autoMatchController, search)) return;
         final controller = _autoMatchController;
         _autoMatchController = null;
         controller?.dispose();
-        _loadInitialData();
+        // Try an existing local route once, then expose failure. An unresolved
+        // cloud record must not restart matching or leave an empty player.
+        unawaited(_loadInitialData(allowSourceMatch: false));
       },
     );
-    _autoMatchController?.startSearch();
+    _autoMatchController = search;
+    _bumpPageData();
+    unawaited(
+      search.startSearch().catchError((Object error) {
+        if (!mounted || !identical(_autoMatchController, search)) return;
+        _autoMatchController = null;
+        search.dispose();
+        _setTerminalPlaybackFailure(error);
+      }),
+    );
     unawaited(_loadBgmMetaOnly());
   }
 
@@ -269,17 +287,27 @@ class _PlayerPageState extends State<PlayerPage>
         : _lightStatusBarStyle;
   }
 
-  Future<void> _loadInitialData() async {
+  Future<void> _loadInitialData({bool allowSourceMatch = true}) async {
+    final requestId = _playbackGeneration;
+    unawaited(_loadBgmMetaOnly());
     try {
-      final bgmFuture = _loadBgmMetaOnly();
-      await _svc.loadDetail();
-      if (!mounted) return;
-      if (videoList.isNotEmpty) {
-        await initVideoController(_playbackGeneration);
+      final ready = await _svc.prepareInitialPlayback();
+      if (_isStale(requestId)) return;
+      if (ready) {
+        await initVideoController(requestId);
+      } else if (allowSourceMatch && !_isLocalSource) {
+        _startHeadlessAutoMatch();
+      } else {
+        _setTerminalPlaybackFailure('未找到可播放的线路，请选择播放源后重试');
       }
-      await bgmFuture;
     } catch (e) {
+      if (_isStale(requestId)) return;
       debugPrint('加载初始数据失败: $e');
+      if (allowSourceMatch && !_isLocalSource) {
+        _startHeadlessAutoMatch();
+      } else {
+        _setTerminalPlaybackFailure(e);
+      }
     }
     if (mounted) {
       ctr.setMediaInfo(_svc.currentMediaInfo);
@@ -843,6 +871,11 @@ class _PlayerPageState extends State<PlayerPage>
     bool resetPlayback = false,
   }) async {
     if (!mounted) return;
+    // A manual choice wins over a still-running history match.
+    final matching = _autoMatchController;
+    _autoMatchController = null;
+    matching?.cancelSearch();
+    matching?.dispose();
     _sourceOperation?.cancel();
     final requestId = ++_playbackGeneration;
     if (resetPlayback) {
@@ -864,7 +897,9 @@ class _PlayerPageState extends State<PlayerPage>
     final source = _svc.request.source.trim();
     final isPureBgmSubject = source.isEmpty || source == 'bgm';
 
-    if (isPureBgmSubject && _autoMatchController == null) {
+    if (isPureBgmSubject &&
+        _autoMatchController == null &&
+        _terminalFailure == null) {
       return Instances.isTV
           ? TvAnimeDetailPlaceholder(data: _svc.buildLegacyData())
           : AnimeDetailPlaceholder(data: _svc.buildLegacyData());
@@ -890,6 +925,9 @@ class _PlayerPageState extends State<PlayerPage>
       onUrlChanged: changeUrl,
       onWatchPartyPressed: () => WatchPartySheet.show(context, _watchParty),
       isSearching: _autoMatchController != null,
+      initialFailure: _terminalFailure == null
+          ? null
+          : _buildMobileTerminalFailure(),
     );
   }
 
@@ -938,6 +976,8 @@ class _PlayerPageState extends State<PlayerPage>
   }
 
   String get _currentSourceName {
+    if (_autoMatchController != null && videoList.isEmpty) return '正在匹配播放源';
+    if (_svc.needsSourceMatch) return '选择播放源';
     final displayName = _svc.data['sourceDisplayName']?.toString().trim();
     if (displayName != null && displayName.isNotEmpty) return displayName;
     final source = _svc.request.source.trim();
@@ -1195,9 +1235,12 @@ class _PlayerPageState extends State<PlayerPage>
         children: [
           const Icon(Icons.error_outline_rounded, color: Colors.redAccent),
           const SizedBox(height: 8),
-          const Text(
-            '播放失败，请换源或使用 AI 修复',
-            style: TextStyle(color: Colors.white),
+          Text(
+            _terminalFailure?.message ?? '播放失败，请换源或使用 AI 修复',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.white),
           ),
           const SizedBox(height: 10),
           Wrap(

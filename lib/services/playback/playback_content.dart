@@ -83,6 +83,10 @@ class PlaybackContent {
   /// 两个 id 不是同一命名空间，按贴文查询会命中别人的贴文或 null。
   bool get isBgmSubject => request.source.trim() == 'bgm';
 
+  /// A cloud history record identifies the anime, not a source on this device.
+  bool get needsSourceMatch =>
+      isBgmSubject || request.source.trim() == 'history';
+
   String? get localFilePath {
     if (isLocalSource && videoList.isNotEmpty) {
       final item = currentVideoItem;
@@ -263,6 +267,15 @@ class PlaybackContent {
     );
   }
 
+  /// A source name alone is not ready to play. Reload its catalog on this
+  /// device, then require an actual line for the selected episode.
+  Future<bool> prepareInitialPlayback() async {
+    if (needsSourceMatch) return false;
+    await loadDetail();
+    if (isAdapter) await prepareAdapterSource();
+    return currentEpisodeId.trim().isNotEmpty;
+  }
+
   Future<void> loadDetail() async {
     if (isLocalSource) {
       if (videoList.isEmpty && localFilePath != null) {
@@ -284,7 +297,9 @@ class PlaybackContent {
     final explicitLineIndex = request.lineIndex;
 
     // Bangumi 条目的 `id` 是 BGM 条目 id，拿去查贴文只会拿到 null 或别人的贴文。
-    if (!isAdapter && !isBgmSubject) {
+    if (!isAdapter &&
+        !needsSourceMatch &&
+        (request.source.isEmpty || request.source == 'internal')) {
       final postId = int.tryParse(data['id']?.toString() ?? '');
       if (postId != null && postId > 0) {
         final lifetime = _lifetime;
@@ -349,7 +364,7 @@ class PlaybackContent {
 
         sources.retainPlayback(this, adapter);
 
-        if (videoList.isEmpty || sourceNames == null) {
+        if (currentEpisodeId.trim().isEmpty || sourceNames == null) {
           final seriesUrl = data['seriesUrl'] ?? data['id'].toString();
           final catalog = await adapter.getPlaybackCatalog(
             seriesUrl.toString(),
@@ -628,7 +643,7 @@ class PlaybackContent {
 
   /// 贴文 id 只对本站条目成立；BGM 条目 id 一旦写进收藏的 post_id 就是串号。
   int? get validPostId {
-    if (isBgmSubject) return null;
+    if (needsSourceMatch) return null;
     final postId = toInt(data['id']);
     return postId != null && postId > 0 ? postId : null;
   }
