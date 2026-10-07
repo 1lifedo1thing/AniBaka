@@ -3,8 +3,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 import 'package:baka/pages/search/tag_page.dart';
-import 'package:baka/utils/bgm_utils.dart';
-import 'package:baka/utils/date_util.dart';
+import 'package:baka/utils/format_utils.dart';
 import 'package:baka/utils/reg_utils.dart';
 import 'package:baka/widgets/common/scale_button.dart';
 import 'package:baka/widgets/player/bgm_follow_pill.dart';
@@ -47,10 +46,12 @@ class VideoDetailCard extends StatelessWidget {
     final mutedColor = theme.textTheme.bodyMedium?.color?.withValues(
       alpha: 0.4,
     );
-    final airDate = BgmUtils.formatAirDate(detail);
-    final time =
-        airDate ??
-        DateTime.parse((detail['time'] ?? '20231113').toString()).toEnDate();
+    final airDate = (detail['bgmDetailData'] as Map?)?['date'] as String?;
+    final time = formatDate(
+      airDate == null || airDate.isEmpty
+          ? detail['time'] as String? ?? ''
+          : airDate,
+    );
     final mutedStyle = TextStyle(
       color: mutedColor,
       fontSize: 12,
@@ -110,8 +111,10 @@ class VideoDetailCard extends StatelessWidget {
                   spacing: 6,
                   runSpacing: 4,
                   children: [
-                    Text(time, style: mutedStyle),
-                    Text('•', style: mutedStyle),
+                    if (time.isNotEmpty) ...[
+                      Text(time, style: mutedStyle),
+                      Text('•', style: mutedStyle),
+                    ],
                     Text('gv${detail['id']}', style: mutedStyle),
                   ],
                 ),

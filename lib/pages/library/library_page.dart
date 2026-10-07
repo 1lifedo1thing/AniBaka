@@ -134,12 +134,11 @@ class _LibraryPageState extends State<LibraryPage> {
         return;
       }
       setState(() {
+        // API pages can contain fixed-length lists, so merge into a new list.
+        _collectionList = reset
+            ? response.list
+            : [..._collectionList, ...response.list];
         _collectionPage = page;
-        if (reset) {
-          _collectionList = response.list;
-        } else {
-          _collectionList.addAll(response.list);
-        }
         _hasMoreCollection = _collectionList.length < response.total;
       });
     } catch (e) {
@@ -428,7 +427,7 @@ class _LibraryPageState extends State<LibraryPage> {
     });
   }
 
-  static final _dummyCollection = AnimeCollection(
+  static const _dummyCollection = AnimeCollection(
     status: 3,
     postTitle: '动画名称占位符',
     rating: 8,
@@ -634,9 +633,7 @@ class _CollectionCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final statusColor = _statusColors[collection.status] ?? Colors.grey;
     final statusText =
-        collection.statusText ??
-        CollectionStatus.fromValue(collection.status)?.label ??
-        '';
+        CollectionStatus.fromValue(collection.status)?.label ?? '';
     final title = collection.displayTitle;
     final hasEp = collection.epWatched != null && collection.epWatched! > 0;
     final hasTotal = collection.epTotal != null && collection.epTotal! > 0;

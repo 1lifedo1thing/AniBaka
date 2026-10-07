@@ -2,21 +2,14 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 import 'package:baka/api/bgm.dart';
-import 'package:baka/utils/date_util.dart';
+import 'package:baka/utils/format_utils.dart';
 import 'package:baka/widgets/common/skeletonizer.dart';
 
 /// 评论 Tab — 独立管理评论加载状态
 class AnimeCommentsTab extends StatefulWidget {
   final int subjectId;
-  final List<Map<String, dynamic>> initialComments;
-  final int initialTotal;
 
-  const AnimeCommentsTab({
-    required this.subjectId,
-    this.initialComments = const [],
-    this.initialTotal = 0,
-    super.key,
-  });
+  const AnimeCommentsTab({required this.subjectId, super.key});
 
   @override
   State<AnimeCommentsTab> createState() => _AnimeCommentsTabState();
@@ -46,12 +39,11 @@ class _AnimeCommentsTabState extends State<AnimeCommentsTab>
   }
 
   void _reset() {
-    _comments = List.of(widget.initialComments);
-    _hasMoreComments =
-        _comments.isEmpty || _comments.length < widget.initialTotal;
+    _comments = [];
+    _hasMoreComments = true;
     _isCommentsLoading = false;
     _failed = false;
-    if (_comments.isEmpty) _fetchComments();
+    _fetchComments();
   }
 
   Future<void> _fetchComments() async {
@@ -97,7 +89,10 @@ class _AnimeCommentsTabState extends State<AnimeCommentsTab>
         }
         return false;
       },
-      child: CustomScrollView(slivers: _buildCommentsSlivers(context)),
+      child: CustomScrollView(
+        key: PageStorageKey(widget.subjectId),
+        slivers: _buildCommentsSlivers(context),
+      ),
     );
   }
 
@@ -138,20 +133,28 @@ class _AnimeCommentsTabState extends State<AnimeCommentsTab>
     return [
       SliverPadding(
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-        sliver: SliverList(
-          delegate: SliverChildBuilderDelegate((context, index) {
-            if (index >= _comments.length) {
-              return _isCommentsLoading
-                  ? _loadingComment(isDark)
-                  : Center(
-                      child: TextButton(
-                        onPressed: _fetchComments,
-                        child: Text(_failed ? '加载失败，点击重试' : '加载更多'),
-                      ),
-                    );
-            }
-            return _CommentItem(comment: _comments[index], isDark: isDark);
-          }, childCount: _comments.length + (_hasMoreComments ? 1 : 0)),
+        sliver: TweenAnimationBuilder<double>(
+          tween: Tween(begin: 0, end: 1),
+          duration: MediaQuery.disableAnimationsOf(context)
+              ? Duration.zero
+              : const Duration(milliseconds: 180),
+          builder: (context, value, child) =>
+              SliverOpacity(opacity: value, sliver: child!),
+          child: SliverList(
+            delegate: SliverChildBuilderDelegate((context, index) {
+              if (index >= _comments.length) {
+                return _isCommentsLoading
+                    ? _loadingComment(isDark)
+                    : Center(
+                        child: TextButton(
+                          onPressed: _fetchComments,
+                          child: Text(_failed ? '加载失败，点击重试' : '加载更多'),
+                        ),
+                      );
+              }
+              return _CommentItem(comment: _comments[index], isDark: isDark);
+            }, childCount: _comments.length + (_hasMoreComments ? 1 : 0)),
+          ),
         ),
       ),
       const SliverToBoxAdapter(child: SizedBox(height: 16)),
@@ -162,9 +165,13 @@ class _AnimeCommentsTabState extends State<AnimeCommentsTab>
     enabled: true,
     child: _CommentItem(
       comment: const {
-        'user': {'nickname': '用户名称占位符'},
+        'user': {
+          'nickname': '用户名称占位符',
+          'avatar': {'medium': ''},
+        },
         'rate': 8,
         'comment': '这是一条用于自动骨架遮罩的评论内容占位文本...',
+        'updatedAt': 0,
       },
       isDark: isDark,
     ),
@@ -180,12 +187,13 @@ class _CommentItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final user = comment['user'] as Map<String, dynamic>? ?? const {};
-    final nickname = user['nickname']?.toString() ?? '匿名';
-    final avatarUrl = (user['avatar'] as Map?)?['medium']?.toString() ?? '';
-    final content = comment['comment']?.toString() ?? '';
-    final rate = comment['rate'] as int? ?? 0;
-    final updatedAt = comment['updatedAt'] as int? ?? 0;
+    final user = comment['user'] as Map<String, dynamic>;
+    final nickname = user['nickname'] as String;
+    final avatarUrl =
+        (user['avatar'] as Map<String, dynamic>)['medium'] as String;
+    final content = comment['comment'] as String;
+    final rate = comment['rate'] as int;
+    final updatedAt = comment['updatedAt'] as int;
     final timeStr = updatedAt > 0
         ? DateTime.fromMillisecondsSinceEpoch(updatedAt * 1000).toRelativeTime()
         : '';

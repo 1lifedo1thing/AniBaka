@@ -1,5 +1,4 @@
 import 'package:baka/models/bgm.dart';
-import 'package:baka/utils/json_values.dart';
 import 'package:baka/source/runtime/source_operation.dart';
 import 'package:baka/services/source/source_repository.dart';
 import 'package:baka/services/playback/history_repository.dart';
@@ -87,6 +86,7 @@ class _PlayerPageState extends State<PlayerPage>
   );
 
   late final PlaybackContent _svc;
+  late Map<String, dynamic> _detailData;
   late final WatchPartyService _watchParty;
   late final MediaSessionService _mediaSession;
   late final TabController _tabController;
@@ -115,7 +115,7 @@ class _PlayerPageState extends State<PlayerPage>
 
   void _bumpPageData() {
     if (!mounted) return;
-    setState(() {});
+    setState(() => _detailData = _svc.buildDetailData());
   }
 
   List<PlaybackEpisode> get videoList => _svc.videoList;
@@ -185,6 +185,7 @@ class _PlayerPageState extends State<PlayerPage>
       request: widget.request,
       posIndex: widget.posIndex,
     );
+    _detailData = _svc.buildDetailData();
     _sourceSearchController = VideoSourceSearchController.takeCachedFor(
       seedData: _svc.data,
     );
@@ -212,7 +213,7 @@ class _PlayerPageState extends State<PlayerPage>
     _terminalFailure = null;
     late final VideoSourceSearchController search;
     search = VideoSourceSearchController(
-      seedData: _svc.buildSourceSeedData(),
+      seedData: _detailData,
       autoMatchMode: true,
       targetEpisodeIndex: currPlayIndex,
       onMatchFound: (resolvedData) {
@@ -318,13 +319,11 @@ class _PlayerPageState extends State<PlayerPage>
   void _updateCachedTagsFromBgm() {
     final bgmDetail = _svc.bgmDetailData;
     if (bgmDetail != null) {
-      final tags = asMapList(bgmDetail['tags']);
+      final tags = bgmDetail['tags'] as List;
       if (tags.isNotEmpty) {
-        _cachedTags = tags
-            .take(6)
-            .map((t) => t['name']?.toString())
-            .whereType<String>()
-            .toList();
+        _cachedTags = [
+          for (final tag in tags.take(6)) (tag as Map)['name'] as String,
+        ];
         return;
       }
     }
@@ -736,7 +735,7 @@ class _PlayerPageState extends State<PlayerPage>
       }
 
       // 2. 全自动自动匹配并无缝切换至下一个有效视频源
-      final seedData = _svc.buildSourceSeedData();
+      final seedData = _detailData;
       final controller = _sourceSearchController ??=
           VideoSourceSearchController.takeSharedFor(seedData: seedData);
 
@@ -901,8 +900,8 @@ class _PlayerPageState extends State<PlayerPage>
         _autoMatchController == null &&
         _terminalFailure == null) {
       return Instances.isTV
-          ? TvAnimeDetailPlaceholder(data: _svc.buildLegacyData())
-          : AnimeDetailPlaceholder(data: _svc.buildLegacyData());
+          ? TvAnimeDetailPlaceholder(data: _detailData, episodes: videoList)
+          : AnimeDetailPlaceholder(data: _detailData);
     }
     if (Instances.isTV) return _buildTvLayout(context);
     if (isWindows || context.isTablet) {
@@ -913,7 +912,7 @@ class _PlayerPageState extends State<PlayerPage>
 
   Widget _buildTvLayout(BuildContext context) {
     return TvPlayerLayout(
-      data: _svc.buildLegacyData(),
+      data: _detailData,
       videoList: videoList,
       currPlayIndex: currPlayIndex,
       currUrl: currUrl,
@@ -935,7 +934,7 @@ class _PlayerPageState extends State<PlayerPage>
     return _withImmersiveStatusBar(
       WindowsPlayerLayout(
         torrent: _svc.torrent,
-        data: _svc.buildLegacyData(),
+        data: _detailData,
         videoList: videoList,
         currPlayIndex: currPlayIndex,
         currUrl: currUrl,
@@ -996,7 +995,7 @@ class _PlayerPageState extends State<PlayerPage>
   Future<void> _openSourceSwitchSheet() async {
     if (_isLocalSource) return;
 
-    final seedData = _svc.buildSourceSeedData();
+    final seedData = _detailData;
 
     final searchController = _sourceSearchController ??=
         VideoSourceSearchController.takeSharedFor(seedData: seedData);
@@ -1375,7 +1374,7 @@ class _PlayerPageState extends State<PlayerPage>
       isFullScreen: downloadMode
           ? _playerFullscreen.value
           : _playerFullscreen.value && !isWindows,
-      postDetail: _svc.buildLegacyData(),
+      postDetail: _detailData,
       urlResolver: _svc.resolveEpisodeUrl,
       startInDownloadMode: downloadMode,
       currentLineIndex: downloadMode ? null : currUrl,
@@ -1402,7 +1401,7 @@ class _PlayerPageState extends State<PlayerPage>
       child: Column(
         children: [
           VideoDetailCard(
-            detail: _svc.buildLegacyData(),
+            detail: _detailData,
             bgmInfo: _bgmInfo,
             followNotifier: _followNotifier,
             cachedTags: _cachedTags,

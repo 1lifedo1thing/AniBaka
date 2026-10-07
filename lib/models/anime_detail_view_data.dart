@@ -14,7 +14,6 @@ class AnimeDetailViewData {
     required this.tags,
     required this.genres,
     required this.infobox,
-    required this.characters,
     required this.scoreCount,
     required this.scoreDistribution,
     required this.backdrops,
@@ -43,7 +42,6 @@ class AnimeDetailViewData {
   final List<String> tags;
   final List<String> genres;
   final List<Map<String, dynamic>> infobox;
-  final List<Map<String, dynamic>> characters;
   final double? score;
   final int scoreCount;
 
@@ -71,7 +69,6 @@ class AnimeDetailViewData {
     required BgmInfo bgmInfo,
     Map<String, dynamic>? anibaka,
     Map<String, dynamic>? bgm,
-    List<Map<String, dynamic>> characters = const [],
   }) {
     final titles = anibaka?['title'] as Map<String, dynamic>?;
     final cnTitle = trimmed(titles?['cn']);
@@ -101,20 +98,19 @@ class AnimeDetailViewData {
         ? rawGenres.cast<String>()
         : const <String>[];
 
-    final rawTags = <String>[];
-    rawTags.addAll(genres);
+    final rawTags = <String>{...genres};
     if (bgm?['tags'] is List) {
       for (final t in bgm!['tags']) {
         if (t is Map && t['name'] != null) {
           final name = t['name'].toString().trim();
-          if (name.isNotEmpty && !rawTags.contains(name)) rawTags.add(name);
+          if (name.isNotEmpty) rawTags.add(name);
         }
       }
     }
     if (source['tag'] != null) {
       for (final s in source['tag'].toString().split(RegExp(r'\s+'))) {
         final st = s.trim();
-        if (st.isNotEmpty && !rawTags.contains(st)) rawTags.add(st);
+        if (st.isNotEmpty) rawTags.add(st);
       }
     }
 
@@ -153,10 +149,9 @@ class AnimeDetailViewData {
       coverUrl: cover,
       backgroundUrl: backdrops.isNotEmpty ? backdrops.first : cover,
       logoUrl: logoUrl,
-      tags: rawTags,
+      tags: rawTags.toList(growable: false),
       genres: genres,
       infobox: _buildInfobox(anibaka, bgm, enTitle, title),
-      characters: characters,
       score: score,
       scoreCount: scoreCount,
       scoreDistribution: scoreDistribution,
@@ -214,7 +209,7 @@ class AnimeDetailViewData {
   /// 顶层的 `logoUrl` / `logo`（播放数据里由 [resolveLogoUrl] 回填）。
   static String resolveLogoUrl(Map<String, dynamic>? detail) {
     if (detail == null) return '';
-    final rawLogos = asMap(detail['images'])?['logos'];
+    final rawLogos = (detail['images'] as Map?)?['logos'];
     if (rawLogos is List && rawLogos.isNotEmpty) {
       String? zhLogo;
       String? firstLogo;

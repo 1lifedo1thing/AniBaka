@@ -41,7 +41,7 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
   Animation<double>? _routeAnimation;
   ModalRoute<dynamic>? _route;
   bool _initialRouteTransitionFinished = false;
-  final List<VoidCallback> _pendingInitialUpdates = [];
+  bool _detailPending = false;
 
   bool get _canPublishInitialUpdates =>
       _route == null ||
@@ -51,17 +51,13 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
 
   void _publishInitialUpdates() {
     _initialRouteTransitionFinished = true;
-    for (final update in _pendingInitialUpdates) {
-      update();
+    if (_detailPending) {
+      _rebuildDetail();
+      _detailPending = false;
     }
-    _pendingInitialUpdates.clear();
   }
 
-  late List<Map<String, dynamic>> _initialComments;
-  late int _initialCommentTotal;
-
-  AnimeCollection? _collection;
-  bool _isCollectionLoading = true;
+  final _collection = ValueNotifier<AnimeCollection?>(null);
   bool _isStatusUpdating = false;
 
   late BgmInfo _bgmInfo;
@@ -76,9 +72,7 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
     return (postId != null && postId > 0) ? postId : null;
   }
 
-  void _rebuildDetail({BgmInfo? bgmInfo}) {
-    _bgmInfo = bgmInfo ?? BgmInfo.fromData(widget.data);
-    _detailData = asMap(widget.data['bgmDetailData']) ?? _detailData;
+  void _rebuildDetail() {
     _detail = AnimeDetailViewData.from(
       source: widget.data,
       bgmInfo: _bgmInfo,
@@ -110,14 +104,10 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
   void _initializeData(BgmInfo bgmInfo) {
     _loadGeneration++;
     _collectionRevision = 0;
-    _pendingInitialUpdates.clear();
-    _collection = null;
-    _isCollectionLoading = true;
+    _detailPending = false;
+    _collection.value = null;
     _isStatusUpdating = false;
     _postId = toInt(widget.data['id']);
-    _initialComments = asMapList(widget.data['bgmComments']);
-    _initialCommentTotal =
-        toInt(widget.data['bgmCommentTotal']) ?? _initialComments.length;
     // Hydrate from the API-owned cache before constructing the first frame.
     // A warm request still returns a Future; queuing its .then callback behind
     // the transition would incorrectly animate default content for 320 ms.
@@ -126,9 +116,10 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
         ? null
         : AniBakaApi.peekAnimeDetail(subjectId);
     _detailData =
-        asMap(widget.data['bgmDetailData']) ??
+        (widget.data['bgmDetailData'] as Map<String, dynamic>?) ??
         (subjectId == null ? null : peekBgmSubject(subjectId));
-    _rebuildDetail(bgmInfo: bgmInfo);
+    _bgmInfo = bgmInfo;
+    _rebuildDetail();
 
     unawaited(_loadInitialData(_loadGeneration));
   }
@@ -151,36 +142,38 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
   void _handleRouteAnimationStatus(AnimationStatus status) {
     if (status != AnimationStatus.completed ||
         !_canPublishInitialUpdates ||
-        (_initialRouteTransitionFinished && _pendingInitialUpdates.isEmpty) ||
+        (_initialRouteTransitionFinished && !_detailPending) ||
         !mounted) {
       return;
     }
     setState(_publishInitialUpdates);
   }
 
-  void _updateInitialState(int generation, VoidCallback update) {
-    if (!mounted || generation != _loadGeneration) return;
+  void _refreshDetail() {
     if (_initialRouteTransitionFinished && _canPublishInitialUpdates) {
-      setState(update);
+      setState(_rebuildDetail);
     } else {
-      // Do not mutate the visible model during either direction of a route
-      // transition. A canceled back gesture publishes the queued results.
-      _pendingInitialUpdates.add(update);
+      // Build one view model from the latest responses when the route settles.
+      _detailPending = true;
     }
   }
 
   @override
   void dispose() {
     _routeAnimation?.removeStatusListener(_handleRouteAnimationStatus);
-    _pendingInitialUpdates.clear();
+    _collection.dispose();
     super.dispose();
   }
 
   void _startWatching() {
-    if (_detail.logoUrl.isNotEmpty) {
-      widget.data['logoUrl'] = _detail.logoUrl;
-    }
-    NavigationService.toPlayer(context, widget.data, autoMatch: true);
+    NavigationService.toPlayer(context, {
+      ...widget.data,
+      if (_subjectId != null) 'bgmId': _subjectId,
+      if (_bgmInfo.score != null) 'score': _bgmInfo.score,
+      if (_bgmInfo.imageUrl != null) 'bgmImageUrl': _bgmInfo.imageUrl,
+      if (_detailData != null) 'bgmDetailData': _detailData,
+      if (_detail.logoUrl.isNotEmpty) 'logoUrl': _detail.logoUrl,
+    }, autoMatch: true);
   }
 
   Future<void> _loadInitialData(int generation) async {
@@ -191,17 +184,8 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
       try {
         resolved = await resolveBgmFromData(widget.data);
         if (!mounted || generation != _loadGeneration) return;
-        final data = widget.data;
-        if (resolved.subjectId != null) {
-          data['bgmId'] = resolved.subjectId;
-        }
-        if (resolved.score != null) data['score'] = resolved.score;
-        if (resolved.imageUrl != null) {
-          data['bgmImageUrl'] = resolved.imageUrl;
-        }
-        _updateInitialState(generation, () {
-          _rebuildDetail();
-        });
+        _bgmInfo = resolved;
+        _refreshDetail();
       } catch (e) {
         debugPrint('解析bgmId失败: $e');
       }
@@ -211,10 +195,7 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
     // queued until the transition settles.
     if (!mounted || generation != _loadGeneration) return;
     final bgmId = resolved.subjectId;
-    if (bgmId == null) {
-      _updateInitialState(generation, () => _isCollectionLoading = false);
-      return;
-    }
+    if (bgmId == null) return;
 
     // Phase 2: 并发启动所有请求，各自独立更新 UI
     // AniBaka 自有 API（含 overview）。空响应或失败时保持无数据，页面回落到
@@ -222,11 +203,11 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
     if (_anibakaData == null) {
       AniBakaApi.getAnimeDetail(bgmId)
           .then((data) {
-            if (data == null) return;
-            _updateInitialState(generation, () {
-              _anibakaData = data;
-              _rebuildDetail();
-            });
+            if (!mounted || generation != _loadGeneration || data == null) {
+              return;
+            }
+            _anibakaData = data;
+            _refreshDetail();
           })
           .catchError((Object e) {
             debugPrint('获取 AniBaka 详情失败: $e');
@@ -237,11 +218,9 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
     if (_detailData == null) {
       getBgmSubject(bgmId)
           .then((data) {
-            _updateInitialState(generation, () {
-              _detailData = data;
-              widget.data['bgmDetailData'] = data;
-              _rebuildDetail();
-            });
+            if (!mounted || generation != _loadGeneration) return;
+            _detailData = data;
+            _refreshDetail();
           })
           .catchError((Object e) {
             debugPrint('获取 BGM 条目失败: $e');
@@ -252,18 +231,15 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
     collections
         .getByBgmId(bgmId)
         .then((collection) {
-          if (collectionRevision != _collectionRevision) return;
-          _updateInitialState(generation, () {
-            // This update may have waited behind a route transition while the
-            // user saved a newer collection status.
-            if (collectionRevision != _collectionRevision) return;
-            _collection = collection;
-            _isCollectionLoading = false;
-          });
+          if (!mounted ||
+              generation != _loadGeneration ||
+              collectionRevision != _collectionRevision) {
+            return;
+          }
+          _collection.value = collection;
         })
         .catchError((Object e) {
           debugPrint('获取收藏状态失败: $e');
-          _updateInitialState(generation, () => _isCollectionLoading = false);
         });
   }
 
@@ -281,7 +257,7 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
 
   Future<void> _updateCollectionStatus(CollectionStatus? status) async {
     if (!mounted || _isStatusUpdating) return;
-    final collection = _collection;
+    final collection = _collection.value;
     final removing = status == null || collection?.status == status.value;
     if (removing && collection == null) return;
     final generation = _loadGeneration;
@@ -299,10 +275,7 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
         if (!mounted || generation != _loadGeneration) return;
         if (success) {
           _collectionRevision++;
-          setState(() {
-            _collection = null;
-            _isCollectionLoading = false;
-          });
+          _collection.value = null;
           showSnackBar('已取消收藏');
         }
       } else {
@@ -312,10 +285,7 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
         if (!mounted || generation != _loadGeneration) return;
         if (result != null) {
           _collectionRevision++;
-          setState(() {
-            _collection = result;
-            _isCollectionLoading = false;
-          });
+          _collection.value = result;
           showSnackBar('已标记为「${status.label}」');
         } else {
           showSnackBar('操作失败，请重试');
@@ -335,9 +305,7 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
   }
 
   void _handleCollectionTap() {
-    if (_collection != null &&
-        CollectionStatus.fromValue(_collection!.status) ==
-            CollectionStatus.doing) {
+    if (_collection.value?.status == CollectionStatus.doing.value) {
       _showCollectionSheet();
       return;
     }
@@ -345,7 +313,7 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
   }
 
   void _showCollectionSheet() {
-    final collection = _collection;
+    final collection = _collection.value;
     final generation = _loadGeneration;
     HapticFeedback.selectionClick();
     showModalBottomSheet(
@@ -503,16 +471,20 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
                       SliverPadding(
                         padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
                         sliver: SliverToBoxAdapter(
-                          child: AnimeDetailHeader(
-                            detail: _detail,
-                            updateTime: widget.data['time']?.toString(),
-                            category: widget.data['sort']?.toString(),
-                            heroTag: coverHeroTag(widget.data),
-                            enableCoverEffects: _initialRouteTransitionFinished,
-                            collection: _collection,
-                            isCollectionLoading: _isCollectionLoading,
-                            onCollectionTap: _handleCollectionTap,
-                            onSearchTap: _startWatching,
+                          child: ValueListenableBuilder<AnimeCollection?>(
+                            valueListenable: _collection,
+                            builder: (context, collection, _) =>
+                                AnimeDetailHeader(
+                                  detail: _detail,
+                                  updateTime: widget.data['time']?.toString(),
+                                  category: widget.data['sort']?.toString(),
+                                  heroTag: coverHeroTag(widget.data),
+                                  enableCoverEffects:
+                                      _initialRouteTransitionFinished,
+                                  collection: collection,
+                                  onCollectionTap: _handleCollectionTap,
+                                  onSearchTap: _startWatching,
+                                ),
                           ),
                         ),
                       ),
@@ -533,7 +505,10 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
                       physics: const BouncingScrollPhysics(),
                       children: [
                         for (final tab in tabs)
-                          Builder(key: ValueKey(tab.$1), builder: tab.$2),
+                          Builder(
+                            key: PageStorageKey((_postId, _subjectId, tab.$1)),
+                            builder: tab.$2,
+                          ),
                       ],
                     ),
                   ),
@@ -614,22 +589,14 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
     tabs.add((
       '评论',
       (_) => _subjectId != null
-          ? AnimeCommentsTab(
-              subjectId: _subjectId!,
-              initialComments: _initialComments,
-              initialTotal: _initialCommentTotal,
-            )
+          ? AnimeCommentsTab(subjectId: _subjectId!)
           : _buildEmptySection('暂无评论数据'),
     ));
 
     if (_detail.infobox.isNotEmpty) {
       tabs.add((
         '信息',
-        (_) => _wrapTabContent(
-          _detail.infobox.isNotEmpty
-              ? _buildInfoSection(_detail.infobox)
-              : _buildEmptySection('暂无基本信息'),
-        ),
+        (_) => _wrapTabContent(_buildInfoSection(_detail.infobox)),
       ));
     }
 
@@ -641,11 +608,7 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
       '角色',
       (_) => _subjectId == null
           ? _buildEmptySection('暂无角色信息')
-          : CharactersSection(
-              subjectId: _subjectId!,
-              onCharacterTap: (character) =>
-                  showCharacterDetailSheet(context, character),
-            ),
+          : CharactersSection(subjectId: _subjectId!),
     ));
 
     final subjectId = _subjectId;
@@ -656,13 +619,7 @@ class _AnimeDetailPlaceholderState extends State<AnimeDetailPlaceholder> {
           AnimeDetailRelatedSection(
             subjectId: subjectId,
             onAnimeTap: (data) =>
-                NavigationService.toPlayer(context, <String, dynamic>{
-                  'id': data['bgmId'] ?? 0,
-                  'sort': '番剧',
-                  'content': '',
-                  'tag': '番剧',
-                  ...data,
-                }, fade: true),
+                NavigationService.toPlayer(context, data, fade: true),
           ),
         ),
       ));
@@ -1081,6 +1038,7 @@ class _TabBarDelegate extends SliverPersistentHeaderDelegate {
   bool shouldRebuild(covariant _TabBarDelegate oldDelegate) {
     return tabBar != oldDelegate.tabBar ||
         backgroundColor != oldDelegate.backgroundColor ||
-        borderColor != oldDelegate.borderColor;
+        borderColor != oldDelegate.borderColor ||
+        isWide != oldDelegate.isWide;
   }
 }

@@ -40,7 +40,8 @@ class ScheduleEntry {
   final DateTime? at;
   final String? time;
   final String? episodeDate;
-  final Map<String, dynamic> post;
+  // Share the home calendar entry, including maps restored by Hive.
+  final Map post;
   final List<SchedulePlatform> platforms;
   final bool premiereOnly;
   String get title => post['title']?.toString() ?? '未命名番剧';
@@ -75,11 +76,11 @@ class ScheduleWeek {
     bool calendarUnavailable = false,
   }) {
     final days = List.generate(7, (_) => <ScheduleEntry>[]);
-    final posts = <int, Map<String, dynamic>>{};
+    final posts = <int, Map>{};
     for (final day in calendar) {
       for (final post in day) {
         final id = toInt(post['bgmId']);
-        if (id != null) posts[id] = Map<String, dynamic>.from(post);
+        if (id != null) posts[id] = post;
       }
     }
     final records = <String, Map>{};
@@ -116,13 +117,14 @@ class ScheduleWeek {
       final item = record['item'] as Map;
       final id = toInt(record['bgm_id']);
       if (id != null) timedIds.add(id);
-      final post = <String, dynamic>{
-        'title':
-            trimmed(record['name_cn']) ?? trimmed(item['title']) ?? '未命名番剧',
-        'source': 'bgm',
-        'bgmId': id,
-        ...?posts[id],
-      };
+      final post =
+          posts[id] ??
+          <String, dynamic>{
+            'title':
+                trimmed(record['name_cn']) ?? trimmed(item['title']) ?? '未命名番剧',
+            'source': 'bgm',
+            'bgmId': id,
+          };
       final local = at.toUtc().add(const Duration(hours: 8));
       // Episode airdate is a date, not a timestamp. Only use a known source zone;
       // Japanese midnight broadcasts can belong to a different UTC+8 day.
@@ -137,6 +139,10 @@ class ScheduleWeek {
           : scheduleDate(at.toUtc().add(Duration(hours: sourceOffset)));
       final platforms = <SchedulePlatform>[];
       final seen = <String>{};
+      final sites = <(String, String), Map>{
+        for (final site in item['sites'] as List? ?? const [])
+          (site['site'] as String, site['id'] as String): site as Map,
+      };
       for (final platform in platformEvents[record['key']] ?? <Map>[]) {
         final platformAt = DateTime.tryParse(platform['at']?.toString() ?? '');
         if (platformAt == null) continue;
@@ -150,13 +156,7 @@ class ScheduleWeek {
         final site = platform['site']?.toString() ?? '';
         final siteId = platform['site_id']?.toString() ?? '';
         if (!seen.add('$site/$siteId')) continue;
-        Map? siteData;
-        for (final s in item['sites'] as List? ?? const []) {
-          if ((s as Map)['site'] == site && s['id'] == siteId) {
-            siteData = s;
-            break;
-          }
-        }
+        final siteData = sites[(site, siteId)];
         final siteMeta = meta[site] as Map? ?? const {};
         final uri = Uri.tryParse(siteData?['url']?.toString() ?? '');
         final time = platformAt.toUtc().add(const Duration(hours: 8));
@@ -174,8 +174,7 @@ class ScheduleWeek {
             regions:
                 ((siteData?['regions'] ?? siteMeta['regions']) as List? ??
                         const [])
-                    .map((e) => e.toString())
-                    .toList(),
+                    .cast<String>(),
           ),
         );
       }
@@ -209,7 +208,7 @@ class ScheduleWeek {
             key: 'unknown/$id/$day',
             bgmId: id,
             date: monday.add(Duration(days: day)),
-            post: Map<String, dynamic>.from(post),
+            post: post,
           ),
         );
       }

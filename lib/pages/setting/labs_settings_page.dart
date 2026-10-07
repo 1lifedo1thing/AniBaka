@@ -1,8 +1,6 @@
 import 'package:baka/widgets/settings/dlss_effects_editor.dart';
 import 'dart:io';
 
-import 'package:baka/pages/setting/dlss_video_enhancement_page.dart';
-import 'package:baka/pages/setting/dlss_realtime_page.dart';
 import 'package:baka/widgets/settings/settings_widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:baka/services/playback/dlss_global_playback.dart';
@@ -81,40 +79,7 @@ class LabsSettingsPage extends StatelessWidget {
                     const Padding(
                       padding: EdgeInsets.all(16),
                       child: Text(
-                        '开关默认关闭，修改会应用到当前画面并保存。首次开启自动配置所需环境（尚未安装时约 353 MiB）。仅增强本机 Windows 视频输出；投屏设备和外部播放器不受影响。不支持的画面会回退到普通播放。',
-                      ),
-                    ),
-                    SettingsGroup(
-                      children: [
-                        SettingsTile(
-                          title: 'DLSS 5 实时播放',
-                          value: '实验性',
-                          icon: Icons.play_circle_outline,
-                          onTap: () => Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => const DlssRealtimePage(),
-                            ),
-                          ),
-                        ),
-                        SettingsTile(
-                          title: 'DLSS 5 离线增强',
-                          value: '下载并配置',
-                          icon: Icons.auto_awesome_outlined,
-                          showDivider: false,
-                          onTap: () => Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => const DlssVideoEnhancementPage(),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const Padding(
-                      padding: EdgeInsets.fromLTRB(16, 12, 16, 0),
-                      child: Text(
-                        '使用 NVIDIA RTX 显卡实时播放本地视频，或保存增强副本并与原片对比。'
-                        '首次使用可一键下载所需工具。',
-                        style: TextStyle(fontSize: 13),
+                        '开关默认关闭，修改会应用到当前画面并保存。首次开启自动配置运行库（约 236 MiB，开启帧生成另需约 7 MiB）。仅增强本机 Windows 视频输出；投屏设备和外部播放器不受影响。不支持的画面会回退到普通播放。',
                       ),
                     ),
                   ],

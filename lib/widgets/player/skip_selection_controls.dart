@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:baka/models/skip_selection.dart';
-import 'package:baka/utils/duration_utils.dart';
+import 'package:baka/utils/format_utils.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:baka/widgets/baka_player/controller.dart';
 import 'package:flutter/material.dart';

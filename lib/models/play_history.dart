@@ -1,5 +1,3 @@
-import 'package:baka/utils/json_values.dart';
-
 /// 播放历史数据模型
 class PlayHistory {
   final int videoId;
@@ -14,7 +12,7 @@ class PlayHistory {
   final int? bgmId;
   final DateTime? updatedAt;
 
-  PlayHistory({
+  const PlayHistory({
     required this.videoId,
     required this.videoTitle,
     required this.videoDuration,
@@ -29,18 +27,18 @@ class PlayHistory {
   });
 
   factory PlayHistory.fromJson(Map<String, dynamic> json) => PlayHistory(
-    videoId: toInt(json['video_id']) ?? 0,
-    videoTitle: json['video_title']?.toString() ?? '',
-    videoCover: json['video_cover']?.toString(),
-    videoDuration: toInt(json['video_duration']) ?? 0,
-    playProgress: toInt(json['play_progress']) ?? 0,
-    episodeId: toInt(json['episode_id']),
-    episodeTitle: json['episode_title']?.toString(),
-    videoType: toInt(json['video_type']),
-    platform: json['platform']?.toString(),
-    bgmId: toInt(json['bgm_id']),
+    videoId: json['video_id'] as int,
+    videoTitle: json['video_title'] as String,
+    videoCover: json['video_cover'] as String?,
+    videoDuration: json['video_duration'] as int,
+    playProgress: json['play_progress'] as int,
+    episodeId: json['episode_id'] as int?,
+    episodeTitle: json['episode_title'] as String?,
+    videoType: json['video_type'] as int?,
+    platform: json['platform'] as String?,
+    bgmId: json['bgm_id'] as int?,
     updatedAt: json['updated_at'] != null
-        ? DateTime.tryParse(json['updated_at'].toString())
+        ? DateTime.parse(json['updated_at'] as String)
         : null,
   );
 

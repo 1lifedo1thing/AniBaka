@@ -1,11 +1,10 @@
-import 'package:baka/utils/duration_utils.dart';
+import 'package:baka/utils/format_utils.dart';
 import 'package:baka/utils/json_values.dart';
 import 'package:baka/core/api_transport.dart';
 import 'package:baka/api/bangumi_account_api.dart';
 import 'package:baka/services/account/bangumi_session.dart';
 import 'package:baka/api/bgm.dart';
 import 'package:baka/utils/bgm_utils.dart';
-import 'package:baka/utils/date_util.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:baka/widgets/baka_player/controller.dart';
 import 'package:baka/widgets/comment/comment_card.dart';
@@ -80,7 +79,7 @@ _BgmComment? _parseBgmComment(Object? value) {
   return (
     name: user?['nickname']?.toString() ?? '匿名',
     avatarUrl: BgmUtils.bgmImageProxyUrl(
-      BgmUtils.pickAvatarUrl(user?['avatar']),
+      (user?['avatar'] as Map?)?['medium'] as String? ?? '',
       width: 120,
     ),
     content: content,

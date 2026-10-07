@@ -81,7 +81,7 @@ abstract final class MpegTsFingerprint {
   /// 解析 [bytes]（分片前缀），失败返回 null。
   static HlsVideoFingerprint? read(Uint8List bytes) {
     if (bytes.length < packetSize * 2) return null;
-    final start = _findPacketStart(bytes);
+    final start = findPacketStart(bytes);
     if (start == null) return null;
     final videoPid = _videoPid(bytes, start);
     if (videoPid == null) return null;
@@ -91,7 +91,7 @@ abstract final class MpegTsFingerprint {
   }
 
   /// 找到连续三个同步字节对齐的位置，避开少数播放器在流前塞入的杂字节。
-  static int? _findPacketStart(Uint8List bytes) {
+  static int? findPacketStart(Uint8List bytes) {
     final limit = bytes.length - packetSize * 3;
     for (var offset = 0; offset <= limit; offset++) {
       if (bytes[offset] != _syncByte) continue;
@@ -297,8 +297,7 @@ abstract final class MpegTsFingerprint {
       final subHeightC = chromaFormatIdc == 1 ? 2 : 1;
       final cropUnitX = subWidthC;
       final cropUnitY = subHeightC * (2 - frameMbsOnly);
-      final width =
-          widthInMbs * 16 - cropUnitX * (cropLeft + cropRight);
+      final width = widthInMbs * 16 - cropUnitX * (cropLeft + cropRight);
       final height =
           (2 - frameMbsOnly) * heightInMapUnits * 16 -
           cropUnitY * (cropTop + cropBottom);

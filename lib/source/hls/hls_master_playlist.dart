@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 /// 主清单（master playlist）里的一个码率变体。
 class HlsVariantPlaylist {
   const HlsVariantPlaylist({
@@ -29,8 +31,10 @@ abstract final class HlsMasterPlaylist {
     r'^#EXT-X-STREAM-INF:(.*)$',
     multiLine: true,
   );
-  static final RegExp _bandwidth = RegExp(r'BANDWIDTH=(\d+)');
-  static final RegExp _resolution = RegExp(r'RESOLUTION=([0-9]+x[0-9]+)');
+  static final RegExp _bandwidth = RegExp(r'(?:^|,)BANDWIDTH=(\d+)(?=,|$)');
+  static final RegExp _resolution = RegExp(
+    r'(?:^|,)RESOLUTION=([0-9]+x[0-9]+)(?=,|$)',
+  );
   static final RegExp _alternativeRendition = RegExp(
     r'^#EXT-X-MEDIA:',
     multiLine: true,
@@ -47,50 +51,38 @@ abstract final class HlsMasterPlaylist {
       _alternativeRendition.hasMatch(body);
 
   /// 所有码率变体，按出现顺序。
-  static List<HlsVariantPlaylist> variants(String body, Uri baseUri) {
-    final lines = body.replaceAll('\r\n', '\n').split('\n');
-    final variants = <HlsVariantPlaylist>[];
-    for (var i = 0; i < lines.length; i++) {
-      final match = _streamInf.firstMatch(lines[i].trim());
-      if (match == null) continue;
-      final attributes = match.group(1)!;
-      final uri = _followingUri(lines, i + 1, baseUri);
-      if (uri == null) continue;
-      variants.add(
-        HlsVariantPlaylist(
-          uri: uri,
-          bandwidth:
-              int.tryParse(_bandwidth.firstMatch(attributes)?.group(1) ?? '') ??
-              0,
-          resolution: _resolution.firstMatch(attributes)?.group(1),
-        ),
+  static Iterable<HlsVariantPlaylist> variants(String body, Uri baseUri) sync* {
+    String? attributes;
+    for (final rawLine in LineSplitter.split(body)) {
+      final line = rawLine.trim();
+      if (line.startsWith('#EXT-X-STREAM-INF:')) {
+        attributes = line.substring('#EXT-X-STREAM-INF:'.length);
+        continue;
+      }
+      if (attributes == null || line.isEmpty || line.startsWith('#')) continue;
+      // RFC 8216 section 4.3.4.2: one URI belongs to the preceding STREAM-INF.
+      yield HlsVariantPlaylist(
+        uri: baseUri.resolve(line),
+        bandwidth:
+            int.tryParse(_bandwidth.firstMatch(attributes)?.group(1) ?? '') ??
+            0,
+        resolution: _resolution.firstMatch(attributes)?.group(1),
       );
+      attributes = null;
     }
-    return variants;
   }
 
   /// 选定一个变体：取 `BANDWIDTH` 最大的那个。
   ///
-  /// 带替代 rendition、没有变体、或变体地址都不可解析时返回 null，调用方应放弃
-  /// 去广告并回落到原始地址。
+  /// 带替代 rendition 或没有变体时返回 null，保留播放器的原始清单。
   static HlsVariantPlaylist? selectVariant(String body, Uri baseUri) {
     if (hasAlternativeRenditions(body)) return null;
-    final all = variants(body, baseUri);
-    if (all.isEmpty) return null;
-    return all.reduce((a, b) => b.bandwidth > a.bandwidth ? b : a);
-  }
-
-  /// `#EXT-X-STREAM-INF` 之后第一个非空、非标签行就是变体地址。
-  static Uri? _followingUri(List<String> lines, int from, Uri baseUri) {
-    for (var i = from; i < lines.length; i++) {
-      final line = lines[i].trim();
-      if (line.isEmpty || line.startsWith('#')) continue;
-      try {
-        return baseUri.resolve(line);
-      } catch (_) {
-        return null;
+    HlsVariantPlaylist? selected;
+    for (final variant in variants(body, baseUri)) {
+      if (selected == null || variant.bandwidth > selected.bandwidth) {
+        selected = variant;
       }
     }
-    return null;
+    return selected;
   }
 }

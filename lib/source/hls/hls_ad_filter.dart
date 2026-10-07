@@ -127,27 +127,21 @@ class HlsPlaylist {
   }
 
   /// 按 `#EXT-X-DISCONTINUITY` 切分出的连续分片组。
-  List<({int first, List<int> indices, double seconds})> groups() {
-    final groups = <({int first, List<int> indices, double seconds})>[];
-    var indices = <int>[];
+  List<({int first, int end, double seconds})> groups() {
+    final groups = <({int first, int end, double seconds})>[];
+    var first = 0;
     var seconds = 0.0;
-    void flush() {
-      if (indices.isEmpty) return;
-      groups.add((
-        first: indices.first,
-        indices: List<int>.unmodifiable(indices),
-        seconds: seconds,
-      ));
-      indices = <int>[];
-      seconds = 0;
-    }
-
     for (var i = 0; i < segments.length; i++) {
-      if (segments[i].discontinuityBefore) flush();
-      indices.add(i);
+      if (i > first && segments[i].discontinuityBefore) {
+        groups.add((first: first, end: i, seconds: seconds));
+        first = i;
+        seconds = 0;
+      }
       seconds += segments[i].duration;
     }
-    flush();
+    if (first < segments.length) {
+      groups.add((first: first, end: segments.length, seconds: seconds));
+    }
     return groups;
   }
 }
@@ -211,13 +205,14 @@ abstract final class HlsAdFilter {
       segments[index].uri,
       () => _safeProbe(probe, segments[index].uri),
     );
-    final heads = await _mapConcurrent(groups, concurrency, (group) async {
+    final heads = await _mapConcurrent(groups.length, concurrency, (i) async {
+      final group = groups[i];
       final head = await fingerprintAt(group.first);
       if (head != null) return head;
       // 不因一次组首超时漏掉整组；最多补探中间和末尾两片。
       for (final index in {
-        group.indices[group.indices.length ~/ 2],
-        group.indices.last,
+        group.first + (group.end - group.first) ~/ 2,
+        group.end - 1,
       }) {
         final fallback = await fingerprintAt(index);
         if (fallback != null) return fallback;
@@ -250,20 +245,21 @@ abstract final class HlsAdFilter {
     for (var g = 0; g < groups.length; g++) {
       final head = heads[g];
       if (head == null || head.matches(dominant)) continue;
-      final indices = groups[g].indices;
-      if (indices.length == 1) {
-        drop.add(indices.first);
+      final group = groups[g];
+      final count = group.end - group.first;
+      if (count == 1) {
+        drop.add(group.first);
         continue;
       }
       final fingerprints = await _mapConcurrent(
-        indices,
+        count,
         concurrency,
-        fingerprintAt,
+        (i) => fingerprintAt(group.first + i),
       );
-      for (var k = 0; k < indices.length; k++) {
+      for (var k = 0; k < count; k++) {
         final fingerprint = fingerprints[k];
         if (fingerprint != null && !fingerprint.matches(dominant)) {
-          drop.add(indices[k]);
+          drop.add(group.first + k);
         }
       }
     }
@@ -273,11 +269,11 @@ abstract final class HlsAdFilter {
       return unchanged('异编码分片覆盖整条清单，判定为多路正片，跳过去广告');
     }
 
-    final ordered = drop.toList()..sort();
+    // Groups and their segments were visited in order; the set preserves it.
     var removedSeconds = 0.0;
     var runSeconds = 0.0;
     int? previous;
-    for (final index in ordered) {
+    for (final index in drop) {
       final duration = segments[index].duration;
       if (previous != null && index == previous + 1) {
         runSeconds += duration;
@@ -309,7 +305,7 @@ abstract final class HlsAdFilter {
     }
 
     final droppedLines = <int>{};
-    for (final index in ordered) {
+    for (final index in drop) {
       final segment = segments[index];
       for (var line = segment.firstLine; line <= segment.lastLine; line++) {
         droppedLines.add(line);
@@ -323,7 +319,7 @@ abstract final class HlsAdFilter {
           !drop.contains(group.first)) {
         continue;
       }
-      for (final index in group.indices) {
+      for (var index = group.first; index < group.end; index++) {
         if (!drop.contains(index)) {
           movedBoundaries.add(segments[index].firstLine);
           break;
@@ -343,10 +339,10 @@ abstract final class HlsAdFilter {
           'hls:${sha256.convert(utf8.encode(jsonEncode([
             for (var i = 0; i < segments.length; i++) [(segments[i].duration * 1000).round(), drop.contains(i)],
           ])))}',
-      removedSegments: ordered.length,
+      removedSegments: drop.length,
       removedSeconds: removedSeconds,
       detail:
-          '主体指纹 $dominant，删除 ${ordered.length} 个异编码分片，'
+          '主体指纹 $dominant，删除 ${drop.length} 个异编码分片，'
           '共 ${removedSeconds.toStringAsFixed(3)}s',
     );
   }
@@ -368,25 +364,25 @@ abstract final class HlsAdFilter {
   }
 
   /// 固定并发地映射，保持请求顺序无关但数量可控。
-  static Future<List<T?>> _mapConcurrent<S, T>(
-    List<S> items,
+  static Future<List<T?>> _mapConcurrent<T>(
+    int length,
     int concurrency,
-    Future<T?> Function(S item) action,
+    Future<T?> Function(int index) action,
   ) async {
-    final results = List<T?>.filled(items.length, null);
-    if (items.isEmpty) return results;
+    final results = List<T?>.filled(length, null);
+    if (length == 0) return results;
     var next = 0;
     Future<void> worker() async {
       while (true) {
         final index = next++;
-        if (index >= items.length) return;
-        results[index] = await action(items[index]);
+        if (index >= length) return;
+        results[index] = await action(index);
       }
     }
 
     final workers = concurrency < 1 ? 1 : concurrency;
     await Future.wait([
-      for (var i = 0; i < workers && i < items.length; i++) worker(),
+      for (var i = 0; i < workers && i < length; i++) worker(),
     ]);
     return results;
   }

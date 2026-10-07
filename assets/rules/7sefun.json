@@ -1,0 +1,154 @@
+{
+  "format": "anx-rule/2",
+  "id": "7sefun",
+  "name": "七色番",
+  "baseUrl": "https://www.7sefun.top",
+  "iconUrl": "https://www.7sefun.top/pc/img/favicon.ico",
+  "description": "七色番提供最新番剧TV、剧场版在线高速播放，每日及时更新，是动漫迷的不二选择！",
+  "headers": {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "*/*",
+    "Referer": "https://www.7sefun.top/"
+  },
+  "useWebview": true,
+  "search": [
+    {
+      "op": "fetch",
+      "url": "https://www.7sefun.top/vodsearch/-------------.html?wd={keyword}"
+    },
+    {
+      "op": "first",
+      "branches": [
+        [
+          {
+            "op": "jsonSeries",
+            "listPath": "list",
+            "idKey": "id",
+            "nameKey": "name",
+            "imageKey": "pic",
+            "urlKey": "url"
+          }
+        ],
+        [
+          {
+            "op": "searchList",
+            "selectors": [
+              "a.video-wrapper[href*=\"/voddetail/\"], .module-card-item, .module-poster-item, .module-search-item, .stui-vodlist__box, .stui-vodlist li, a[href*=\"/voddetail/\"], a[href*=\"/vod/detail/\"], a[href*=\"/detail/\"]"
+            ]
+          }
+        ]
+      ]
+    }
+  ],
+  "detail": [
+    {
+      "op": "follow"
+    },
+    {
+      "op": "episodes",
+      "listSelectors": [
+        ".vod-play-list-container, .module-play-list, .module-player-list, .stui-content__playlist, .anthology-list-box, .anthology-list-play, .playlist, .play-list, .play_list, .episode-list, #playlist, .episodes"
+      ]
+    }
+  ],
+  "play": [
+    {
+      "op": "follow"
+    },
+    {
+      "op": "setVar",
+      "name": "page",
+      "value": "{url:raw}"
+    },
+    {
+      "op": "regex",
+      "pattern": "\"from\":\"([^\"]*)\"",
+      "group": 1
+    },
+    {
+      "op": "setVar",
+      "name": "from",
+      "value": "{url:raw}"
+    },
+    {
+      "op": "template",
+      "value": "{episodeId:raw}"
+    },
+    {
+      "op": "regex",
+      "pattern": "/vodplay/(\\d+)-",
+      "group": 1
+    },
+    {
+      "op": "setVar",
+      "name": "vodId",
+      "value": "{url:raw}"
+    },
+    {
+      "op": "template",
+      "value": "{page:raw}"
+    },
+    {
+      "op": "first",
+      "branches": [
+        [
+          {
+            "op": "playerAaaa",
+            "var": "player_aaaa",
+            "key": "url"
+          },
+          {
+            "op": "setVar",
+            "name": "playUrl",
+            "value": "{url:raw}"
+          },
+          {
+            "op": "first",
+            "branches": [
+              [
+                {
+                  "op": "template",
+                  "value": "{playUrl:raw}"
+                },
+                {
+                  "op": "regex",
+                  "pattern": "^(https?://\\S+\\.(?:m3u8|mp4|flv|mkv)(?:[?#]\\S*)?)$",
+                  "group": 1,
+                  "ignoreCase": true
+                }
+              ],
+              [
+                {
+                  "op": "fetch",
+                  "url": "/addons/dp/player/art.php?key=0&uid=0&from={from:raw}&id={vodId:raw}&jump=&url={playUrl:raw}"
+                },
+                {
+                  "op": "regex",
+                  "pattern": "\"url\"\\s*:\\s*\"(https?:[^\"]+)\"",
+                  "group": 1
+                }
+              ]
+            ]
+          }
+        ],
+        [
+          {
+            "op": "sniff",
+            "goal": "video",
+            "url": "{episodeId:raw}",
+            "followEmbeddedPlayer": true,
+            "timeoutMs": 45000,
+            "settleMs": 1500
+          }
+        ]
+      ]
+    },
+    {
+      "op": "setMediaHeaders",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://www.7sefun.top/"
+      }
+    }
+  ]
+}

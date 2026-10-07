@@ -1,12 +1,24 @@
+import 'dart:collection';
 import 'package:html/dom.dart' show Document, Element;
+import 'package:html/parser.dart' as html_parser;
+import 'package:xpath_selector_html_parser/xpath_selector_html_parser.dart';
 import 'package:baka/source/models/series.dart';
 import 'package:baka/source/models/episode.dart';
 import 'package:baka/source/models/source.dart';
 import 'package:baka/source/video_url_extractor.dart';
 
-/// Stateless HTML parsing for search results and episode lists.
+/// Shared HTML parsing. Each pipeline execution owns one last-page cache.
 class HtmlParser {
-  HtmlParser._();
+  String? _html;
+  Document? _document;
+
+  Document documentFor(String html) {
+    if (!identical(html, _html)) {
+      _document = html_parser.parse(html);
+      _html = html;
+    }
+    return _document!;
+  }
 
   static const _searchSelectors = [
     '.module-items .module-item',
@@ -27,28 +39,44 @@ class HtmlParser {
     required String baseUrl,
     List<String>? selectors,
     String? detailPattern,
+    String? listXPath,
+    String nameXPath = '',
+    String linkXPath = '',
   }) {
-    final allSelectors =
-        selectors?.followedBy(_searchSelectors) ?? _searchSelectors;
-
-    for (final selector in allSelectors) {
+    if (listXPath != null) {
+      final results = <Series>[];
+      final nodes = doc.documentElement!.queryXPath(listXPath).nodes;
+      for (final node in nodes) {
+        final link = linkXPath.isEmpty ? node : node.queryXPath(linkXPath).node;
+        final href = link?.attributes['href'] ?? '';
+        if (href.isEmpty) continue;
+        final name =
+            (nameXPath.isEmpty
+                    ? node.node.text
+                    : node.queryXPath(nameXPath).node?.text)
+                ?.trim() ??
+            '';
+        results.add(
+          Series(
+            VideoUrlExtractor.toAbsolute(href, baseUrl),
+            name.isEmpty ? '未知标题' : name,
+          ),
+        );
+      }
+      return results;
+    }
+    for (final selector in selectors ?? _searchSelectors) {
       if (selector.trim().isEmpty) continue;
-      try {
-        final elements = doc.querySelectorAll(selector);
-        if (elements.isEmpty) continue;
-        final results = <Series>[];
-        for (final element in elements) {
-          final series = _parseSeriesElement(element, baseUrl, detailPattern);
-          if (series != null) results.add(series);
-        }
-        if (results.isNotEmpty) return results;
-      } catch (_) {}
+      final elements = doc.querySelectorAll(selector);
+      if (elements.isEmpty) continue;
+      final results = <Series>[];
+      for (final element in elements) {
+        final series = _parseSeriesElement(element, baseUrl, detailPattern);
+        if (series != null) results.add(series);
+      }
+      if (results.isNotEmpty) return results;
     }
-
-    if (detailPattern != null && detailPattern.isNotEmpty) {
-      return _fallbackByDetailLinks(doc, baseUrl, detailPattern);
-    }
-    return [];
+    return const [];
   }
 
   static Series? _parseSeriesElement(
@@ -118,23 +146,6 @@ class HtmlParser {
     return '';
   }
 
-  static List<Series> _fallbackByDetailLinks(
-    Document doc,
-    String baseUrl,
-    String pattern,
-  ) {
-    final seen = <String>{};
-    final results = <Series>[];
-    for (final link in doc.querySelectorAll('a[href*="$pattern"]')) {
-      final href = (link.attributes['href'] ?? '').trim();
-      if (href.isEmpty || !seen.add(href)) continue;
-      final name = (link.attributes['title'] ?? link.text).trim();
-      if (name.length < 2) continue;
-      results.add(Series(VideoUrlExtractor.toAbsolute(href, baseUrl), name));
-    }
-    return results;
-  }
-
   static const _tabSelectors = [
     '.play_source_tab a',
     '.anthology-tab a',
@@ -172,7 +183,32 @@ class HtmlParser {
     required String baseUrl,
     List<String>? listSelectors,
     List<String>? tabSelectors,
+    String? roadsXPath,
+    String itemsXPath = '',
   }) {
+    if (roadsXPath != null) {
+      final sources = <Source>[];
+      for (final road in doc.documentElement!.queryXPath(roadsXPath).nodes) {
+        final items = road.queryXPath(itemsXPath).nodes;
+        final episodes = <Episode>[];
+        for (var i = 0; i < items.length; i++) {
+          final href = items[i].attributes['href'] ?? '';
+          if (href.isEmpty) continue;
+          final name = items[i].node.text?.replaceAll(_wsRegex, '') ?? '';
+          episodes.add(
+            Episode(
+              VideoUrlExtractor.toAbsolute(href, baseUrl),
+              i,
+              name.isEmpty ? '第${i + 1}集' : name,
+            ),
+          );
+        }
+        if (episodes.isNotEmpty) {
+          sources.add(Source(episodes, '播放列表${sources.length + 1}'));
+        }
+      }
+      return sources;
+    }
     final labels = _findTabLabels(doc, tabSelectors ?? _tabSelectors);
     final selectors = listSelectors ?? _listSelectors;
 
@@ -181,18 +217,30 @@ class HtmlParser {
       if (containers.isEmpty) continue;
 
       final sources = <Source>[];
-      final seen = <String>{};
+      final seen = HashSet<List<Episode>>(
+        equals: _sameEpisodeIds,
+        hashCode: (episodes) =>
+            Object.hashAll(episodes.map((e) => e.episodeId)),
+      );
       var sourceIndex = 0;
       for (final container in containers) {
         final episodes = _extractEpisodes(container, baseUrl);
         if (episodes.isEmpty) continue;
         final index = sourceIndex++;
-        if (!seen.add(episodes.map((e) => e.episodeId).join('\x00'))) continue;
+        if (!seen.add(episodes)) continue;
         sources.add(Source(episodes, _sourceName(index, labels)));
       }
       if (sources.isNotEmpty) return sources;
     }
     return [];
+  }
+
+  static bool _sameEpisodeIds(List<Episode> a, List<Episode> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].episodeId != b[i].episodeId) return false;
+    }
+    return true;
   }
 
   static List<Episode> _extractEpisodes(Element container, String baseUrl) {

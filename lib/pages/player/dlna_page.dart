@@ -1,4 +1,4 @@
-import 'package:baka/utils/duration_utils.dart';
+import 'package:baka/utils/format_utils.dart';
 import 'package:baka/widgets/player/settings_panel.dart';
 import 'dart:async';
 

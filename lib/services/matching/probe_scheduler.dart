@@ -52,14 +52,6 @@ class ProbeScheduler<T> {
     _settleDrain();
   }
 
-  /// 重新开始一轮：清空去重记录与队列，供同一控制器重复搜索。
-  void reset() {
-    _closed = false;
-    _queue.clear();
-    _seen.clear();
-    _settleDrain();
-  }
-
   /// 队列清空且在途任务全部结束后完成。
   Future<void> get drained {
     if (!isBusy) return Future<void>.value();

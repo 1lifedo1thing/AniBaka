@@ -31,13 +31,13 @@ class Anime4K {
   static const _anibakaClear = 'AniBaka_Clear_v1.glsl';
 
   static List<String> pipelineFiles(
-    VideoEnhancementPipeline pipeline, {
+    VideoEnhancementMode pipeline, {
     bool? mobile,
   }) {
     final useMobile = mobile ?? isMobilePlatform;
     return switch (pipeline) {
-      VideoEnhancementPipeline.off => const <String>[],
-      VideoEnhancementPipeline.low =>
+      VideoEnhancementMode.off => const <String>[],
+      VideoEnhancementMode.low =>
         useMobile
             ? const [_clamp, _anibakaClear, _restoreM, _upscaleS]
             : const [
@@ -49,7 +49,7 @@ class Anime4K {
                 _downX4,
                 _upscaleS,
               ],
-      VideoEnhancementPipeline.medium =>
+      VideoEnhancementMode.medium =>
         useMobile
             ? const [_clamp, _anibakaClear, _restoreM, _upscaleM]
             : const [
@@ -61,7 +61,7 @@ class Anime4K {
                 _downX4,
                 _upscaleS,
               ],
-      VideoEnhancementPipeline.high =>
+      VideoEnhancementMode.high =>
         useMobile
             ? const [
                 _clamp,
@@ -81,7 +81,7 @@ class Anime4K {
                 _downX4,
                 _upscaleM,
               ],
-      VideoEnhancementPipeline.ultra =>
+      VideoEnhancementMode.ultra =>
         useMobile
             ? const [
                 _clamp,
@@ -107,7 +107,7 @@ class Anime4K {
   }
 
   static Future<String> shaderPath(
-    VideoEnhancementPipeline pipeline, {
+    VideoEnhancementMode pipeline, {
     bool? mobile,
   }) async {
     final files = pipelineFiles(pipeline, mobile: mobile);
@@ -185,12 +185,3 @@ class Anime4K {
     return file;
   }
 }
-
-VideoEnhancementPipeline selectEnhancementPipeline(VideoEnhancementMode mode) =>
-    switch (mode) {
-      VideoEnhancementMode.off => VideoEnhancementPipeline.off,
-      VideoEnhancementMode.low => VideoEnhancementPipeline.low,
-      VideoEnhancementMode.medium => VideoEnhancementPipeline.medium,
-      VideoEnhancementMode.high => VideoEnhancementPipeline.high,
-      VideoEnhancementMode.ultra => VideoEnhancementPipeline.ultra,
-    };

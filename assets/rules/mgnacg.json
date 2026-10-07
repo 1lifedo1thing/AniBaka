@@ -48,130 +48,90 @@
       }
     },
     {
+      "op": "setVar",
+      "name": "watchHtml",
+      "value": "{url:raw}"
+    },
+    {
+      "op": "regex",
+      "pattern": "\"from\"\\s*:\\s*\"([^\"]+)\"",
+      "group": 1
+    },
+    {
+      "op": "setVar",
+      "name": "from",
+      "value": "{url:raw}"
+    },
+    {
+      "op": "template",
+      "value": "{watchHtml:raw}"
+    },
+    {
+      "op": "regex",
+      "pattern": "player_aaaa\\s*=\\s*\\{[\\s\\S]*?\"url\"\\s*:\\s*\"([^\"]+)\"",
+      "group": 1
+    },
+    {
+      "op": "setVar",
+      "name": "encoded",
+      "value": "{url:raw}"
+    },
+    {
+      "op": "fetch",
+      "url": "/static/js/playerconfig.js",
+      "headers": {
+        "Referer": "https://www.mgnacg.com/"
+      }
+    },
+    {
+      "op": "regex",
+      "pattern": "\"{from:raw}\"\\s*:\\s*\\{[\\s\\S]*?\"parse\"\\s*:\\s*\"([^\"]*)\"",
+      "group": 1
+    },
+    {
+      "op": "replace",
+      "pattern": "\\/",
+      "replacement": "/"
+    },
+    {
+      "op": "setVar",
+      "name": "parser",
+      "value": "{url:raw}"
+    },
+    {
+      "op": "template",
+      "value": "{parser:raw}{encoded:raw}"
+    },
+    {
+      "op": "setVar",
+      "name": "parserUrl",
+      "value": "{url:raw}"
+    },
+    {
+      "op": "follow",
+      "headers": {
+        "Referer": "https://www.mgnacg.com/"
+      }
+    },
+    {
       "op": "first",
       "branches": [
         [
           {
-            "op": "playerAaaa",
-            "var": "player_aaaa",
-            "key": "url"
-          },
-          {
-            "op": "regex",
-            "pattern": "^(https?:\\/\\/\\S+\\.(?:m3u8|mp4|mkv|flv)(?:[?#]\\S*)?)$",
-            "group": 1
-          },
+            "op": "playerDecrypt",
+            "salt": "Mknacg123321"
+          }
+        ],
+        [
           {
             "op": "videoUrl"
           }
         ],
         [
           {
-            "op": "setVar",
-            "name": "watchHtml",
-            "value": "{url:raw}"
-          },
-          {
-            "op": "regex",
-            "pattern": "\"from\"\\s*:\\s*\"([^\"]+)\"",
-            "group": 1
-          },
-          {
-            "op": "setVar",
-            "name": "from",
-            "value": "{url:raw}"
-          },
-          {
-            "op": "template",
-            "value": "{watchHtml:raw}"
-          },
-          {
-            "op": "regex",
-            "pattern": "player_aaaa\\s*=\\s*\\{[\\s\\S]*?\"url\"\\s*:\\s*\"([^\"]+)\"",
-            "group": 1
-          },
-          {
-            "op": "setVar",
-            "name": "encoded",
-            "value": "{url:raw}"
-          },
-          {
-            "op": "fetch",
-            "url": "/static/js/playerconfig.js",
-            "headers": {
-              "Referer": "https://www.mgnacg.com/"
-            }
-          },
-          {
-            "op": "regex",
-            "pattern": "\"{from:raw}\"\\s*:\\s*\\{[\\s\\S]*?\"parse\"\\s*:\\s*\"([^\"]*)\"",
-            "group": 1
-          },
-          {
-            "op": "replace",
-            "pattern": "\\/",
-            "replacement": "/"
-          },
-          {
-            "op": "setVar",
-            "name": "parser",
-            "value": "{url:raw}"
-          },
-          {
-            "op": "template",
-            "value": "{parser:raw}{encoded:raw}"
-          },
-          {
-            "op": "regex",
-            "pattern": "^(https?:\\/\\/\\S+)$",
-            "group": 1
-          },
-          {
-            "op": "setVar",
-            "name": "parserUrl",
-            "value": "{url:raw}"
-          },
-          {
-            "op": "follow",
-            "headers": {
-              "Referer": "https://www.mgnacg.com/"
-            }
-          },
-          {
-            "op": "first",
-            "branches": [
-              [
-                {
-                  "op": "playerDecrypt",
-                  "salt": "Mknacg123321"
-                },
-                {
-                  "op": "regex",
-                  "pattern": "^(https?:\\/\\/\\S+\\.(?:m3u8|mp4|mkv|flv)(?:[?#]\\S*)?)$",
-                  "group": 1
-                }
-              ],
-              [
-                {
-                  "op": "videoUrl"
-                }
-              ],
-              [
-                {
-                  "op": "sniff",
-                  "goal": "video",
-                  "url": "{parserUrl:raw}"
-                }
-              ]
-            ]
-          }
-        ],
-        [
-          {
             "op": "sniff",
             "goal": "video",
-            "url": "{episodeId:raw}",
-            "followEmbeddedPlayer": true
+            "url": "{parserUrl:raw}"
           }
         ]
       ]

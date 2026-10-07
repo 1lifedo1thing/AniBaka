@@ -23,7 +23,10 @@ class MediaReadiness {
     final value = token?.trim() ?? '';
     if (value.isEmpty) return MediaTokenKind.empty;
     if (isTorrentLink(value)) return MediaTokenKind.torrent;
-    if (_looksLikeDirectMedia(value)) return MediaTokenKind.directMedia;
+    if (VideoUrlExtractor.isPlayable(value) ||
+        VideoUrlExtractor.isVideoUrl(value)) {
+      return MediaTokenKind.directMedia;
+    }
     return MediaTokenKind.needsResolve;
   }
 
@@ -32,23 +35,10 @@ class MediaReadiness {
     final value = url?.trim() ?? '';
     if (value.isEmpty) return false;
     if (isTorrentLink(value)) return true;
-    if (VideoUrlExtractor.isPlayable(value) || VideoUrlExtractor.isVideoUrl(value)) {
+    if (VideoUrlExtractor.isPlayable(value) ||
+        VideoUrlExtractor.isVideoUrl(value)) {
       return true;
     }
-    return _looksLikeBareStream(value);
+    return VideoUrlExtractor.looksLikeBareStream(value);
   }
-
-  static bool isDirectMedia(String? token) =>
-      classify(token) == MediaTokenKind.directMedia;
-
-  static bool needsResolve(String? token) =>
-      classify(token) == MediaTokenKind.needsResolve;
-
-  static bool _looksLikeDirectMedia(String value) =>
-      VideoUrlExtractor.isPlayable(value) ||
-      VideoUrlExtractor.isVideoUrl(value);
-
-  /// 形态不定但确实是取流地址（网盘直链、`/api/media?id=` 等）。
-  static bool _looksLikeBareStream(String value) =>
-      VideoUrlExtractor.looksLikeBareStream(value);
 }

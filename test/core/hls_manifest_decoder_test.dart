@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:baka/source/hls/hls_manifest_decoder.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -16,22 +15,17 @@ const _animoeDecoder = <String, dynamic>{
 };
 
 void main() {
-  test(
-    'decodes a captured Animoe binary playlist prefix without mutating it',
-    () {
-      final bytes = File(
-        'test/fixtures/hls/animoe_manifest_prefix.bin',
-      ).readAsBytesSync();
-      final original = List<int>.from(bytes);
-      final expected = File(
-        'test/fixtures/hls/animoe_manifest_prefix.txt',
-      ).readAsStringSync();
-      expect(HlsManifestDecoder.decode(bytes, _animoeDecoder), expected);
-      expect(expected, startsWith('#EXTM3U\n#EXT-X-VERSION:7'));
-      expect(expected, contains('#EXT-X-MAP:URI="https://nos.netease.com/'));
-      expect(bytes, original);
-    },
-  );
+  test('decodes a fixed XOR fixture without mutating its bytes', () {
+    final bytes = base64Decode(
+      'ZW5jIfaxxN2jxT9ZNlrnxMi9xtVnKTpN/dOnmrPVbS5eWp6s3tTc2WYueQ==',
+    );
+    final original = List<int>.of(bytes);
+    expect(
+      HlsManifestDecoder.decode(bytes, _animoeDecoder),
+      '#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-ENDLIST\n',
+    );
+    expect(bytes, original);
+  });
 
   test('accepts plain HLS and leaves unknown prefixes unchanged', () {
     const plain = '#EXTM3U\n#EXT-X-ENDLIST\n';

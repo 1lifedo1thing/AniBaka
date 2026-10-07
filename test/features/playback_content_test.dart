@@ -1,12 +1,15 @@
 import '../support/app_dependencies.dart';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:baka/core/api_transport.dart';
 import 'package:baka/instance.dart';
 import 'package:baka/models/playback_episode.dart';
 import 'package:baka/models/playback_request.dart';
+import 'package:baka/models/skip_segment.dart';
 import 'package:baka/services/collection/collection_repository.dart';
 import 'package:baka/services/playback/history_repository.dart';
+import 'package:baka/services/playback/danmaku_controller.dart';
 import 'package:baka/services/playback/playback_content.dart';
 import 'package:baka/services/source/source_repository.dart';
 import 'package:baka/source/adapter_base.dart';
@@ -89,15 +92,79 @@ class _KeepAliveAdapter extends AdapterBase {
   }
 }
 
+class _PendingDanmakuClient extends http.BaseClient {
+  final started = Completer<void>();
+  int requests = 0;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    expect(request.url.path, '/danmu/list');
+    requests++;
+    if (!started.isCompleted) started.complete();
+    await (request as http.AbortableRequest).abortTrigger;
+    throw http.RequestAbortedException(request.url);
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test(
+    'skip matching requires one main episode and preserves decimal numbers',
+    () {
+      final episodes = <Map<String, dynamic>>[
+        {'id': 1, 'type': 1, 'sort': 2.5},
+        {'id': 2, 'type': 0, 'sort': 2.5},
+        {'id': 3, 'type': 0, 'sort': 3},
+      ];
+      expect(matchSkipEpisode('EP 2.5', episodes), 2);
+      expect(matchSkipEpisode('第3话', episodes), 3);
+      expect(matchSkipEpisode('第三话', episodes), isNull);
+      episodes.add({'id': 4, 'type': 0, 'sort': 2.5});
+      expect(matchSkipEpisode('2.5', episodes), isNull);
+    },
+  );
 
   group('content', () {
     setUp(() async {
       SharedPreferences.setMockInitialValues({});
       Instances.sp = await SharedPreferences.getInstance();
-      configureTestServices();
+      configurePlaybackServices();
     });
+    test('leaving playback cancels danmaku without a network notice', () async {
+      DanmakuController.clearCache();
+      final client = _PendingDanmakuClient();
+      addTearDown(client.close);
+      var notices = 0;
+      apiTransport = ApiTransport(
+        session: apiTransport.session,
+        client: client,
+        version: 'test',
+        credentialOrigin: () => Uri.parse('https://www.anibaka.com'),
+        onError: (_) => notices++,
+      );
+      final content = PlaybackContent(
+        request: PlaybackRequest.fromMap({
+          'source': 'bgm',
+          'bgmId': 42,
+          'title': 'Pending episode',
+        }),
+        sources: sourceRepository,
+        collections: collections,
+        history: historyRepository,
+      );
+      addTearDown(content.dispose);
+      final assertion = expectLater(
+        content.fetchDanmakuData(0),
+        throwsA(isA<http.RequestAbortedException>()),
+      );
+      await client.started.future;
+      await content.dispose();
+      await assertion;
+      expect(notices, 0);
+      expect(client.requests, 1);
+      expect(DanmakuController.cacheSize.items, 0);
+    });
+
     test(
       'session owns selection and metadata without mutating the handoff',
       () async {
@@ -124,8 +191,11 @@ void main() {
           () => content.data['title'] = 'mutation',
           throwsUnsupportedError,
         );
-        final projection = content.buildLegacyData()..['title'] = 'view only';
-        expect(projection['currPlayIndex'], 1);
+        final projection = content.buildDetailData()..['title'] = 'view only';
+        expect(projection.containsKey('videoList'), isFalse);
+        expect(projection['title'], 'view only');
+        expect(identical(content.request.episodes, handoff.episodes), isTrue);
+        expect(identical(content.data, handoff.metadata), isTrue);
         expect(content.title, 'One');
         content.adoptPlaybackRequest(
           PlaybackRequest(
@@ -141,32 +211,29 @@ void main() {
         expect(content.request.prefetched, isNull);
       },
     );
-    test(
-      'Bangumi subject ids are never queried as post ids',
-      () async {
-        final requested = _recordRequestPaths(
-          (_) => _jsonResponse(const {'code': 200, 'data': null}),
-        );
-        final service = PlaybackContent(
-          sources: sourceRepository,
-          collections: collections,
-          history: historyRepository,
-          request: PlaybackRequest.fromMap(<String, dynamic>{
-            'source': 'bgm',
-            'id': 1773,
-            'bgmId': 1773,
-            'title': '示例番剧',
-          }),
-        );
-        addTearDown(service.dispose);
+    test('Bangumi subject ids are never queried as post ids', () async {
+      final requested = _recordRequestPaths(
+        (_) => _jsonResponse(const {'code': 200, 'data': null}),
+      );
+      final service = PlaybackContent(
+        sources: sourceRepository,
+        collections: collections,
+        history: historyRepository,
+        request: PlaybackRequest.fromMap(<String, dynamic>{
+          'source': 'bgm',
+          'id': 1773,
+          'bgmId': 1773,
+          'title': '示例番剧',
+        }),
+      );
+      addTearDown(service.dispose);
 
-        await service.loadDetail();
+      await service.loadDetail();
 
-        expect(requested, isEmpty, reason: 'BGM 条目 id 不是贴文 id');
-        expect(service.validPostId, isNull);
-        expect(service.videoList, isEmpty);
-      },
-    );
+      expect(requested, isEmpty, reason: 'BGM 条目 id 不是贴文 id');
+      expect(service.validPostId, isNull);
+      expect(service.videoList, isEmpty);
+    });
 
     test('site posts still load their catalog from the post detail', () async {
       final requested = _recordRequestPaths((request) {

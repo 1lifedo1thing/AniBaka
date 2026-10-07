@@ -8,58 +8,54 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-class DlssToolchain {
-  const DlssToolchain({required this.executable, required this.ffmpeg});
+/// Runtime DLL directory. Older installations remain usable without their tools.
+class DlssRuntime {
+  const DlssRuntime(this.directory);
+  static const _settingsKey = 'dlss5_runtime_directory';
+  final String directory;
 
-  static const _settingsKey = 'dlss5_toolchain';
-  final String executable;
-  final String ffmpeg;
-
-  static DlssToolchain load(SharedPreferences preferences) {
+  static DlssRuntime load(SharedPreferences preferences) {
+    final directory = preferences.getString(_settingsKey);
+    if (directory != null && directory.isNotEmpty) {
+      return DlssRuntime(directory);
+    }
+    String? executable;
     try {
-      final saved = preferences.getString(_settingsKey);
+      final saved = preferences.getString('dlss5_toolchain');
       if (saved != null) {
-        final data = jsonDecode(saved) as Map<String, dynamic>;
-        return DlssToolchain(
-          executable: data['executable'] as String,
-          ffmpeg: data['ffmpeg'] as String,
-        );
+        executable =
+            (jsonDecode(saved) as Map<String, dynamic>)['executable']
+                as String?;
       }
     } on FormatException {
       // Fall back to the original manual configuration.
     } on TypeError {
       // Ignore incomplete settings from an interrupted migration.
     }
-    return DlssToolchain(
-      executable: preferences.getString('dlss5_tool_path') ?? '',
-      ffmpeg: preferences.getString('dlss5_ffmpeg_path') ?? '',
+    executable ??= preferences.getString('dlss5_tool_path');
+    return DlssRuntime(
+      executable == null || executable.isEmpty
+          ? ''
+          : File(executable).parent.path,
     );
   }
 
   Future<void> save(SharedPreferences preferences) async {
-    // A single setting prevents mixing paths from two different installations.
-    final saved = await preferences.setString(
-      _settingsKey,
-      jsonEncode({'executable': executable, 'ffmpeg': ffmpeg}),
-    );
-    if (!saved) throw StateError('工具已下载，但路径保存失败，请重试');
+    if (!await preferences.setString(_settingsKey, directory)) {
+      throw StateError('运行库已下载，但路径保存失败，请重试');
+    }
   }
 
   Future<bool> isAvailable() async {
-    if (!Platform.isWindows || executable.isEmpty || ffmpeg.isEmpty) {
-      return false;
-    }
-    final toolDirectory = File(executable).parent.path;
-    final ffmpegDirectory = File(ffmpeg).parent.path;
-    for (final path in [
-      executable,
-      ffmpeg,
-      '$toolDirectory${Platform.pathSeparator}nvngx_dlssnr.dll',
-      '$toolDirectory${Platform.pathSeparator}nvngx_dlss.dll',
-      '$toolDirectory${Platform.pathSeparator}nvngx.dll_dlssnr.dll',
-      '$ffmpegDirectory${Platform.pathSeparator}ffprobe.exe',
+    if (!Platform.isWindows || directory.isEmpty) return false;
+    for (final name in [
+      'nvngx_dlssnr.dll',
+      'nvngx_dlss.dll',
+      'nvngx.dll_dlssnr.dll',
     ]) {
-      if (!await File(path).exists()) return false;
+      if (!await File('$directory${Platform.pathSeparator}$name').exists()) {
+        return false;
+      }
     }
     return true;
   }
@@ -74,19 +70,13 @@ class _ToolPackage {
 }
 
 /// Installs fixed upstream releases without invoking installers or changing PATH.
-class DlssToolInstaller extends ChangeNotifier {
+class DlssRuntimeInstaller extends ChangeNotifier {
   static const _packages = [
     _ToolPackage(
-      'DLSS 5 增强程序',
+      'DLSS 运行库',
       'https://github.com/DaniilSokolyuk/video2dlssnr/releases/download/v1.4.1/video2dlssnr_release.zip',
       247433416,
       'cf1e01b3715b5ee75708744a5d5e6a4f2a96b5504834dd854b4c06388f230ccf',
-    ),
-    _ToolPackage(
-      'FFmpeg',
-      'https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-essentials_build.zip',
-      114768076,
-      '60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba',
     ),
   ];
 
@@ -114,7 +104,7 @@ class DlssToolInstaller extends ChangeNotifier {
     _notify();
   }
 
-  Future<DlssToolchain?> install(Directory directory) async {
+  Future<DlssRuntime?> install(Directory directory) async {
     if (running) return null;
     running = true;
     _cancelled = false;
@@ -192,30 +182,22 @@ class DlssToolInstaller extends ChangeNotifier {
         _notify();
         // Only strings cross the isolate boundary. Large archives are read
         // lazily from disk, and decompression never blocks the UI isolate.
-        await compute(_extractToolPackage, (archiveFile.path, unpacked.path));
+        await compute(extractDlssRuntimeArchive, (
+          archiveFile.path,
+          unpacked.path,
+        ));
         _checkCancelled();
         await archiveFile.delete();
       }
-      status = '正在配置工具路径…';
+      status = '正在配置运行库路径…';
       _notify();
-      final tool = await _findExecutable(
+      final runtime = await _findRuntimeDirectory(
         Directory('${staging.path}${Platform.pathSeparator}package-0'),
-        'video2dlssnr.exe',
-        'nvngx_dlssnr.dll',
       );
-      final ffmpeg = await _findExecutable(
-        Directory('${staging.path}${Platform.pathSeparator}package-1'),
-        'ffmpeg.exe',
-        'ffprobe.exe',
-      );
-      if (!await DlssToolchain(
-        executable: tool.path,
-        ffmpeg: ffmpeg.path,
-      ).isAvailable()) {
+      if (!await DlssRuntime(runtime.path).isAvailable()) {
         throw StateError('增强包缺少 DLSS 神经渲染、超分辨率或转接运行库，请检查下载来源');
       }
-      final toolRelative = tool.path.substring(staging.path.length + 1);
-      final ffmpegRelative = ffmpeg.path.substring(staging.path.length + 1);
+      final runtimeRelative = runtime.path.substring(staging.path.length + 1);
       await File(
         '${staging.path}${Platform.pathSeparator}installation.json',
       ).writeAsString(
@@ -229,8 +211,7 @@ class DlssToolInstaller extends ChangeNotifier {
                 'bytes': package.bytes,
               },
           ],
-          'executable': toolRelative,
-          'ffmpeg': ffmpegRelative,
+          'runtime': runtimeRelative,
         }),
       );
       _checkCancelled();
@@ -240,9 +221,8 @@ class DlssToolInstaller extends ChangeNotifier {
       // A fresh directory keeps an existing installation usable during setup.
       staging = await staging.rename(destination);
       _checkCancelled();
-      final result = DlssToolchain(
-        executable: '${staging.path}${Platform.pathSeparator}$toolRelative',
-        ffmpeg: '${staging.path}${Platform.pathSeparator}$ffmpegRelative',
+      final result = DlssRuntime(
+        '${staging.path}${Platform.pathSeparator}$runtimeRelative',
       );
       staging = null; // Ownership passes to the saved configuration.
       progress = 1;
@@ -278,11 +258,9 @@ class DlssToolInstaller extends ChangeNotifier {
     }
   }
 
-  Future<File> _findExecutable(
-    Directory root,
-    String name,
-    String companion,
-  ) async {
+  Future<Directory> _findRuntimeDirectory(Directory root) async {
+    const name = 'nvngx_dlss.dll';
+    const companion = 'nvngx.dll_dlssnr.dll';
     final matches = <File>[];
     await for (final entity in root.list(recursive: true, followLinks: false)) {
       _checkCancelled();
@@ -301,12 +279,12 @@ class DlssToolInstaller extends ChangeNotifier {
     try {
       final header = await handle.read(2);
       if (header.length != 2 || header[0] != 0x4d || header[1] != 0x5a) {
-        throw StateError('$name 不是有效的 Windows 程序');
+        throw StateError('$name 不是有效的 Windows 运行库');
       }
     } finally {
       await handle.close();
     }
-    return file;
+    return file.parent;
   }
 
   @override
@@ -321,7 +299,8 @@ class _InstallCancelled implements Exception {
   const _InstallCancelled();
 }
 
-void _extractToolPackage((String, String) paths) {
+@visibleForTesting
+void extractDlssRuntimeArchive((String, String) paths) {
   final input = InputFileStream(paths.$1);
   final directory = Directory(paths.$2);
   final seen = <String>{};
@@ -358,18 +337,26 @@ void _extractToolPackage((String, String) paths) {
       if (entry.size < 0 || totalBytes > 2 * 1024 * 1024 * 1024) {
         throw const FormatException('压缩包解压体积超出限制');
       }
+      final name = parts.last.toLowerCase();
+      if (entry.isDirectory ||
+          (!const {
+                'nvngx_dlss.dll',
+                'nvngx_dlssnr.dll',
+                'nvngx.dll_dlssnr.dll',
+              }.contains(name) &&
+              !name.startsWith('license') &&
+              !name.startsWith('notice') &&
+              !name.startsWith('readme'))) {
+        continue;
+      }
       final target =
           '${directory.path}${Platform.pathSeparator}${parts.join(Platform.pathSeparator)}';
-      if (entry.isDirectory) {
-        Directory(target).createSync(recursive: true);
-      } else {
-        File(target).parent.createSync(recursive: true);
-        final output = OutputFileStream(target);
-        try {
-          entry.writeContent(output);
-        } finally {
-          output.closeSync();
-        }
+      File(target).parent.createSync(recursive: true);
+      final output = OutputFileStream(target);
+      try {
+        entry.writeContent(output);
+      } finally {
+        output.closeSync();
       }
     }
   } finally {

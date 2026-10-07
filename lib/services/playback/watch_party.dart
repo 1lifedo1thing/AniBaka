@@ -83,9 +83,6 @@ class WatchPartyService {
   String? _pendingPingId;
   final Stopwatch _pingClock = Stopwatch();
 
-  @visibleForTesting
-  bool get hasAttachedPlayer => _controller != null && _content != null;
-
   WatchPartyMedia? get currentMedia {
     final content = _content;
     return content == null ? null : _currentMedia(content);

@@ -295,6 +295,7 @@ class VideoUrlExtractor {
   }
 
   static String toAbsolute(String url, String baseUrl) {
+    url = url.trim();
     if (url.isEmpty) return url;
     if (url.startsWith('http')) return url;
     if (url.startsWith('//')) {

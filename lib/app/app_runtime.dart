@@ -7,6 +7,7 @@ import 'package:baka/api/api_config.dart';
 import 'package:baka/api/auth_api.dart';
 import 'package:baka/api/bangumi_account_api.dart';
 import 'package:baka/app/platform_setup.dart';
+import 'package:baka/app/navigation.dart';
 import 'package:baka/app/usage_tracker.dart';
 import 'package:baka/app/watch_party_links.dart';
 import 'package:baka/app_state.dart';
@@ -28,7 +29,7 @@ import 'package:baka/services/source/source_repository.dart';
 import 'package:baka/core/app_logger.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:baka/widgets/baka_player/controller.dart';
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
 import 'package:get/get.dart' hide ContextExtensionss;
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:http/io_client.dart';
@@ -41,6 +42,7 @@ class AppRuntime {
   final Stream<Uri>? incomingLinks;
   final _cleanup = <FutureOr<void> Function()>[];
   bool _ready = false;
+  String? _notifiedSourceUpdates;
   Future<void>? _initializing, _closing;
   Set<PlaybackController>? _playbacks;
   Set<PlaybackController> get playbacks =>
@@ -142,19 +144,21 @@ class AppRuntime {
     Get.put(party, permanent: true);
     Get.put(links, permanent: true);
     Get.put(mediaSession, permanent: true);
-    downloads.onCompleted = (task) => showActionSnackBar(
+    downloads.onCompleted = (task) => showSnackBar(
       '已缓存 ${task.title}',
-      actionLabel: '前往缓存中心',
-      onAction: () {
-        final context = Instances.navigatorKey.currentContext;
-        if (context != null) {
-          Navigator.of(context).push(
-            PageRouteBuilder(
-              pageBuilder: (_, _, _) => const DownloadManagerPage(),
-            ),
-          );
-        }
-      },
+      action: SnackBarAction(
+        label: '前往缓存中心',
+        onPressed: () {
+          final context = Instances.navigatorKey.currentContext;
+          if (context != null) {
+            Navigator.of(context).push(
+              PageRouteBuilder(
+                pageBuilder: (_, _, _) => const DownloadManagerPage(),
+              ),
+            );
+          }
+        },
+      ),
     );
   }
 
@@ -163,6 +167,31 @@ class AppRuntime {
     _ready = true;
     links.markReady();
     unawaited(DauTracker.track());
+    unawaited(checkSourceUpdates());
+  }
+
+  Future<void> checkSourceUpdates() async {
+    if (!_ready || _closing != null) return;
+    await ruleRepository.checkForUpdates();
+    if (!_ready || _closing != null || ruleRepository.updateCount == 0) return;
+    final versions =
+        ruleRepository.hubCatalog.updates
+            .map((rule) => '${rule.item.id}:${rule.item.version}')
+            .toList()
+          ..sort();
+    final signature = versions.join(',');
+    if (_notifiedSourceUpdates == signature) return;
+    _notifiedSourceUpdates = signature;
+    showSnackBar(
+      '${ruleRepository.updateCount} 个源有更新，可修复搜索或播放问题',
+      action: SnackBarAction(
+        label: '查看更新',
+        onPressed: () {
+          final context = Instances.navigatorKey.currentContext;
+          if (context != null) NavigationService.toSourceManagement(context);
+        },
+      ),
+    );
   }
 
   Future<void> close() => _closing ??= _close();

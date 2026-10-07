@@ -1,7 +1,7 @@
 import 'package:baka/core/api_transport.dart';
 import 'package:baka/services/account/bangumi_session.dart';
 import 'package:baka/api/post.dart';
-import 'package:baka/utils/date_util.dart';
+import 'package:baka/utils/format_utils.dart';
 import 'package:baka/widgets/common/image_actions.dart';
 import 'package:baka/utils/reg_utils.dart';
 import 'package:baka/utils/toast_utils.dart';
@@ -11,7 +11,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
@@ -530,7 +530,7 @@ class _CommentCardState extends State<_CommentCard> {
           },
           styleSheetTheme: MarkdownStyleSheetBaseTheme.platform,
           styleSheet: widget.markdownStyle,
-          sizedImageBuilder: (config) => _buildMarkdownImage(config.uri, theme),
+          imageBuilder: (uri, _, _) => _buildMarkdownImage(uri, theme),
         ),
       );
     }

@@ -9,15 +9,19 @@ void showSnackBar(
   String text, {
   ToastGravity gravity = ToastGravity.BOTTOM,
   bool isError = false,
+  SnackBarAction? action,
 }) {
-  debugPrint(text);
-  if (Platform.isWindows || Platform.isMacOS) {
+  if (action != null ||
+      Platform.isWindows ||
+      Platform.isMacOS ||
+      Platform.isLinux) {
     scaffoldMessengerKey.currentState?.showSnackBar(
       SnackBar(
         content: Text(text),
-        duration: const Duration(seconds: 2),
+        duration: Duration(seconds: action == null ? 2 : 4),
         behavior: SnackBarBehavior.floating,
         backgroundColor: isError ? const Color(0xFFD32F2F) : null,
+        action: action,
       ),
     );
   } else {
@@ -27,20 +31,4 @@ void showSnackBar(
       backgroundColor: isError ? const Color(0xFFD32F2F) : null,
     );
   }
-}
-
-void showActionSnackBar(
-  String text, {
-  required String actionLabel,
-  required VoidCallback onAction,
-}) {
-  debugPrint(text);
-  scaffoldMessengerKey.currentState?.showSnackBar(
-    SnackBar(
-      content: Text(text),
-      duration: const Duration(seconds: 4),
-      behavior: SnackBarBehavior.floating,
-      action: SnackBarAction(label: actionLabel, onPressed: onAction),
-    ),
-  );
 }

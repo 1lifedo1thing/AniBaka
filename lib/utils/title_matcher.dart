@@ -1,10 +1,4 @@
-import 'package:baka/utils/reg_utils.dart';
-
-/// 标题模糊匹配：归一化 + 子串包含判定。
-///
-/// 只保留最快的判定：归一化后一方包含另一方即按长度比例给分。
-/// 不再为每个候选构建 bigram 集合做 Dice 相似度——那需要 O(n) 的
-/// 分配与集合运算，而候选数远多于实际命中数。
+/// 标题归一化与子串相似度；同一查询复用归一化结果。
 class TitleFingerprint {
   TitleFingerprint(String raw) : normalized = normalize(raw);
 
@@ -44,7 +38,7 @@ class TitleFingerprint {
     // 一方含剧场版/季号而另一方不含时，子串关系不足以说明是同一部。
     final modMismatch = _hasModifier != other._hasModifier;
     final base = 0.65 + (shorter.length / longer.length) * 0.25;
-    return (modMismatch ? base * 0.6 : base).clamp(0.0, 0.95);
+    return modMismatch ? base * 0.6 : base;
   }
 }
 
@@ -151,32 +145,62 @@ List<String> buildSearchTitles(Iterable<String?> titles) {
     final title = raw?.trim().replaceAll(_spaceRe, ' ');
     if (title == null || title.isEmpty) continue;
 
-    final base = RegUtils.extractBaseTitle(title);
+    final base = extractBaseTitle(title);
     add(title, keepTitleUnits(base));
 
-    final base2 = RegUtils.extractBaseTitle(base);
-    if (base2 != base) add(base, keepTitleUnits(base2));
+    if (base != title) {
+      final base2 = extractBaseTitle(base);
+      if (base2 != base) add(base, keepTitleUnits(base2));
+    }
 
-    if (_endsWithBracket(title)) {
+    final hasTrailingBracket = switch (title.codeUnitAt(title.length - 1)) {
+      0x29 || 0x5D || 0xFF09 || 0x3011 => true,
+      _ => false,
+    };
+    if (hasTrailingBracket) {
       final stripped = title.replaceFirst(_trailingBracketRe, '');
       if (stripped.isNotEmpty) {
-        add(stripped, keepTitleUnits(RegUtils.extractBaseTitle(stripped)));
+        add(stripped, keepTitleUnits(extractBaseTitle(stripped)));
       }
     }
 
-    final zh = _chineseOnly(title);
-    if (zh.isNotEmpty && zh != title) {
-      add(zh, keepTitleUnits(RegUtils.extractBaseTitle(zh)));
+    final zh = _chineseOnly(base);
+    if (zh.isNotEmpty && zh != base) {
+      add(zh, keepTitleUnits(extractBaseTitle(zh)));
     }
   }
   return values;
 }
 
-bool _endsWithBracket(String title) {
-  final tail = title.trimRight();
-  if (tail.isEmpty) return false;
-  return switch (tail.codeUnitAt(tail.length - 1)) {
-    0x29 || 0x5D || 0xFF09 || 0x3011 => true,
-    _ => false,
-  };
+/// 标题尾部的季/篇/部标识（第X季、Season X、上篇、剧场版……）
+const _seasonMarks =
+    r'第[一二三四五六七八九十百千\d]+[季期]|Season\s*\d+|S\d+|Part\s*\d+'
+    r'|[第上下][季期]|[上下前后]篇?|[一二三四五六七八九十\d]+章'
+    r'|特别篇|总集篇|番外篇|剧场版';
+
+final _seasonSuffixRe = RegExp(
+  r'\s*(?:' + _seasonMarks + r')$',
+  caseSensitive: false,
+);
+final _seasonBracketRe = RegExp(
+  r'\s*\((?:' + _seasonMarks + r')\)\s*$',
+  caseSensitive: false,
+);
+
+final _suffixEndUnits = '季期篇章版上下前后'.codeUnits.toSet();
+
+/// 提取番剧核心标题：剥离尾部季/篇标识（含括号形式）。结果为空时回退原标题。
+String extractBaseTitle(String fullTitle) {
+  if (fullTitle.isEmpty) return '';
+
+  var base = fullTitle;
+  final unit = base.codeUnitAt(base.length - 1);
+  if ((unit >= 0x30 && unit <= 0x39) || _suffixEndUnits.contains(unit)) {
+    base = base.replaceFirst(_seasonSuffixRe, '');
+  }
+  if (base.trimRight().endsWith(')')) {
+    base = base.replaceFirst(_seasonBracketRe, '');
+  }
+  base = base.trim();
+  return base.isEmpty ? fullTitle : base;
 }

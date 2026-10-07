@@ -99,10 +99,18 @@
         ],
         [
           {
+            "op": "playerAaaa",
+            "var": "player_aaaa",
+            "key": "url"
+          },
+          {
+            "op": "regex",
+            "pattern": "^(https?://\\S+)",
+            "group": 1
+          },
+          {
             "op": "sniff",
-            "goal": "video",
-            "url": "{episodeId:raw}",
-            "followEmbeddedPlayer": true
+            "goal": "video"
           }
         ]
       ]

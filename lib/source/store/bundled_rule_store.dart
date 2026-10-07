@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart';
 
+import 'package:baka/models/custom_source_config.dart';
+import 'package:baka/models/rule_hub.dart';
 import 'package:baka/source/engine/rule_validator.dart';
 import 'package:baka/source/models/source_rule.dart';
 
@@ -14,11 +16,13 @@ class BundledRuleStore {
   BundledRuleStore._();
 
   static const Map<String, String> builtinAssets = <String, String>{
+    '2kdm': 'assets/rules/2kdm.json',
+    '7sefun': 'assets/rules/7sefun.json',
     'akianime': 'assets/rules/akianime.json',
-    'anime7': 'assets/rules/anime7.json',
     'dm84': 'assets/rules/dm84.json',
     'fsdm02': 'assets/rules/fsdm02.json',
     'girigirilove': 'assets/rules/girigirilove.json',
+    'girigirilove_beta': 'assets/rules/girigirilove_beta.json',
     'lm6': 'assets/rules/lm6.json',
     'mgnacg': 'assets/rules/mgnacg.json',
     'ios_mifun': 'assets/rules/ios_mifun.json',
@@ -28,24 +32,10 @@ class BundledRuleStore {
     'silisili': 'assets/rules/silisili.json',
   };
 
-  /// Rule Hub revisions represented by the bundled copies.
-  ///
-  /// A zero revision means the rule is bundled only and has no matching
-  /// official Rule Hub entry yet.
-  static const Map<String, int> builtinVersions = <String, int>{
-    'akianime': 4,
-    'anime7': 2,
-    'dm84': 1,
-    'fsdm02': 1,
-    'girigirilove': 2,
-    'lm6': 5,
-    'mgnacg': 1,
-    'ios_mifun': 4,
-    'xifanacg': 4,
-    'tvtfun': 12,
-    'moonci': 1,
-    'silisili': 0,
-  };
+  /// Generated together with the rule files by tool/sync_bundled_rules.dart.
+  /// Uses the repository's anx-rulehub/2 rev, never the application version.
+  static const indexAsset = 'assets/rules/index.json';
+  static Map<String, int> _versions = const {};
 
   static Map<String, SourceRule> _rules = const <String, SourceRule>{};
   static Future<void>? _loading;
@@ -54,9 +44,14 @@ class BundledRuleStore {
 
   static SourceRule? ruleFor(String key) => _rules[key];
 
-  static int versionFor(String key) => builtinVersions[key] ?? 0;
+  static int versionFor(String key) => _versions[key] ?? 0;
 
   static Future<void> _load() async {
+    final index = RuleHubIndex.fromJson(
+      jsonDecode(await rootBundle.loadString(indexAsset))
+          as Map<String, dynamic>,
+      sourceUrl: 'asset://$indexAsset',
+    );
     final loaded = await Future.wait(
       builtinAssets.entries.map((entry) async {
         final raw = await rootBundle.loadString(entry.value);
@@ -64,7 +59,9 @@ class BundledRuleStore {
         if (decoded is! Map) {
           throw FormatException('${entry.value}: rule root must be an object');
         }
-        final rule = SourceRule.fromJson(decoded.cast<String, dynamic>());
+        final rule = CustomSourceConfig.fromJson(
+          decoded.cast<String, dynamic>(),
+        ).rule;
         assert(() {
           final validation = RuleValidator.validate(rule);
           if (!validation.isValid) {
@@ -86,5 +83,8 @@ class BundledRuleStore {
     _rules = Map<String, SourceRule>.unmodifiable(
       Map<String, SourceRule>.fromEntries(loaded),
     );
+    _versions = Map.unmodifiable({
+      for (final item in index.rules) item.id: item.version,
+    });
   }
 }

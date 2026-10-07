@@ -5,7 +5,7 @@ import 'package:baka/models/skip_selection.dart';
 import 'package:baka/widgets/player/skip_selection_controls.dart';
 import 'package:baka/widgets/common/value_selector.dart';
 import '../controller.dart';
-import 'package:baka/utils/duration_utils.dart';
+import 'package:baka/utils/format_utils.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 

@@ -147,10 +147,9 @@ DlssVideoBridge::DlssVideoBridge(ID3D11Texture2D* texture,const DlssVideoSetting
   if(settings.frameGeneration)
     share(p.w,p.h,DXGI_FORMAT_R8G8B8A8_UNORM,p.generated,generatedHandle,"Create D3D11 shared generated output");
   const RealtimeSharedTextures shared{inputHandle.value,realHandle.value,generatedHandle.value};
-  p.gpu=std::make_unique<RealtimeGpu>(nullptr,desc.Width,desc.Height,settings.runtime,settings.cache,
+  p.gpu=std::make_unique<RealtimeGpu>(desc.Width,desc.Height,settings.runtime,settings.cache,
       settings.intensity,scale,settings.frameGeneration ? settings.fgRuntime : std::wstring{},fps,
-      &adapterDesc.AdapterLuid,&shared);
-  p.gpu->SetNeuralRenderingEnabled(settings.neuralRendering);
+      settings.neuralRendering,adapterDesc.AdapterLuid,shared);
   Check(p.device->CreateShaderResourceView(p.real.Get(),nullptr,&p.outputViews[0]),"Enhanced RGBA source");
   Check(p.device->CreateShaderResourceView(p.input.Get(),nullptr,&p.inputView),"Original comparison source");
   if(settings.comparison) p.EnsureComparison();
@@ -209,8 +208,13 @@ float4 main(float4 position:SV_Position):SV_Target {
     float3 s=source.Load(int3(clamp(p+int2(0,1),0,hi),0)).rgb;
     float3 e=source.Load(int3(clamp(p+int2(1,0),0,hi),0)).rgb;
     float3 west=source.Load(int3(clamp(p+int2(-1,0),0,hi),0)).rgb;
-    // Bound overshoot on anime outlines; sharpening adds contrast, not detail.
-    color+=clamp((color-(n+s+e+west)*.25)*sharpness,-.04,.04);
+    // Suppress low-contrast compression noise and keep every channel inside
+    // its local range, so subtitles/outlines cannot acquire bright/dark halos.
+    float3 localMin=min(color,min(min(n,s),min(e,west)));
+    float3 localMax=max(color,max(max(n,s),max(e,west)));
+    float contrast=max(localMax.r-localMin.r,max(localMax.g-localMin.g,localMax.b-localMin.b));
+    float strength=sharpness*smoothstep(.02,.12,contrast);
+    color=clamp(color+clamp((color-(n+s+e+west)*.25)*strength,-.04,.04),localMin,localMax);
   }
   return float4(saturate(color),1);
 })hlsl";
@@ -238,7 +242,7 @@ bool DlssVideoBridge::Prepare(ID3D11Texture2D* source,bool reset) {
   auto& p=*impl_;
   p.OpenSource(source);
   p.context->CopyResource(p.input.Get(),p.source.Get()); p.Finish();
-  const bool interpolate=p.gpu->Prepare({},reset,false);
+  const bool interpolate=p.gpu->Prepare(reset);
   p.gpu->WaitPrepared();
   ++p.preparedSerial;
   return interpolate && p.gpu->InterpolationAllowed();
@@ -343,10 +347,12 @@ void DlssVideoBridge::UpdateSettings(const DlssVideoSettings& settings) {
   if(settings.comparison!=p.settings.comparison) {
     p.rateStart=p.rateLast=p.rateCount=p.rateRealCount=0; p.rateReady=false; p.referenceReady=false;
   }
+  if(!settings.neuralRendering) p.gpu->SetNeuralRenderingEnabled(false);
   if(settings.intensity!=p.settings.intensity) p.gpu->SetIntensity(settings.intensity);
   p.gpu->SetFrameGenerationEnabled(settings.frameGeneration);
   p.gpu->SetNeuralRenderingEnabled(settings.neuralRendering);
   // Preserve the path of an initialized FG model even while it is bypassed.
   p.settings.intensity=settings.intensity; p.settings.sharpness=settings.sharpness;
   p.settings.neuralRendering=settings.neuralRendering; p.settings.comparison=settings.comparison;
+  p.settings.frameGeneration=settings.frameGeneration;
 }

@@ -1,3 +1,4 @@
+import 'package:baka/source/models/source_search_result.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:baka/instance.dart';
@@ -11,37 +12,40 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  group('ranking', () {
-    const engine = SourceMatchEngine();
+  List<SourceMatchScore> rank(
+    List<SourceSearchResult> items,
+    SourceMatchContext context,
+  ) =>
+      [for (final item in items) const SourceMatchEngine().score(item, context)]
+        ..sort(SourceMatchEngine.compareScores);
 
-    SourceMatchCandidate candidate(
+  group('ranking', () {
+    SourceSearchResult candidate(
       String key,
       String title, {
       required String source,
       required int episodes,
     }) {
-      return SourceMatchCandidate(
-        key: key,
-        title: title,
-        sourceType: source,
-        episodeCount: episodes,
-      );
+      return SourceSearchResult.internal({
+        'id': key,
+        'title': title,
+        'videoList': List.filled(episodes, 'Episode'),
+      });
     }
 
     test('prefers the matching season with the expected episode count', () {
       final context = SourceMatchContext(
         primaryTitle: 'Example 第二季',
         bgmEpisodeCount: 24,
-        bgmCompleted: true,
         querySeason: 2,
       );
 
-      final ranked = engine.rank([
+      final ranked = rank([
         candidate('a', 'Example', source: 'source_a', episodes: 12),
         candidate('b', 'Example 第二季', source: 'source_b', episodes: 24),
       ], context);
 
-      expect(ranked.first.candidate.key, 'b');
+      expect(ranked.first.candidate.id, 'b');
       expect(ranked.first.confidence, greaterThanOrEqualTo(0.8));
       expect(ranked.last.seasonConflict, isFalse);
       expect(ranked.first.score, greaterThan(ranked.last.score));
@@ -51,18 +55,17 @@ void main() {
       final context = SourceMatchContext(
         primaryTitle: 'Example',
         bgmEpisodeCount: 12,
-        bgmCompleted: true,
       );
 
-      final ranked = engine.rank([
+      final ranked = rank([
         candidate('movie', 'Example 剧场版', source: 'source_a', episodes: 1),
         candidate('tv', 'Example TV', source: 'source_b', episodes: 12),
       ], context);
 
-      expect(ranked.first.candidate.key, 'tv');
+      expect(ranked.first.candidate.id, 'tv');
       expect(
         ranked.first.score,
-        greaterThan(ranked.firstWhere((s) => s.candidate.key == 'movie').score),
+        greaterThan(ranked.firstWhere((s) => s.candidate.id == 'movie').score),
       );
     });
 
@@ -72,16 +75,15 @@ void main() {
         final context = SourceMatchContext(
           primaryTitle: 'Example',
           bgmEpisodeCount: 12,
-          bgmCompleted: true,
         );
 
-        final ranked = engine.rank([
+        final ranked = rank([
           candidate('pack', 'Example 合集', source: 'source_a', episodes: 48),
           candidate('single', 'Example', source: 'source_b', episodes: 12),
         ], context);
 
-        final pack = ranked.firstWhere((s) => s.candidate.key == 'pack');
-        expect(ranked.first.candidate.key, 'single');
+        final pack = ranked.firstWhere((s) => s.candidate.id == 'pack');
+        expect(ranked.first.candidate.id, 'single');
         expect(pack.severeEpisodeConflict, isTrue);
         expect(pack.confidence, lessThan(0.70));
       },
@@ -89,13 +91,13 @@ void main() {
 
     test('penalizes title similarity when modifiers differ (movie vs tv)', () {
       final context = SourceMatchContext(primaryTitle: '海贼王');
-      final ranked = engine.rank([
+      final ranked = rank([
         candidate('movie', '海贼王 剧场版 红发歌姬', source: 's1', episodes: 1),
         candidate('tv', '海贼王', source: 's2', episodes: 1000),
       ], context);
 
-      expect(ranked.first.candidate.key, 'tv');
-      final movieScore = ranked.firstWhere((s) => s.candidate.key == 'movie');
+      expect(ranked.first.candidate.id, 'tv');
+      final movieScore = ranked.firstWhere((s) => s.candidate.id == 'movie');
       expect(movieScore.confidence, lessThan(0.70));
     });
   });
@@ -103,16 +105,15 @@ void main() {
   group('admission', () {
     const engine = SourceMatchEngine();
 
-    SourceMatchCandidate candidate(
+    SourceSearchResult candidate(
       String key,
       String title, {
       required int episodes,
-    }) => SourceMatchCandidate(
-      key: key,
-      title: title,
-      sourceType: 'source',
-      episodeCount: episodes,
-    );
+    }) => SourceSearchResult.internal({
+      'id': key,
+      'title': title,
+      'videoList': List.filled(episodes, 'Episode'),
+    });
 
     test('admits an exact match into the probe queue', () {
       final score = engine.score(
@@ -136,11 +137,7 @@ void main() {
 
         final pack = engine.score(
           candidate('pack', 'Example', episodes: 24),
-          SourceMatchContext(
-            primaryTitle: 'Example',
-            bgmEpisodeCount: 12,
-            bgmCompleted: true,
-          ),
+          SourceMatchContext(primaryTitle: 'Example', bgmEpisodeCount: 12),
         );
         expect(pack.severeEpisodeConflict, isTrue);
         expect(pack.shouldProbeImmediately, isFalse);
@@ -287,7 +284,7 @@ void main() {
         expect(scheduler.queuedCount, 0);
       });
 
-      test('accepts each key once per run and again after reset', () async {
+      test('accepts each key once per run', () async {
         final runs = <String>[];
         final scheduler = ProbeScheduler<String>(
           concurrency: 2,
@@ -300,12 +297,6 @@ void main() {
         expect(scheduler.contains('a'), isTrue);
         await scheduler.drained;
         expect(runs, ['a']);
-
-        scheduler.reset();
-        expect(scheduler.contains('a'), isFalse);
-        expect(scheduler.add('a'), isTrue);
-        await scheduler.drained;
-        expect(runs, ['a', 'a']);
       });
 
       test(

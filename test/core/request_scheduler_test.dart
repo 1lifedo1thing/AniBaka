@@ -1,8 +1,26 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:baka/source/runtime/request_scheduler.dart';
 import 'package:baka/source/runtime/scheduler_interceptor.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+class _StreamingAdapter implements HttpClientAdapter {
+  final body = StreamController<Uint8List>();
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async => ResponseBody(body.stream, 200);
+
+  @override
+  void close({bool force = false}) {
+    unawaited(body.close());
+  }
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -100,9 +118,8 @@ void main() {
           request.response.write('ok');
           await request.response.close();
         });
-        final interceptor = SchedulerInterceptor();
-        final scheduler = interceptor.scheduler;
-        await scheduler.acquire('127.0.0.1');
+        final scheduler = RequestScheduler(maxConcurrent: 1, maxPerHost: 1);
+        final interceptor = SchedulerInterceptor(scheduler: scheduler);
         await scheduler.acquire('127.0.0.1');
         final dio = Dio()..interceptors.add(interceptor);
         addTearDown(() async {
@@ -128,7 +145,6 @@ void main() {
         );
         expect(received, 0);
         scheduler.release('127.0.0.1');
-        scheduler.release('127.0.0.1');
         expect(
           (await dio.get<String>('http://127.0.0.1:${server.port}/')).data,
           'ok',
@@ -137,4 +153,67 @@ void main() {
       },
     );
   });
+
+  for (final end in ['done', 'cancel', 'unread cancel', 'error']) {
+    test('stream slot held until $end, then released once', () async {
+      final scheduler = RequestScheduler(maxConcurrent: 1, maxPerHost: 1);
+      final adapter = _StreamingAdapter();
+      final dio = Dio()
+        ..httpClientAdapter = adapter
+        ..interceptors.add(SchedulerInterceptor(scheduler: scheduler));
+      addTearDown(() => dio.close(force: true));
+      final cancel = CancelToken();
+      final first = await dio.get<ResponseBody>(
+        'https://fixture.test/first',
+        cancelToken: cancel,
+        options: Options(responseType: ResponseType.stream),
+      );
+      StreamSubscription<Uint8List>? subscription;
+      if (end == 'cancel') subscription = first.data!.stream.listen((_) {});
+      var acquired = false;
+      final second = scheduler.run(
+        () async => acquired = true,
+        host: 'fixture.test',
+      );
+      await Future<void>.value();
+      expect(
+        acquired,
+        isFalse,
+        reason: 'response headers alone must not release the slot',
+      );
+      switch (end) {
+        case 'done':
+          final drained = first.data!.stream.drain<void>();
+          await adapter.body.close();
+          await drained;
+        case 'cancel':
+          await subscription!.cancel();
+        case 'unread cancel':
+          cancel.cancel();
+        case 'error':
+          final failure = expectLater(
+            first.data!.stream.drain<void>(),
+            throwsStateError,
+          );
+          adapter.body.addError(StateError('broken stream'));
+          await failure;
+      }
+      await second;
+      expect(acquired, isTrue);
+      cancel.cancel();
+      await Future<void>.value();
+      // Repeated termination must not return an extra slot.
+      await scheduler.acquire('fixture.test');
+      acquired = false;
+      final queued = scheduler.run(
+        () async => acquired = true,
+        host: 'fixture.test',
+      );
+      await Future<void>.value();
+      expect(acquired, isFalse);
+      scheduler.release('fixture.test');
+      await queued;
+      expect(acquired, isTrue);
+    });
+  }
 }

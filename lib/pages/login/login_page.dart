@@ -65,6 +65,7 @@ class LoginState extends State<Login> {
 
     HapticFeedback.lightImpact();
     setState(() => _submitting = true);
+    var registered = false;
 
     try {
       if (_isRegister) {
@@ -73,10 +74,9 @@ class LoginState extends State<Login> {
           pwd: _pwdController.text,
           qq: _qqController.text,
         );
+        if (!mounted) return;
         showSnackBar(result.message, isError: !result.success);
-        if (result.success && mounted) {
-          _switchMode(false);
-        }
+        registered = result.success;
       } else {
         final result = await _service.performLogin(
           name: _nameController.text,
@@ -89,7 +89,10 @@ class LoginState extends State<Login> {
         }
       }
     } finally {
-      if (mounted) setState(() => _submitting = false);
+      if (mounted) {
+        setState(() => _submitting = false);
+        if (registered) _switchMode(false);
+      }
     }
   }
 

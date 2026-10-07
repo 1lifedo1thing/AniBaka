@@ -43,91 +43,40 @@ bool _isDigits(String text) {
   return true;
 }
 
-class RegUtils {
-  /// 标题尾部的季/篇/部标识（第X季、Season X、上篇、剧场版……）
-  static const _seasonMarks =
-      r'第[一二三四五六七八九十百千\d]+[季期]|Season\s*\d+|S\d+|Part\s*\d+'
-      r'|[第上下][季期]|[上下前后]篇?|[一二三四五六七八九十\d]+章'
-      r'|特别篇|总集篇|番外篇|剧场版';
+const _weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 
-  static final _seasonSuffixRe = RegExp(
-    r'\s*(?:' + _seasonMarks + r')$',
-    caseSensitive: false,
-  );
-  static final _seasonBracketRe = RegExp(
-    r'\s*\((?:' + _seasonMarks + r')\)\s*$',
-    caseSensitive: false,
-  );
+final _delayWeekdayRe = RegExp(
+  r'(?:延迟|推迟)[到至](周[一二三四五六日])(\d{1,2})(?::|[点时])(\d{2})',
+);
+final _delayDayRe = RegExp(r'(?:延迟|推迟)[到至](当日|次日)(\d{1,2})(?::|[点时])(\d{2})');
+final _delayHourRe = RegExp(r'(?:延迟|推迟)[到至](\d{1,2})[点时]');
+final _suspendWeeksRe = RegExp(r'(?:停更|暂停更新|休息|停播)(\d+)[周星期]');
+final _suspendRe = RegExp(r'停更|暂停更新|停播|休息');
 
-  /// [_seasonSuffixRe] 锚在串尾且尾部不允许空白，所以能匹配时原串的最后一个
-  /// 字符必然是某个季度标记的末字符：季/期、篇、章、版、上下前后，
-  /// 或 Season 2 / S2 / Part 2 的数字。
-  static final Set<int> _suffixEndUnits = '季期篇章版上下前后'.codeUnits.toSet();
+/// 解析简介中的延迟或停更信息，无匹配时返回 null。
+String? parseDelayOrSuspensionInfo(String? content) {
+  if (content == null || content.isEmpty) return null;
 
-  static bool _mayHaveSeasonSuffix(String title) {
-    final unit = title.codeUnitAt(title.length - 1);
-    return (unit >= 0x30 && unit <= 0x39) || _suffixEndUnits.contains(unit);
+  final weekday = _delayWeekdayRe.firstMatch(content);
+  if (weekday != null) {
+    return '延迟到${weekday.group(1)}${weekday.group(2)}:${weekday.group(3)}';
   }
 
-  /// [_seasonBracketRe] 允许尾随空白，但括号必须以 `)` 收口。
-  /// `trimRight` 无需裁剪时返回原实例，因此常见路径不分配。
-  static bool _mayHaveSeasonBracket(String title) {
-    final tail = title.trimRight();
-    return tail.isNotEmpty && tail.codeUnitAt(tail.length - 1) == 0x29;
+  final day = _delayDayRe.firstMatch(content);
+  if (day != null) {
+    final target = day.group(1) == '次日'
+        ? _weekdays[DateTime.now().weekday % 7]
+        : _weekdays[DateTime.now().weekday - 1];
+    return '延迟到$target${day.group(2)}:${day.group(3)}';
   }
 
-  /// 提取番剧核心标题：剥离尾部季/篇标识（含括号形式）。结果为空时回退原标题。
-  static String extractBaseTitle(String fullTitle) {
-    if (fullTitle.isEmpty) return '';
-
-    var base = fullTitle;
-    if (_mayHaveSeasonSuffix(base)) {
-      base = base.replaceFirst(_seasonSuffixRe, '');
-    }
-    if (base.isNotEmpty && _mayHaveSeasonBracket(base)) {
-      base = base.replaceFirst(_seasonBracketRe, '');
-    }
-    base = base.trim();
-    return base.isEmpty ? fullTitle : base;
+  final hour = _delayHourRe.firstMatch(content);
+  if (hour != null) {
+    return '延迟到${_weekdays[DateTime.now().weekday - 1]}${hour.group(1)}:00';
   }
 
-  static const _weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+  final weeks = _suspendWeeksRe.firstMatch(content);
+  if (weeks != null) return '停更${weeks.group(1)}周';
 
-  static final _delayWeekdayRe = RegExp(
-    r'(?:延迟|推迟)[到至](周[一二三四五六日])(\d{1,2})(?::|[点时])(\d{2})',
-  );
-  static final _delayDayRe = RegExp(
-    r'(?:延迟|推迟)[到至](当日|次日)(\d{1,2})(?::|[点时])(\d{2})',
-  );
-  static final _delayHourRe = RegExp(r'(?:延迟|推迟)[到至](\d{1,2})[点时]');
-  static final _suspendWeeksRe = RegExp(r'(?:停更|暂停更新|休息|停播)(\d+)[周星期]');
-  static final _suspendRe = RegExp(r'停更|暂停更新|停播|休息');
-
-  /// 解析简介中的延迟或停更信息，无匹配时返回 null。
-  static String? parseDelayOrSuspensionInfo(String? content) {
-    if (content == null || content.isEmpty) return null;
-
-    final weekday = _delayWeekdayRe.firstMatch(content);
-    if (weekday != null) {
-      return '延迟到${weekday.group(1)}${weekday.group(2)}:${weekday.group(3)}';
-    }
-
-    final day = _delayDayRe.firstMatch(content);
-    if (day != null) {
-      final target = day.group(1) == '次日'
-          ? _weekdays[DateTime.now().weekday % 7]
-          : _weekdays[DateTime.now().weekday - 1];
-      return '延迟到$target${day.group(2)}:${day.group(3)}';
-    }
-
-    final hour = _delayHourRe.firstMatch(content);
-    if (hour != null) {
-      return '延迟到${_weekdays[DateTime.now().weekday - 1]}${hour.group(1)}:00';
-    }
-
-    final weeks = _suspendWeeksRe.firstMatch(content);
-    if (weeks != null) return '停更${weeks.group(1)}周';
-
-    return _suspendRe.hasMatch(content) ? '停更' : null;
-  }
+  return _suspendRe.hasMatch(content) ? '停更' : null;
 }

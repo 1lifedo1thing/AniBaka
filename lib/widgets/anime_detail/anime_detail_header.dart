@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 
 import 'package:baka/models/anime_detail_view_data.dart';
 import 'package:baka/models/collection.dart';
-import 'package:baka/utils/bgm_utils.dart';
+import 'package:baka/utils/format_utils.dart';
 import 'package:baka/widgets/anime_detail/collection_sheet.dart';
 import 'package:baka/widgets/anime_detail/score_distribution_chart.dart';
 import 'package:baka/widgets/common/scale_button.dart';
@@ -17,7 +17,6 @@ class AnimeDetailHeader extends StatelessWidget {
   final Object heroTag;
   final bool enableCoverEffects;
   final AnimeCollection? collection;
-  final bool isCollectionLoading;
   final VoidCallback onCollectionTap;
   final bool collectionEnabled;
   final VoidCallback? onSearchTap;
@@ -26,7 +25,6 @@ class AnimeDetailHeader extends StatelessWidget {
     required this.detail,
     required this.heroTag,
     required this.collection,
-    required this.isCollectionLoading,
     required this.onCollectionTap,
     this.collectionEnabled = true,
     this.enableCoverEffects = true,
@@ -84,7 +82,7 @@ class AnimeDetailHeader extends StatelessWidget {
                   ? SizedBox(width: 160, child: collectionButton)
                   : Expanded(child: collectionButton),
             if (searchButton != null) ...[
-              SizedBox(width: isWide ? 16 : 12),
+              if (collectionButton != null) SizedBox(width: isWide ? 16 : 12),
               isWide
                   ? SizedBox(width: 160, child: searchButton)
                   : Expanded(child: searchButton),
@@ -444,14 +442,7 @@ class _DesktopScoreCorner extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
-        ScoreDistributionChart(
-          counts: distribution,
-          maxBarHeight: 72,
-          barWidth: 14,
-          barGap: 5,
-          compact: true,
-          showLabels: true,
-        ),
+        ScoreDistributionChart(counts: distribution),
         if (scoreCol != null) ...[const SizedBox(width: 20), scoreCol],
       ],
     );
@@ -503,7 +494,7 @@ class _TagsWrap extends StatelessWidget {
 
     final allPills = <Widget>[
       if (updateTime != null && updateTime!.trim().isNotEmpty)
-        buildPill(BgmUtils.formatTimeString(updateTime!, '更新于')),
+        buildPill('更新于 ${formatDate(updateTime!)}'),
       if (trimmedCategory != null && trimmedCategory.isNotEmpty)
         buildPill(trimmedCategory),
       for (var i = 0; i < shownCount; i++) buildPill(tags[i]),
@@ -535,7 +526,7 @@ class _CollectionButton extends StatelessWidget {
     final IconData icon;
 
     if (status != null) {
-      final visual = statusVisual(status);
+      final visual = collectionStatusVisuals[status]!;
       bgColor = visual.$1.withValues(alpha: isDark ? 0.15 : 0.1);
       textColor = visual.$1;
       label = status.label;

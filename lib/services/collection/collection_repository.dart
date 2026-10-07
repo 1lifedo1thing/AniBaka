@@ -34,9 +34,15 @@ class CollectionRepository {
   final _statsRequests =
       RequestDeduplicator<(int account, int bangumi), CollectionStats?>();
   final _byBgmIdRequests =
-      RequestDeduplicator<(int account, int bangumi, int bgmId), AnimeCollection?>();
+      RequestDeduplicator<
+        (int account, int bangumi, int bgmId),
+        AnimeCollection?
+      >();
   final _byPostIdRequests =
-      RequestDeduplicator<(int account, int bangumi, int postId), AnimeCollection?>();
+      RequestDeduplicator<
+        (int account, int bangumi, int postId),
+        AnimeCollection?
+      >();
   List<AnimeCollection>? _localCache;
   Map<int, int> _localByBgmId = const {};
   Map<int, int> _localByPostId = const {};
@@ -104,12 +110,7 @@ class CollectionRepository {
       if (total >= start && list.length < safePageSize) list.add(item);
       total++;
     }
-    return (
-      list: list,
-      total: total,
-      page: safePage,
-      pageSize: safePageSize,
-    );
+    return (list: list, total: total, page: safePage, pageSize: safePageSize);
   }
 
   Future<List<AnimeCollection>> getAll({bool refreshBangumi = true}) async {
@@ -139,10 +140,10 @@ class CollectionRepository {
 
   Future<CollectionStats?> getStats() async {
     if (!isLocalMode) {
-      return _statsRequests.run(
-        (session.generation, bangumi.generation),
-        AniBakaApi.getCollectionStats,
-      );
+      return _statsRequests.run((
+        session.generation,
+        bangumi.generation,
+      ), AniBakaApi.getCollectionStats);
     }
     if (isBangumiMode) await _refreshBangumiCollections();
     _readLocal();
@@ -151,25 +152,24 @@ class CollectionRepository {
 
   Future<AnimeCollection?> getByPostId(int postId) {
     if (!isLocalMode) {
-      return _byPostIdRequests.run(
-        (session.generation, bangumi.generation, postId),
-        () => AniBakaApi.getCollectionByPostId(postId),
-      );
+      return _byPostIdRequests.run((
+        session.generation,
+        bangumi.generation,
+        postId,
+      ), () => AniBakaApi.getCollectionByPostId(postId));
     }
     _readLocal();
     final index = _localByPostId[postId];
     return Future.value(index == null ? null : _localCache![index]);
   }
 
-  Future<AnimeCollection?> getByBgmId(
-    int bgmId, {
-    bool refreshBangumi = true,
-  }) {
+  Future<AnimeCollection?> getByBgmId(int bgmId, {bool refreshBangumi = true}) {
     if (!isLocalMode) {
-      return _byBgmIdRequests.run(
-        (session.generation, bangumi.generation, bgmId),
-        () => AniBakaApi.getCollectionByBgmId(bgmId),
-      );
+      return _byBgmIdRequests.run((
+        session.generation,
+        bangumi.generation,
+        bgmId,
+      ), () => AniBakaApi.getCollectionByBgmId(bgmId));
     }
     return _getLocalByBgmId(bgmId, refreshBangumi: refreshBangumi);
   }
@@ -265,18 +265,14 @@ class CollectionRepository {
   AnimeCollection _mergeRemote(AnimeCollection remote, AnimeCollection? local) {
     if (local == null) return remote;
     return AnimeCollection(
-      id: local.id,
-      userId: local.userId,
       postId: local.postId,
       bgmId: remote.bgmId,
       status: remote.status,
-      statusText: CollectionStatus.fromValue(remote.status)?.label,
       rating: remote.rating,
       comment: remote.comment,
       epTotal: remote.epTotal ?? local.epTotal,
       epWatched: remote.epWatched,
       tags: remote.tags,
-      bangumiTags: remote.bangumiTags,
       isPrivate: remote.isPrivate,
       postTitle: local.postTitle,
       postCover: local.postCover,

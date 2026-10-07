@@ -2,8 +2,7 @@ import 'dart:math' as math;
 
 import 'package:baka/api/bgm.dart';
 import 'package:baka/utils/bgm_utils.dart';
-import 'package:baka/utils/date_util.dart';
-import 'package:baka/utils/json_values.dart';
+import 'package:baka/utils/format_utils.dart';
 import 'package:baka/widgets/common/skeletonizer.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -15,8 +14,7 @@ String _voiceActorNames(Map<String, dynamic> character) {
 
   final names = StringBuffer();
   for (final actor in actors) {
-    final name = (actor as Map)['name']?.toString();
-    if (name == null || name.isEmpty) continue;
+    final name = (actor as Map<String, dynamic>)['name'] as String;
     if (names.isNotEmpty) names.write(' / ');
     names.write(name);
   }
@@ -89,8 +87,8 @@ class CharacterCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final textColor = isDark ? Colors.white : Colors.black87;
-    final name = character['name']?.toString() ?? '未知';
-    final role = character['role_name']?.toString();
+    final name = character['name'] as String;
+    final role = character['relation'] as String;
     final voiceActor = _voiceActorNames(character);
     final images = character['images'];
 
@@ -132,7 +130,7 @@ class CharacterCard extends StatelessWidget {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
-        if (role != null && role.trim().isNotEmpty) ...[
+        if (role.isNotEmpty) ...[
           const SizedBox(height: 4),
           Text(
             role,
@@ -166,13 +164,8 @@ class CharacterCard extends StatelessWidget {
 /// 角色 Tab 的网格布局
 class CharactersSection extends StatefulWidget {
   final int subjectId;
-  final ValueChanged<Map<String, dynamic>>? onCharacterTap;
 
-  const CharactersSection({
-    required this.subjectId,
-    this.onCharacterTap,
-    super.key,
-  });
+  const CharactersSection({required this.subjectId, super.key});
 
   @override
   State<CharactersSection> createState() => _CharactersSectionState();
@@ -226,6 +219,7 @@ class _CharactersSectionState extends State<CharactersSection>
                 (constraints.maxWidth - 8 - 12 * (columns - 1)) / columns;
             final textScaler = MediaQuery.textScalerOf(context);
             return GridView.builder(
+              key: PageStorageKey(widget.subjectId),
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 16),
               physics: const BouncingScrollPhysics(),
               gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
@@ -243,7 +237,7 @@ class _CharactersSectionState extends State<CharactersSection>
               itemBuilder: (context, index) {
                 final character = characters[index];
                 return GestureDetector(
-                  onTap: () => widget.onCharacterTap?.call(character),
+                  onTap: () => showCharacterDetailSheet(context, character),
                   behavior: HitTestBehavior.opaque,
                   child: CharacterCard(character: character),
                 );
@@ -261,10 +255,7 @@ void showCharacterDetailSheet(
   BuildContext context,
   Map<String, dynamic> character,
 ) {
-  final characterId = toInt(
-    character['id'] ?? character['character_id'] ?? character['characterId'],
-  );
-  if (characterId == null) return;
+  final characterId = character['id'] as int;
   HapticFeedback.selectionClick();
   showModalBottomSheet(
     context: context,
@@ -303,7 +294,7 @@ class _CharacterDetailSheetState extends State<CharacterDetailSheet> {
     // 秒开预览：优先保留外部传入的角色基础信息
     _charInfo = widget.initialData;
     _loadInfo();
-    _comments = _loadComments(widget.characterId);
+    _comments = getBgmCharacterComments(widget.characterId);
   }
 
   @override
@@ -313,7 +304,7 @@ class _CharacterDetailSheetState extends State<CharacterDetailSheet> {
       _charInfo = widget.initialData;
       _isLoading = true;
       _loadInfo();
-      _comments = _loadComments(widget.characterId);
+      _comments = getBgmCharacterComments(widget.characterId);
     }
   }
 
@@ -324,12 +315,7 @@ class _CharacterDetailSheetState extends State<CharacterDetailSheet> {
       if (!mounted || generation != _infoGeneration) return;
 
       setState(() {
-        if (infoData.isNotEmpty) {
-          final preview = _charInfo;
-          _charInfo = preview == null || preview.isEmpty
-              ? infoData
-              : {...preview, ...infoData};
-        }
+        _charInfo = infoData;
         _isLoading = false;
       });
     } catch (e) {
@@ -337,15 +323,6 @@ class _CharacterDetailSheetState extends State<CharacterDetailSheet> {
       if (mounted && generation == _infoGeneration) {
         setState(() => _isLoading = false);
       }
-    }
-  }
-
-  Future<List<Map<String, dynamic>>> _loadComments(int characterId) async {
-    try {
-      return await getBgmCharacterComments(characterId);
-    } catch (e) {
-      debugPrint('获取角色评论失败: $e');
-      return const [];
     }
   }
 
@@ -389,6 +366,7 @@ class _CharacterDetailSheetState extends State<CharacterDetailSheet> {
                 child: AppSkeletonizer(
                   enabled: _isLoading && !hasBasicData,
                   child: _CharHeader(
+                    relation: widget.initialData,
                     info:
                         _charInfo ??
                         (_isLoading
@@ -446,14 +424,14 @@ class _CharacterDetailSheetState extends State<CharacterDetailSheet> {
                       ),
                     );
                   }
-                  final comments = snapshot.data!;
-                  if (comments.isEmpty) {
+                  final comments = snapshot.data;
+                  if (snapshot.hasError || comments!.isEmpty) {
                     return SliverToBoxAdapter(
                       child: Padding(
                         padding: const EdgeInsets.all(40),
                         child: Center(
                           child: Text(
-                            '暂无评论',
+                            snapshot.hasError ? '评论加载失败' : '暂无评论',
                             style: TextStyle(
                               color: textColor.withValues(alpha: 0.4),
                               fontSize: 13,
@@ -484,20 +462,19 @@ class _CharacterDetailSheetState extends State<CharacterDetailSheet> {
 /// 角色头部信息
 class _CharHeader extends StatelessWidget {
   final Map<String, dynamic> info;
-  const _CharHeader({required this.info});
+  final Map<String, dynamic>? relation;
+  const _CharHeader({required this.info, this.relation});
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final textColor = isDark ? Colors.white : Colors.black87;
-    final name = info['name']?.toString() ?? info['nameCN']?.toString() ?? '未知';
-    final nameCN = info['nameCN']?.toString() ?? '';
-    final role = info['role_name']?.toString();
-    final voiceActor = _voiceActorNames(info);
-    final collects =
-        info['collects'] as int? ?? info['collects_count'] as int? ?? 0;
-    final commentCount =
-        info['comment'] as int? ?? info['comment_count'] as int? ?? 0;
+    final name = info['name'] as String;
+    final nameCN = info['nameCN'] as String? ?? '';
+    final role = relation?['relation'] as String?;
+    final voiceActor = relation == null ? '' : _voiceActorNames(relation!);
+    final collects = info['collects'] as int? ?? 0;
+    final commentCount = info['comment'] as int? ?? 0;
     final infoStr =
         info['info']?.toString().replaceAll('\r\n', '\n').trim() ?? '';
     final images = info['images'] as Map?;
@@ -654,9 +631,9 @@ class _CharCommentItem extends StatelessWidget {
     final textColor = isDark ? Colors.white : Colors.black87;
     final user = comment['user'] as Map<String, dynamic>? ?? const {};
     final nickname = user['nickname']?.toString() ?? '匿名';
-    final content = comment['content']?.toString() ?? '';
-    final createdAt = comment['createdAt'] as int? ?? 0;
-    final replies = (comment['replies'] as List?) ?? const [];
+    final content = comment['content'] as String;
+    final createdAt = comment['createdAt'] as int;
+    final replies = comment['replies'] as List<dynamic>;
     final timeStr = createdAt > 0
         ? DateTime.fromMillisecondsSinceEpoch(createdAt * 1000).toRelativeTime()
         : '';

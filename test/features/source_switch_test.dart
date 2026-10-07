@@ -1,232 +1,560 @@
-import 'package:baka/models/playback_request.dart';
-import 'package:baka/source/models/source_search_result.dart';
 import 'dart:async';
-import '../support/app_dependencies.dart';
+import 'package:baka/instance.dart';
+import 'package:baka/models/playback_episode.dart';
+import 'package:baka/models/playback_request.dart';
+import 'package:baka/services/source/source_repository.dart';
+import 'package:baka/source/models/series.dart';
+import 'package:baka/source/models/source_search_result.dart';
+import 'package:baka/source/runtime/request_scheduler.dart';
+import 'package:baka/source/runtime/source_operation.dart';
+import 'package:baka/source/source_registry.dart';
+import 'package:baka/widgets/anime_detail/controller/video_source_search_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:baka/instance.dart';
-import 'package:baka/widgets/anime_detail/controller/video_source_search_controller.dart';
+SourceSearchResult result([String id = 'one', String source = 'test']) =>
+    SourceSearchResult(
+      Series(id, 'Example'),
+      source: source,
+      displayName: source,
+    );
+
+PlaybackRequest catalog(List<List<String>> lines, {String source = 'test'}) =>
+    PlaybackRequest(
+      source: source,
+      episodes: [
+        for (final values in lines)
+          PlaybackEpisode(title: 'Episode', lines: values),
+      ],
+    );
 
 void main() {
-  test(
-    'concurrent catalog requests upgrade to media without fetching again',
-    () async {
-      final controller = _CatalogController();
-      addTearDown(controller.dispose);
-      final item = SearchResultItem(
-        SourceSearchResult.fromLegacy({
-          'title': 'Example',
-          'source': 'internal',
-          ...{'id': 1},
-        }),
-      );
-      final catalog = controller.ensureCandidatePlayable(
-        item,
-        episodeIndex: 0,
-        preferredLine: 1,
-        resolveMedia: false,
-      );
-      final media = controller.ensureCandidatePlayable(
-        item,
-        episodeIndex: 0,
-        preferredLine: 1,
-      );
-      final first = await catalog;
-      final resolved = await media;
-      expect(controller.loads, 1);
-      expect(identical(first, resolved), isTrue);
-      expect(resolved.isInstantPlayable, isTrue);
-      expect(resolved.mediaUrl, 'https://fixture.test/episode.mp4');
-      expect(
-        identical(
-          await controller.ensureCandidatePlayable(
-            item,
-            episodeIndex: 0,
-            preferredLine: 1,
-          ),
-          resolved,
-        ),
-        isTrue,
-      );
-      expect(controller.loads, 1);
-    },
-  );
   TestWidgetsFlutterBinding.ensureInitialized();
-
+  late _Repository repository;
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
     Instances.sp = await SharedPreferences.getInstance();
-    configureTestServices();
+    sourceCatalog = _Catalog();
+    repository = _Repository(sourceCatalog);
+    sourceRepository = repository;
+    addTearDown(sourceCatalog.dispose);
+    addTearDown(repository.dispose);
   });
+  tearDown(() => VideoSourceSearchController.globalCached?.dispose());
 
-  tearDown(() {
-    final cached = VideoSourceSearchController.globalCached;
-    VideoSourceSearchController.globalCached = null;
-    VideoSourceSearchController.globalCachedTitle = null;
-    cached?.dispose();
-  });
-
-  test('shares the latest detail search controller with source switching', () {
-    final detailController = VideoSourceSearchController(title: 'Example');
-    final replacement = VideoSourceSearchController(title: 'Other');
-
-    VideoSourceSearchController.cacheGlobal('Example', detailController);
-
-    expect(
-      identical(VideoSourceSearchController.globalCached, detailController),
-      isTrue,
-    );
-    expect(detailController.isDisposed, isFalse);
-
-    VideoSourceSearchController.cacheGlobal('Other', replacement);
-
-    expect(detailController.isDisposed, isTrue);
-    expect(
-      identical(VideoSourceSearchController.globalCached, replacement),
-      isTrue,
-    );
-
-    final taken = VideoSourceSearchController.takeSharedFor(title: 'Other');
-    addTearDown(taken.dispose);
-    expect(identical(taken, replacement), isTrue);
-    expect(VideoSourceSearchController.globalCached, isNull);
-  });
-
-  test('a timed-out media resolve keeps the candidate usable', () async {
-    final controller = _SlowMediaController();
+  test('concurrent probes share one request and immutable catalog', () async {
+    repository.data = catalog([
+      ['direct'],
+    ]);
+    final controller = _Controller();
     addTearDown(controller.dispose);
-    final item = SearchResultItem(
-      SourceSearchResult.fromLegacy({
-        'title': 'Example',
-        'source': 'test',
-        ...{'seriesId': 'example'},
-      }),
-    );
-
-    final probe = await controller.ensureCandidatePlayable(
+    final item = result();
+    final a = controller.ensureCandidatePlayable(
       item,
       episodeIndex: 0,
       preferredLine: 1,
-      resolveMedia: true,
-      raceMode: true,
     );
-
-    // The catalog stays usable while the media result is pending.
-    expect(probe.status, SourceProbeStatus.playable);
-    expect(probe.isReady, isTrue);
-    expect(probe.isInstantPlayable, isFalse);
-
-    // 慢解析回来后自动补记为可即播，并写入预取。
-    final ready = Completer<void>();
-    void onChanged() {
-      if (probe.isInstantPlayable && !ready.isCompleted) ready.complete();
-    }
-
-    controller.addListener(onChanged);
-    addTearDown(() => controller.removeListener(onChanged));
-    controller.release.complete();
-    await ready.future.timeout(const Duration(seconds: 5));
-    expect(probe.status, SourceProbeStatus.direct);
+    final b = controller.ensureCandidatePlayable(
+      item,
+      episodeIndex: 0,
+      preferredLine: 1,
+    );
+    expect(a, same(b));
+    final probe = await a;
+    expect(probe, same(await b));
     expect(probe.isInstantPlayable, isTrue);
-    expect(probe.mediaUrl, 'https://cdn.example.com/temp/2607/01.mp4');
-    expect(probe.resolvedLineIndex, 1);
+    expect(repository.loads, 1);
+    expect(controller.calls, ['direct']);
+    expect(probe.data!.episodes, same(repository.data.episodes));
+    expect(repository.data.prefetched, isNull);
+    expect(repository.data.lineIndex, isNull);
+    expect(
+      await controller.ensureCandidatePlayable(
+        item,
+        episodeIndex: 0,
+        preferredLine: 1,
+      ),
+      same(probe),
+    );
   });
 
-  test('keeps the probe window full after one route is verified', () {
-    final controller = _ProbeCountingController();
-    addTearDown(controller.dispose);
-    final candidates = <SourceCandidateState>[];
+  test('transfers the latest detail controller to the player', () {
+    final first = VideoSourceSearchController(title: 'Example');
+    final next = VideoSourceSearchController(title: 'Other');
+    VideoSourceSearchController.cacheGlobal('Example', first);
+    VideoSourceSearchController.cacheGlobal('Other', next);
+    expect(first.isDisposed, isTrue);
+    final taken = VideoSourceSearchController.takeSharedFor(title: 'Other');
+    addTearDown(taken.dispose);
+    expect(taken, same(next));
+    expect(VideoSourceSearchController.globalCached, isNull);
+  });
 
-    for (var index = 0; index < 5; index++) {
-      final item = SearchResultItem(
-        SourceSearchResult.fromLegacy({
-          'title': 'Example $index',
-          'source': 'test',
-          ...{'seriesId': '$index'},
-        }),
+  test('slow resolution stays pending until its actual result', () async {
+    repository.data = catalog([
+      ['slow'],
+    ]);
+    final controller = _Controller()..pending['slow'] = Completer<String>();
+    addTearDown(controller.dispose);
+    final work = controller.ensureCandidatePlayable(
+      result(),
+      episodeIndex: 0,
+      preferredLine: 1,
+      raceMode: true,
+    );
+    await controller.started.future;
+    expect(
+      await Future.any<SourceProbeState?>([work, Future.value(null)]),
+      isNull,
+    );
+    controller.pending['slow']!.complete('https://fixture.test/slow.mp4');
+    expect((await work).isInstantPlayable, isTrue);
+    expect(controller.calls.length, 1);
+  });
+
+  test('deadline cancels work and never adopts a late result', () async {
+    repository.data = catalog([
+      ['slow'],
+    ]);
+    final controller = _Controller(timeout: const Duration(milliseconds: 30))
+      ..pending['slow'] = Completer<String>();
+    addTearDown(controller.dispose);
+    final probe = await controller.ensureCandidatePlayable(
+      result(),
+      episodeIndex: 0,
+      preferredLine: 1,
+      raceMode: true,
+    );
+    expect(probe.status, SourceProbeStatus.failed);
+    expect(probe.isReady, isFalse);
+    expect(controller.operations.single.isCancelled, isTrue);
+    controller.pending['slow']!.complete('https://fixture.test/late.mp4');
+    await Future<void>.delayed(Duration.zero);
+    expect(probe.status, SourceProbeStatus.failed);
+    expect(probe.data!.prefetched, isNull);
+  });
+
+  test('first ready line cancels siblings and deduplicates tokens', () async {
+    repository.data = catalog([
+      ['slow', 'slow', 'fast'],
+    ]);
+    final controller = _Controller()..pending['slow'] = Completer<String>();
+    addTearDown(controller.dispose);
+    final probe = await controller.ensureCandidatePlayable(
+      result(),
+      episodeIndex: 0,
+      preferredLine: 1,
+      raceMode: true,
+    );
+    expect(controller.calls, ['slow', 'fast']);
+    expect(probe.data!.lineIndex, 3);
+    expect(probe.data!.prefetched!.episodeId, 'fast');
+    expect(controller.operations.every((op) => op.isCancelled), isTrue);
+    controller.pending['slow']!.complete('https://fixture.test/late.mp4');
+    await Future<void>.delayed(Duration.zero);
+    expect(probe.data!.prefetched!.episodeId, 'fast');
+  });
+
+  test('manual probes scan sparse unique lines sequentially', () async {
+    repository.data = catalog([
+      ['', 'bad', 'bad', 'fast'],
+    ]);
+    final controller = _Controller()..fail.add('bad');
+    addTearDown(controller.dispose);
+    final probe = await controller.ensureCandidatePlayable(
+      result(),
+      episodeIndex: 0,
+      preferredLine: 1,
+    );
+    expect(controller.calls, ['bad', 'fast']);
+    expect(probe.isInstantPlayable, isTrue);
+    expect(probe.resolvedLineIndex, 4);
+  });
+
+  test(
+    'missing episode and empty lines cannot fall back to episode zero',
+    () async {
+      repository.data = catalog([
+        [],
+        ['valid'],
+      ]);
+      final controller = _Controller();
+      addTearDown(controller.dispose);
+      final missing = await controller.ensureCandidatePlayable(
+        result(),
+        episodeIndex: 20,
+        preferredLine: 1,
       );
-      final probe = SourceProbeState(
-        item: item,
+      final empty = await controller.ensureCandidatePlayable(
+        result(),
         episodeIndex: 0,
         preferredLine: 1,
       );
-      controller.probes[item.key] = probe;
-      candidates.add(
-        SourceCandidateState(item: item, score: 5 - index, probe: probe),
+      expect(missing.isReady, isFalse);
+      expect(empty.isReady, isFalse);
+      expect(controller.calls, isEmpty);
+    },
+  );
+
+  test(
+    'changing episode cancels stale probes and reuses the catalog',
+    () async {
+      repository.data = catalog([
+        ['slow'],
+        ['fast'],
+      ]);
+      final controller = _Controller()..pending['slow'] = Completer<String>();
+      addTearDown(controller.dispose);
+      final item = result();
+      final old = controller.ensureCandidatePlayable(
+        item,
+        episodeIndex: 0,
+        preferredLine: 1,
       );
+      final cancelled = expectLater(
+        old,
+        throwsA(isA<RequestCancelledException>()),
+      );
+      await controller.started.future;
+      final next = await controller.ensureCandidatePlayable(
+        item,
+        episodeIndex: 1,
+        preferredLine: 1,
+      );
+      await cancelled;
+      expect(next.data!.episodeIndex, 1);
+      expect(repository.loads, 1);
+      controller.pending['slow']!.complete('https://fixture.test/late.mp4');
+      await Future<void>.delayed(Duration.zero);
+      expect(next.data!.prefetched!.episodeId, 'fast');
+    },
+  );
+
+  test(
+    'changing selection cancels an unfinished catalog and starts a fresh one',
+    () async {
+      repository.catalogGate = Completer<void>();
+      repository.data = catalog([
+        ['old'],
+        ['new'],
+      ]);
+      final controller = _Controller();
+      addTearDown(controller.dispose);
+      final item = result();
+      final old = controller.ensureCandidatePlayable(
+        item,
+        episodeIndex: 0,
+        preferredLine: 1,
+      );
+      final rejected = expectLater(
+        old,
+        throwsA(isA<RequestCancelledException>()),
+      );
+      await repository.catalogStarted.future;
+      final oldOperation = repository.catalogOperation!;
+      final oldGate = repository.catalogGate!;
+      repository.catalogGate = null;
+      final next = await controller.ensureCandidatePlayable(
+        item,
+        episodeIndex: 1,
+        preferredLine: 1,
+      );
+      await rejected;
+      expect(oldOperation.isCancelled, isTrue);
+      expect(repository.loads, 2);
+      expect(next.data!.prefetched!.episodeId, 'new');
+      oldGate.complete();
+      await Future<void>.delayed(Duration.zero);
+      expect(await controller.resolveVideoData(item), same(repository.data));
+    },
+  );
+
+  test('candidate deadline cancels a pending catalog too', () async {
+    repository.catalogGate = Completer<void>();
+    final controller = _Controller(timeout: const Duration(milliseconds: 30));
+    addTearDown(controller.dispose);
+    final probe = await controller.ensureCandidatePlayable(
+      result(),
+      episodeIndex: 0,
+      preferredLine: 1,
+    );
+    expect(probe.status, SourceProbeStatus.failed);
+    expect(repository.catalogOperation!.isCancelled, isTrue);
+    expect(controller.calls, isEmpty);
+    repository.catalogGate!.complete();
+  });
+
+  test('immediate retry survives cleanup from a cancelled probe', () async {
+    repository.data = catalog([
+      ['slow'],
+    ]);
+    final controller = _Controller()..pending['slow'] = Completer<String>();
+    addTearDown(controller.dispose);
+    final item = result();
+    final first = controller.ensureCandidatePlayable(
+      item,
+      episodeIndex: 0,
+      preferredLine: 1,
+    );
+    final cancelled = expectLater(
+      first,
+      throwsA(isA<RequestCancelledException>()),
+    );
+    await controller.started.future;
+    controller.cancelSearch();
+    controller.pending['slow']!.complete('https://fixture.test/first.mp4');
+    controller.pending['slow'] = Completer<String>();
+    final second = controller.ensureCandidatePlayable(
+      item,
+      episodeIndex: 0,
+      preferredLine: 1,
+    );
+    await cancelled;
+    expect(
+      controller.ensureCandidatePlayable(
+        item,
+        episodeIndex: 0,
+        preferredLine: 1,
+      ),
+      same(second),
+    );
+    controller.pending['slow']!.complete('https://fixture.test/second.mp4');
+    expect(
+      (await second).data!.prefetched!.url,
+      'https://fixture.test/second.mp4',
+    );
+  });
+
+  test('route keys preserve URL case and namespace source tokens', () async {
+    final controller = _Controller();
+    addTearDown(controller.dispose);
+    Future<String?> key(String source, String token) async {
+      repository.data = catalog([
+        [token],
+      ], source: source);
+      return (await controller.ensureCandidatePlayable(
+        result(token, source),
+        episodeIndex: 0,
+        preferredLine: 1,
+      )).routeKey;
     }
 
-    controller.startSwitchProbes(candidates);
-    expect(controller.calls, 4);
+    expect(
+      await key('a', 'https://cdn.test/A.mp4'),
+      isNot(await key('b', 'https://cdn.test/a.mp4')),
+    );
+    expect(await key('a', 'token'), isNot(await key('b', 'token')));
+    expect(
+      await key('a', 'https://cdn.test/shared.mp4'),
+      await key('b', 'https://cdn.test/shared.mp4'),
+    );
+  });
 
-    candidates.first.probe.status = SourceProbeStatus.direct;
-    controller.startSwitchProbes(candidates);
+  test(
+    'empty search succeeds and first keyword hit cancels siblings',
+    () async {
+      final controller = VideoSourceSearchController(title: 'Example');
+      addTearDown(controller.dispose);
+      controller.manualAliases = ['Alias'];
+      final slow = Completer<List<SourceSearchResult>>();
+      repository.searcher = (source, query) async {
+        if (query == 'Example') {
+          return SourceOperation.current!.wait(slow.future);
+        }
+        return [result('found', source)];
+      };
+      await controller.startSearch();
+      expect(controller.results.length, 1);
+      expect(repository.searchOperations.every((op) => op.isCancelled), isTrue);
+      expect(repository.loads, 0);
+      slow.complete([]);
+      repository.searcher = (_, _) async => [];
+      await controller.startSearch();
+      expect(controller.results, isEmpty);
+      expect(
+        controller.searchErrors.where((e) => !e.startsWith('站内')),
+        isEmpty,
+      );
+    },
+  );
 
-    expect(controller.calls, 5);
-    expect(candidates.last.status, SourceProbeStatus.resolving);
+  test(
+    'switching episodes releases prior states and keeps the probe window full',
+    () async {
+      repository.searcher = (source, _) async => [
+        for (var i = 0; i < 5; i++) result('$i', source),
+      ];
+      repository.catalogFor = (item) => catalog([
+        [item.id],
+        [item.id],
+      ]);
+      final controller = _Controller();
+      for (var i = 0; i < 5; i++) {
+        controller.pending['$i'] = Completer<String>();
+      }
+      addTearDown(controller.dispose);
+      await controller.startSearch();
+      final first = controller.getDirectSourceGroups(
+        episodeIndex: 0,
+        preferredLine: 1,
+      );
+      final candidates = first.expand((group) => group.origins).toList();
+      controller.startSwitchProbes(candidates);
+      await controller.started.future;
+      expect(controller.calls.length, 4);
+      final completed = candidates.first.future!;
+      controller.pending['0']!.complete('https://fixture.test/0.mp4');
+      await completed;
+      controller.startSwitchProbes(candidates);
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.calls.length, 5);
+      controller.getDirectSourceGroups(episodeIndex: 1, preferredLine: 1);
+      final revisited = controller.getDirectSourceGroups(
+        episodeIndex: 0,
+        preferredLine: 1,
+      );
+      expect(revisited.first.primary, isNot(same(first.first.primary)));
+      expect(
+        revisited.every((group) => group.status == SourceProbeStatus.pending),
+        isTrue,
+      );
+      for (var i = 1; i < 5; i++) {
+        controller.pending['$i']!.complete('https://fixture.test/$i.mp4');
+      }
+    },
+  );
+
+  test('empty automatic search finishes with one failure callback', () async {
+    var failures = 0;
+    final controller = VideoSourceSearchController(
+      title: 'No matches',
+      autoMatchMode: true,
+      onMatchFailed: () => failures++,
+    );
+    addTearDown(controller.dispose);
+    await controller.startSearch();
+    expect(failures, 1);
+    expect(controller.isSearching, isFalse);
+    expect(controller.progressingSources, isEmpty);
+  });
+
+  test('manual selection cancels automatic work before it can claim', () async {
+    repository.data = catalog([
+      ['slow'],
+    ]);
+    repository.searcher = (source, _) async => [result('found', source)];
+    final matches = <PlaybackRequest>[];
+    final controller = _Controller(autoMatch: true, onMatch: matches.add)
+      ..pending['slow'] = Completer<String>();
+    addTearDown(controller.dispose);
+    final search = controller.startSearch();
+    await controller.started.future;
+    controller.markUserSelected();
+    await search;
+    expect(controller.isSearching, isFalse);
+    expect(controller.operations.every((op) => op.isCancelled), isTrue);
+    controller.pending['slow']!.complete('https://fixture.test/late.mp4');
+    await Future<void>.delayed(Duration.zero);
+    expect(matches, isEmpty);
+  });
+
+  test('automatic search claims once and cancels pending line work', () async {
+    repository.data = catalog([
+      ['slow', 'fast'],
+    ]);
+    repository.searcher = (source, _) async => [result('found', source)];
+    final matches = <PlaybackRequest>[];
+    final controller = _Controller(autoMatch: true, onMatch: matches.add)
+      ..pending['slow'] = Completer<String>();
+    addTearDown(controller.dispose);
+    await controller.startSearch();
+    expect(matches.length, 1);
+    expect(controller.hasMatched, isTrue);
+    expect(controller.isSearching, isFalse);
+    expect(matches.single.prefetched!.episodeId, 'fast');
+    expect(controller.operations.every((op) => op.isCancelled), isTrue);
+    controller.pending['slow']!.complete('https://fixture.test/late.mp4');
+    await Future<void>.delayed(Duration.zero);
+    expect(matches.length, 1);
   });
 }
 
-class _CatalogController extends VideoSourceSearchController {
-  _CatalogController() : super(title: 'Example');
-  int loads = 0;
+class _Catalog extends SourceCatalog {
+  _Catalog() : super(Instances.sp);
   @override
-  Future<PlaybackRequest> resolveVideoData(SearchResultItem item) async {
+  List<AdapterDescriptor> get quickSearchSources => [
+    AdapterRegistry.builtinSources.first,
+  ];
+}
+
+class _Repository extends SourceAdapterService {
+  _Repository(super.catalog);
+  PlaybackRequest data = catalog([
+    ['fast'],
+  ]);
+  int loads = 0;
+  PlaybackRequest Function(SourceSearchResult)? catalogFor;
+  Completer<void>? catalogGate;
+  SourceOperation? catalogOperation;
+  final catalogStarted = Completer<void>();
+  final searchOperations = <SourceOperation>[];
+  Future<List<SourceSearchResult>> Function(String, String) searcher =
+      (_, _) async => [];
+  @override
+  Future<void> init() async {}
+  @override
+  Future<PlaybackRequest?> buildPlaybackRequest(
+    SourceSearchResult item, {
+    SourceOperation? operation,
+  }) async {
     loads++;
-    return PlaybackRequest.fromMap({
-      'source': 'internal',
-      'videos': 'Episode\$https://fixture.test/episode.mp4',
-    });
+    catalogOperation = SourceOperation.current!;
+    if (!catalogStarted.isCompleted) catalogStarted.complete();
+    if (catalogGate != null) await catalogOperation!.wait(catalogGate!.future);
+    return catalogFor?.call(item) ?? data;
+  }
+
+  @override
+  Future<List<SourceSearchResult>> search(
+    String sourceKey,
+    String query, {
+    SourceOperation? operation,
+    String fallbackDescription = '',
+    bool skipBgmEnhancement = false,
+  }) {
+    searchOperations.add(SourceOperation.current!);
+    return searcher(sourceKey, query);
   }
 }
 
-class _SlowMediaController extends VideoSourceSearchController {
-  _SlowMediaController() : super(title: 'Example');
-
-  final release = Completer<void>();
-
-  // Keep the media pending until the test releases it.
+class _Controller extends VideoSourceSearchController {
+  _Controller({
+    this.timeout = const Duration(seconds: 15),
+    bool autoMatch = false,
+    void Function(PlaybackRequest)? onMatch,
+  }) : super(title: 'Example', autoMatchMode: autoMatch, onMatchFound: onMatch);
+  final Duration timeout;
+  final pending = <String, Completer<String>>{};
+  final calls = <String>[];
+  final fail = <String>{};
+  final operations = <SourceOperation>[];
+  final started = Completer<void>();
   @override
-  Duration get raceMediaTimeout => const Duration(milliseconds: 20);
-
+  Duration get candidateTimeout => timeout;
   @override
-  Future<PlaybackRequest> resolveVideoData(SearchResultItem item) async =>
-      PlaybackRequest.fromMap({
-        'source': 'test',
-        'videos': '第1集\$line-token-1',
-      });
-
+  Duration get raceTimeout => timeout;
   @override
   Future<({String url, Map<String, String> httpHeaders})> resolveLineMedia({
     required String sourceKey,
     required String lineToken,
-    bool raceMode = false,
   }) async {
-    await release.future;
-    return (
-      url: 'https://cdn.example.com/temp/2607/01.mp4',
-      httpHeaders: const <String, String>{},
-    );
-  }
-}
-
-class _ProbeCountingController extends VideoSourceSearchController {
-  _ProbeCountingController() : super(title: 'Example');
-
-  final probes = <String, SourceProbeState>{};
-  int calls = 0;
-
-  @override
-  Future<SourceProbeState> ensureCandidatePlayable(
-    SearchResultItem item, {
-    required int episodeIndex,
-    required int preferredLine,
-    bool resolveMedia = true,
-    bool raceMode = false,
-  }) {
-    calls++;
-    final probe = probes[item.key]!..status = SourceProbeStatus.resolving;
-    return Future.value(probe);
+    calls.add(lineToken);
+    operations.add(SourceOperation.current!);
+    if (!started.isCompleted) started.complete();
+    if (fail.contains(lineToken)) throw StateError('Fixture unavailable');
+    final url = pending[lineToken] == null
+        ? 'https://fixture.test/$lineToken.mp4'
+        : await SourceOperation.current!.wait(pending[lineToken]!.future);
+    return (url: url, httpHeaders: const <String, String>{});
   }
 }

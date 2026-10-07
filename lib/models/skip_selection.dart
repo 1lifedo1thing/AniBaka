@@ -4,29 +4,28 @@ typedef SkipRange = ({int startMs, int endMs});
 
 /// Drafts stay with their video while the controls move between screen layouts.
 class SkipSelection {
-  SkipSelection({
+  const SkipSelection({
     required this.context,
     required this.durationMs,
     required this.type,
-    required Map<String, SkipRange> ranges,
-    Set<String> changed = const {},
+    this.ranges = (op: null, ed: null),
+    this.changed = (op: false, ed: false),
     this.saving = false,
-  }) : ranges = Map.unmodifiable(ranges),
-       changed = Set.unmodifiable(changed);
+  });
 
   final SkipContext context;
   final int durationMs;
   final String type;
-  final Map<String, SkipRange> ranges;
-  final Set<String> changed;
+  final ({SkipRange? op, SkipRange? ed}) ranges;
+  final ({bool op, bool ed}) changed;
   final bool saving;
-  SkipRange get range => ranges[type]!;
+  SkipRange get range => (type == 'op' ? ranges.op : ranges.ed)!;
   String get label => type == 'op' ? '片头' : '片尾';
 
   SkipSelection copyWith({
     String? type,
-    Map<String, SkipRange>? ranges,
-    Set<String>? changed,
+    ({SkipRange? op, SkipRange? ed})? ranges,
+    ({bool op, bool ed})? changed,
     bool? saving,
   }) => SkipSelection(
     context: context,
@@ -37,14 +36,17 @@ class SkipSelection {
     saving: saving ?? this.saving,
   );
 
-  SkipSegment segment(String type) => SkipSegment(
-    id: 'local:$type',
-    type: type,
-    startMs: ranges[type]!.startMs,
-    endMs: ranges[type]!.endMs,
-    durationMs: durationMs,
-    origin: 'local',
-    automatic: true,
-    status: 'personal',
-  );
+  SkipSegment segment(String type) {
+    final range = (type == 'op' ? ranges.op : ranges.ed)!;
+    return SkipSegment(
+      id: 'local:$type',
+      type: type,
+      startMs: range.startMs,
+      endMs: range.endMs,
+      durationMs: durationMs,
+      origin: 'local',
+      automatic: true,
+      status: 'personal',
+    );
+  }
 }

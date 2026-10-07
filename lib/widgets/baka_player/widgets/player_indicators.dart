@@ -1,7 +1,7 @@
 import 'package:baka/models/playback_state.dart';
 import 'package:baka/widgets/common/value_selector.dart';
 import '../controller.dart';
-import 'package:baka/utils/duration_utils.dart';
+import 'package:baka/utils/format_utils.dart';
 import 'package:flutter/material.dart';
 
 const _indicatorAnimationDuration = Duration(milliseconds: 200);

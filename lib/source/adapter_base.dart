@@ -613,6 +613,8 @@ abstract class AdapterBase {
 class RetryInterceptor extends Interceptor {
   final Dio dio;
   static const int _maxRetries = 2;
+  // A playback pipeline with its own browser fallback owns recovery instead.
+  static const skipRetryKey = 'anx.skipNetworkRetry';
 
   RetryInterceptor(this.dio);
 
@@ -634,6 +636,7 @@ class RetryInterceptor extends Interceptor {
   }
 
   bool _shouldRetry(DioException e) {
+    if (e.requestOptions.extra[skipRetryKey] == true) return false;
     if (e.requestOptions.cancelToken?.isCancelled ?? false) return false;
     if (e.requestOptions.method.toUpperCase() != 'GET') return false;
     switch (e.type) {

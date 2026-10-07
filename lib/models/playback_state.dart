@@ -173,48 +173,19 @@ enum VideoEnhancementMode {
   };
 }
 
-enum VideoEnhancementPipeline {
-  off,
-  low,
-  medium,
-  high,
-  ultra;
-
-  String get label => switch (this) {
-    off => '关闭',
-    low => '低',
-    medium => '中',
-    high => '高',
-    ultra => '超高',
-  };
-}
-
 @immutable
 class VideoEnhancementState {
   const VideoEnhancementState({
     this.requestedMode = VideoEnhancementMode.off,
-    this.appliedPipeline = VideoEnhancementPipeline.off,
+    this.appliedPipeline = VideoEnhancementMode.off,
     this.fallbackReason,
   });
 
   final VideoEnhancementMode requestedMode;
-  final VideoEnhancementPipeline appliedPipeline;
+  final VideoEnhancementMode appliedPipeline;
   final String? fallbackReason;
 
-  bool get enabled => appliedPipeline != VideoEnhancementPipeline.off;
-
-  VideoEnhancementState copyWith({
-    VideoEnhancementMode? requestedMode,
-    VideoEnhancementPipeline? appliedPipeline,
-    String? fallbackReason,
-    bool clearFallbackReason = false,
-  }) => VideoEnhancementState(
-    requestedMode: requestedMode ?? this.requestedMode,
-    appliedPipeline: appliedPipeline ?? this.appliedPipeline,
-    fallbackReason: clearFallbackReason
-        ? null
-        : fallbackReason ?? this.fallbackReason,
-  );
+  bool get enabled => appliedPipeline != VideoEnhancementMode.off;
 }
 
 @immutable
@@ -401,7 +372,7 @@ class PlaybackTechnicalInfo {
     this.rendererProfile = 'gpu',
     this.hardwareDecodeMode = 'auto',
     this.requestedEnhancementMode = VideoEnhancementMode.off,
-    this.appliedEnhancementPipeline = VideoEnhancementPipeline.off,
+    this.appliedEnhancementPipeline = VideoEnhancementMode.off,
     this.enhancementFallbackReason,
     this.outputWidth,
     this.outputHeight,
@@ -432,7 +403,7 @@ class PlaybackTechnicalInfo {
   final String rendererProfile;
   final String hardwareDecodeMode;
   final VideoEnhancementMode requestedEnhancementMode;
-  final VideoEnhancementPipeline appliedEnhancementPipeline;
+  final VideoEnhancementMode appliedEnhancementPipeline;
   final String? enhancementFallbackReason;
   final int? outputWidth;
   final int? outputHeight;
@@ -465,49 +436,4 @@ class PlaybackTechnicalInfo {
     if (shortEdge >= 360) return '360p';
     return '${shortEdge}p';
   }
-
-  PlaybackTechnicalInfo copyWith({
-    String? rendererProfile,
-    String? hardwareDecodeMode,
-    VideoEnhancementMode? requestedEnhancementMode,
-    VideoEnhancementPipeline? appliedEnhancementPipeline,
-    String? enhancementFallbackReason,
-    int? outputWidth,
-    int? outputHeight,
-    int? frameDropCount,
-    int? delayedFrameCount,
-  }) => PlaybackTechnicalInfo(
-    width: width,
-    height: height,
-    framesPerSecond: framesPerSecond,
-    videoBitrate: videoBitrate,
-    videoCodec: videoCodec,
-    videoDecoder: videoDecoder,
-    hardwareDecoder: hardwareDecoder,
-    videoOutput: videoOutput,
-    graphicsApi: graphicsApi,
-    graphicsContext: graphicsContext,
-    pixelFormat: pixelFormat,
-    colorSpace: colorSpace,
-    containerFormat: containerFormat,
-    audioBitrate: audioBitrate,
-    audioSampleRate: audioSampleRate,
-    audioChannels: audioChannels,
-    audioCodec: audioCodec,
-    audioDecoder: audioDecoder,
-    audioFormat: audioFormat,
-    audioChannelLayout: audioChannelLayout,
-    rendererProfile: rendererProfile ?? this.rendererProfile,
-    hardwareDecodeMode: hardwareDecodeMode ?? this.hardwareDecodeMode,
-    requestedEnhancementMode:
-        requestedEnhancementMode ?? this.requestedEnhancementMode,
-    appliedEnhancementPipeline:
-        appliedEnhancementPipeline ?? this.appliedEnhancementPipeline,
-    enhancementFallbackReason:
-        enhancementFallbackReason ?? this.enhancementFallbackReason,
-    outputWidth: outputWidth ?? this.outputWidth,
-    outputHeight: outputHeight ?? this.outputHeight,
-    frameDropCount: frameDropCount ?? this.frameDropCount,
-    delayedFrameCount: delayedFrameCount ?? this.delayedFrameCount,
-  );
 }

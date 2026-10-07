@@ -5,22 +5,18 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 import 'package:flutter/foundation.dart';
-import 'package:html/dom.dart' show Document;
-import 'package:html/parser.dart' show parse;
 import 'package:cookie_jar/cookie_jar.dart';
-import 'package:xpath_selector_html_parser/xpath_selector_html_parser.dart';
 
 import 'package:baka/services/playback/playback_settings.dart';
 import 'package:baka/source/adapter_base.dart';
 import 'package:baka/source/hls/hls_ad_filter.dart';
 import 'package:baka/source/hls/hls_master_playlist.dart';
 import 'package:baka/source/hls/hls_manifest_decoder.dart';
+import 'package:baka/source/hls/hls_ts_prefix.dart';
 import 'package:baka/source/hls/mpeg_ts_fingerprint.dart';
-import 'package:baka/source/models/episode.dart';
 import 'package:baka/source/models/series.dart';
 import 'package:baka/source/models/source.dart';
 import 'package:baka/source/video_url_extractor.dart';
-import 'package:baka/source/html_parser.dart';
 import 'package:baka/source/webview_adapter.dart';
 import 'package:baka/source/engine/pipeline_host.dart';
 import 'package:baka/source/engine/pipeline_interpreter.dart';
@@ -50,12 +46,6 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
   SourceOperation? _hlsPreparation;
   int _hlsGeneration = 0;
   late final _playFeatures = _inspectPlayFeatures(rule.play);
-  // 同一页面 HTML 常被连续多个 select/searchList/episodes 步骤解析；
-  // 按 identity 缓存最近一次的 DOM，避免重复全量解析（消费方均只读）。
-  String? _lastParsedHtml;
-  Document? _lastParsedDoc;
-
-  static final RegExp _whitespacePattern = RegExp(r'\s+');
   static final RegExp _hlsUriAttrPattern = RegExp(r'URI="([^"]+)"');
 
   /// HLS 指纹探测只取分片前缀。实测 16 KB 已足够读到 PAT/PMT 与首个 SPS。
@@ -69,9 +59,6 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
 
   @override
   String get baseUrl => rule.baseUrl;
-
-  @override
-  Map<String, String> get ruleHeaders => rule.headers;
 
   @override
   bool get allowWebview => rule.useWebview;
@@ -120,7 +107,6 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
     _webViewTaskScope?.cancel();
     _mediaRedirectResolver?.close();
     stopPlaybackKeepAlive();
-    _dropParseCache();
     super.dispose();
   }
 
@@ -143,49 +129,43 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
     String query, {
     bool enhanceWithBgm = true,
   }) async {
-    try {
-      final series = await _interpreter.runSearch(rule, this, query);
-      if (enhanceWithBgm) {
-        var next = 0;
-        // Five workers keep requests bounded without waiting for each batch's slowest item.
-        await Future.wait(
-          List.generate(series.length.clamp(0, 5), (_) async {
-            while (next < series.length) {
-              final item = series[next++];
-              try {
-                final subject = await resolveBgmSubject(title: item.name);
-                SourceOperation.check();
-                item.image = subject?.imageUrl ?? item.image;
-                item.description =
-                    subject?.summary ?? item.description ?? '暂无简介';
-                item.bgmId = subject?.subjectId ?? item.bgmId;
-                item.score = subject?.score ?? item.score;
-              } catch (_) {
-                SourceOperation.check();
-              }
+    final series = await _interpreter.runSearch(rule, this, query);
+    if (enhanceWithBgm) {
+      var next = 0;
+      // Five workers keep requests bounded without waiting for each batch's slowest item.
+      await Future.wait(
+        List.generate(series.length.clamp(0, 5), (_) async {
+          while (next < series.length) {
+            final item = series[next++];
+            try {
+              final subject = await resolveBgmSubject(title: item.name);
+              SourceOperation.check();
+              item.image = subject?.imageUrl ?? item.image;
+              item.description = subject?.summary ?? item.description ?? '暂无简介';
+              item.bgmId = subject?.subjectId ?? item.bgmId;
+              item.score = subject?.score ?? item.score;
+            } catch (_) {
+              SourceOperation.check();
             }
-          }),
-        );
-      }
-      return series;
-    } finally {
-      _dropParseCache();
+          }
+        }),
+      );
     }
+    return series;
   }
 
   @override
   Future<PlaybackCatalog> getPlaybackCatalog(String seriesId) => runOperation(
     () => _interpreter
         .runDetail(rule, this, seriesId)
-        .then(PlaybackCatalog.fromSources)
-        .whenComplete(_dropParseCache),
+        .then(PlaybackCatalog.fromSources),
   );
 
   @override
   Future<String> getDownloadUrl(String episodeId) => runOperation(
     () => _withPlayCookieSnapshot(
       () => _interpreter.runPlay(rule, this, episodeId),
-    ).whenComplete(_dropParseCache),
+    ),
   );
 
   @override
@@ -250,7 +230,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
         debugPrint('$name: 动态媒体被服务器拒绝，丢弃: ${media.url}');
       }
       return (url: '', httpHeaders: const <String, String>{});
-    }).whenComplete(_dropParseCache);
+    });
   }
 
   @override
@@ -363,7 +343,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
         PlaybackSettingsService.getFilterHlsAdsOverride() ??
         _playFeatures.filtersHlsAds;
     if ((!_playFeatures.materializesHls && !filtersAds) ||
-        !prepared.url.toLowerCase().contains('.m3u8')) {
+        !VideoUrlExtractor.isHlsUrl(prepared.url)) {
       return prepared;
     }
     final manifestUri = Uri.tryParse(prepared.url);
@@ -625,9 +605,10 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
       }
       final secret = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
       final baseUrl = 'http://${server.address.address}:${server.port}/$secret';
-      final targetIds = <Uri, int>{};
+      final targetIds = <({Uri uri, bool isSegment}), int>{};
 
-      String proxyUrlFor(Uri target) {
+      String proxyUrlFor(Uri uri, {required bool isSegment}) {
+        final target = (uri: uri, isSegment: isSegment);
         final id = targetIds.putIfAbsent(target, () => targetIds.length);
         return '$baseUrl/media/${id.toRadixString(36)}';
       }
@@ -709,6 +690,8 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
         return;
       }
 
+      final target = session.targets[id];
+      final stripTsPrefix = _playFeatures.stripsHlsTsPrefix && target.isSegment;
       final headers = Map<String, String>.from(session.headers);
       for (final name in const [
         HttpHeaders.rangeHeader,
@@ -716,11 +699,17 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
         HttpHeaders.ifModifiedSinceHeader,
         HttpHeaders.ifNoneMatchHeader,
       ]) {
+        // Prefix removal changes byte offsets and validators. A full 200 body
+        // is valid for a Range request; keys and init maps keep normal ranges.
+        if (stripTsPrefix) {
+          headers.removeWhere((key, _) => key.toLowerCase() == name);
+          continue;
+        }
         final value = request.headers.value(name);
         if (value != null && value.isNotEmpty) headers[name] = value;
       }
       final remote = await dio.requestUri<ResponseBody>(
-        session.targets[id],
+        target.uri,
         options: Options(
           extra: const {SchedulerInterceptor.priorityKey: RequestPriority.play},
           method: request.method == 'HEAD' ? 'HEAD' : 'GET',
@@ -739,6 +728,16 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
         HttpHeaders.etagHeader,
         HttpHeaders.lastModifiedHeader,
       ]) {
+        if (stripTsPrefix &&
+            const {
+              HttpHeaders.contentLengthHeader,
+              HttpHeaders.contentRangeHeader,
+              HttpHeaders.acceptRangesHeader,
+              HttpHeaders.etagHeader,
+              HttpHeaders.lastModifiedHeader,
+            }.contains(name)) {
+          continue;
+        }
         final value = remote.headers.value(name);
         if (value != null && value.isNotEmpty) {
           response.headers.set(name, value);
@@ -746,7 +745,33 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
       }
       final stream = remote.data?.stream;
       if (request.method != 'HEAD' && stream != null) {
-        await response.addStream(stream);
+        if (stripTsPrefix && remote.statusCode == HttpStatus.ok) {
+          final chunks = StreamIterator(
+            HlsTsPrefix.strip(
+              stream,
+              onTransportStream: (_) {
+                response.headers.contentType = ContentType('video', 'mp2t');
+              },
+            ),
+          );
+          try {
+            // addStream freezes response headers, so inspect the prefix first.
+            if (await chunks.moveNext()) {
+              Stream<Uint8List> remaining() async* {
+                yield chunks.current;
+                while (await chunks.moveNext()) {
+                  yield chunks.current;
+                }
+              }
+
+              await response.addStream(remaining());
+            }
+          } finally {
+            await chunks.cancel();
+          }
+        } else {
+          await response.addStream(stream);
+        }
       }
       if (stream != null && request.method == 'HEAD') {
         await stream.listen(null, onError: (Object _) {}).cancel();
@@ -772,7 +797,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
   static String _materializeHlsManifest(
     String body,
     Uri manifestUri,
-    String Function(Uri target) proxyUrlFor,
+    String Function(Uri target, {required bool isSegment}) proxyUrlFor,
   ) {
     return body
         .replaceAll('\r\n', '\n')
@@ -781,11 +806,11 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
           final trimmed = line.trim();
           if (trimmed.isEmpty) return '';
           if (!trimmed.startsWith('#')) {
-            return proxyUrlFor(manifestUri.resolve(trimmed));
+            return proxyUrlFor(manifestUri.resolve(trimmed), isSegment: true);
           }
           return line.replaceAllMapped(_hlsUriAttrPattern, (match) {
             final resolved = manifestUri.resolve(match.group(1)!);
-            return 'URI="${proxyUrlFor(resolved)}"';
+            return 'URI="${proxyUrlFor(resolved, isSegment: false)}"';
           });
         })
         .join('\n');
@@ -910,9 +935,11 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
     bool usesCookies,
     bool validatesWithCookies,
     bool materializesHls,
+    bool stripsHlsTsPrefix,
     bool filtersHlsAds,
     bool resolvesMediaRedirects,
     bool followsEmbeddedPlayer,
+    bool usesWebview,
     Map<String, dynamic>? hlsManifestDecode,
     PipelineStep? keepAliveStep,
   })
@@ -921,9 +948,11 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
     var usesCookies = false;
     var validatesWithCookies = false;
     var materializesHls = false;
+    var stripsHlsTsPrefix = false;
     var filtersHlsAds = false;
     var resolvesMediaRedirects = false;
     var followsEmbeddedPlayer = false;
+    var usesWebview = false;
     Map<String, dynamic>? hlsManifestDecode;
     PipelineStep? keepAliveStep;
 
@@ -938,6 +967,8 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
         usesCookies |= step.flag('cookieSession');
         validatesWithCookies |= step.flag('validateWithCookies');
         materializesHls |= step.flag('materializeHls');
+        stripsHlsTsPrefix |= step.flag('stripHlsTsPrefix');
+        materializesHls |= stripsHlsTsPrefix;
         final decoder = step.params['hlsManifestDecode'];
         if (hlsManifestDecode == null && decoder is Map) {
           hlsManifestDecode = Map<String, dynamic>.from(decoder);
@@ -946,6 +977,7 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
         filtersHlsAds |= step.flag('filterHlsAds');
         resolvesMediaRedirects |= step.flag('resolveMediaRedirects');
         followsEmbeddedPlayer |= step.flag('followEmbeddedPlayer');
+        usesWebview |= step.op == 'sniff';
         if (keepAliveStep == null && step.flag('playbackKeepAlive')) {
           keepAliveStep = step;
         }
@@ -961,28 +993,15 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
       usesCookies: usesCookies,
       validatesWithCookies: validatesWithCookies,
       materializesHls: materializesHls,
+      stripsHlsTsPrefix: stripsHlsTsPrefix,
       filtersHlsAds: filtersHlsAds,
       resolvesMediaRedirects: resolvesMediaRedirects,
       followsEmbeddedPlayer: followsEmbeddedPlayer,
+      usesWebview: usesWebview,
       hlsManifestDecode: hlsManifestDecode,
       keepAliveStep: keepAliveStep,
     );
   }
-
-  @override
-  String toAbsolute(String url, String base) =>
-      VideoUrlExtractor.toAbsolute(url.trim(), base.isEmpty ? baseUrl : base);
-
-  @override
-  String normalizeUrl(String url, String pageUrl) =>
-      VideoUrlExtractor.normalizeResolvedUrl(
-        url,
-        pageUrl.isEmpty ? baseUrl : pageUrl,
-        preserveMagnet: true,
-      );
-
-  @override
-  bool isPlayable(String url) => VideoUrlExtractor.isPlayable(url);
 
   @override
   Future<String> fetch(
@@ -1021,11 +1040,18 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
               ? Headers.formUrlEncodedContentType
               : contentType,
           headers: {
-            ...rule.headers,
             if (referer != null && referer.isNotEmpty) 'Referer': referer,
             ...?headers,
           },
-          extra: {SchedulerInterceptor.priorityKey: priority},
+          extra: {
+            SchedulerInterceptor.priorityKey: priority,
+            // Do not spend three network timeouts before trying the rule's
+            // browser fallback. Playback's outer attempts still own recovery.
+            if (priority == RequestPriority.play &&
+                allowWebview &&
+                _playFeatures.usesWebview)
+              RetryInterceptor.skipRetryKey: true,
+          },
         ),
       );
       return resp.data?.toString() ?? '';
@@ -1039,155 +1065,11 @@ class PipelineSourceAdapter extends AdapterBase implements PipelineHost {
   }
 
   @override
-  List<Series> parseSearchList(
-    String html, {
-    required List<String> selectors,
-    String? detailPattern,
-  }) {
-    if (html.trim().isEmpty) return const [];
-    return HtmlParser.parseSearchResults(
-      _parseCached(html),
-      baseUrl: baseUrl,
-      selectors: selectors,
-      detailPattern: detailPattern,
-    );
-  }
-
-  Document _parseCached(String html) {
-    if (!identical(html, _lastParsedHtml)) {
-      _lastParsedDoc = parse(html);
-      _lastParsedHtml = html;
-    }
-    return _lastParsedDoc!;
-  }
-
-  void _dropParseCache() {
-    _lastParsedHtml = null;
-    _lastParsedDoc = null;
-  }
-
-  @override
-  List<Series> parseSearchListXPath(
-    String html, {
-    required String listXPath,
-    required String nameXPath,
-    required String linkXPath,
-  }) {
-    final results = <Series>[];
-    try {
-      final docEl = _parseCached(html).documentElement;
-      if (docEl == null) return results;
-      final nodes = docEl.queryXPath(listXPath).nodes;
-      for (final node in nodes) {
-        final linkNode = linkXPath.isEmpty
-            ? node
-            : node.queryXPath(linkXPath).node;
-        final href = linkNode?.attributes['href'] ?? '';
-        if (href.isEmpty) continue;
-        final name =
-            ((nameXPath.isEmpty
-                        ? node.node.text
-                        : node.queryXPath(nameXPath).node?.text) ??
-                    '')
-                .trim();
-        results.add(
-          Series(toAbsolute(href, baseUrl), name.isEmpty ? '未知标题' : name),
-        );
-      }
-    } catch (e) {
-      debugPrint('$name: XPath 搜索解析失败: $e');
-    }
-    return results;
-  }
-
-  @override
-  List<Source> parseEpisodes(
-    String html, {
-    required List<String> listSelectors,
-    List<String>? tabSelectors,
-  }) {
-    if (html.trim().isEmpty) return const [];
-    return HtmlParser.parseSources(
-      _parseCached(html),
-      baseUrl: baseUrl,
-      listSelectors: listSelectors.isEmpty ? null : listSelectors,
-      tabSelectors: tabSelectors,
-    );
-  }
-
-  @override
-  List<Source> parseEpisodesXPath(
-    String html, {
-    required String roadsXPath,
-    required String itemsXPath,
-  }) {
-    final sources = <Source>[];
-    try {
-      final docEl = _parseCached(html).documentElement;
-      if (docEl == null) return sources;
-      final roads = docEl.queryXPath(roadsXPath).nodes;
-      var count = 1;
-      for (final road in roads) {
-        final items = road.queryXPath(itemsXPath).nodes;
-        final episodes = <Episode>[];
-        for (var i = 0; i < items.length; i++) {
-          final href = items[i].attributes['href'] ?? '';
-          if (href.isEmpty) continue;
-          var name =
-              items[i].node.text?.replaceAll(_whitespacePattern, '') ?? '';
-          if (name.isEmpty) name = '第${i + 1}集';
-          episodes.add(Episode(toAbsolute(href, baseUrl), i, name));
-        }
-        if (episodes.isNotEmpty) {
-          sources.add(Source(episodes, '播放列表$count'));
-          count++;
-        }
-      }
-    } catch (e) {
-      debugPrint('$name: XPath 剧集解析失败: $e');
-    }
-    return sources;
-  }
-
-  @override
-  String extractVideoUrl(String content, String pageUrl) =>
-      VideoUrlExtractor.extractBest(
-        content,
-        pageUrl.isEmpty ? baseUrl : pageUrl,
-      );
-
-  @override
-  String? selectAttr(String html, String selector, String attr) {
-    try {
-      final element = _parseCached(html).querySelector(selector);
-      if (element == null) return null;
-      return attr == 'text' ? element.text.trim() : element.attributes[attr];
-    } catch (_) {
-      return null;
-    }
-  }
-
-  @override
-  List<String> selectAll(String html, String selector, String attr) {
-    try {
-      return _parseCached(html)
-          .querySelectorAll(selector)
-          .map(
-            (e) => attr == 'text' ? e.text.trim() : (e.attributes[attr] ?? ''),
-          )
-          .where((s) => s.isNotEmpty)
-          .toList();
-    } catch (_) {
-      return const [];
-    }
-  }
-
-  @override
   Future<String> renderWithWebview(
     String url, {
     bool Function(String html)? isReady,
     Duration timeout = const Duration(seconds: 30),
-    Duration settleDelay = const Duration(seconds: 1),
+    Duration settleDelay = Duration.zero,
   }) async {
     if (!allowWebview) return '';
     try {
@@ -1397,7 +1279,7 @@ class RemoteMediaRedirectResolver {
 class _HlsSession {
   _HlsSession(this.server, this.targets, this.headers);
   final HttpServer server;
-  final List<Uri> targets;
+  final List<({Uri uri, bool isSegment})> targets;
   final Map<String, String> headers;
   final SourceOperation operation = SourceOperation();
   StreamSubscription<HttpRequest>? subscription;

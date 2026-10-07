@@ -1,8 +1,6 @@
-import 'package:baka/utils/json_values.dart';
 import 'package:flutter/material.dart';
 
 import 'package:baka/api/bgm.dart';
-import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/widgets/anime/post_card.dart';
 import 'package:baka/widgets/common/skeletonizer.dart';
 
@@ -40,23 +38,17 @@ class _AnimeDetailRelatedSectionState extends State<AnimeDetailRelatedSection>
   static Future<List<Map<String, dynamic>>> _load(int subjectId) async {
     final response = await getBgmRelatedSubjects(subjectId);
     final items = <Map<String, dynamic>>[];
-    final ids = <int>{};
-
     for (final raw in response) {
-      if (toInt(raw['type']) != 2) continue;
-      final id = toInt(raw['id']);
-      final title = trimmed(raw['name_cn']) ?? trimmed(raw['name']);
-      if (id == null || title == null || !ids.add(id)) continue;
-
-      final image =
-          BgmUtils.pickImageUrl(raw['images']) ?? trimmed(raw['image']) ?? '';
-      final relation = trimmed(raw['relation']) ?? '相关';
+      if (raw['type'] != 2) continue;
+      final id = raw['id'] as int;
+      final nameCN = raw['name_cn'] as String;
+      final image = (raw['images'] as Map)['large'] as String;
+      final relation = raw['relation'] as String;
       items.add({
         'id': id,
         'bgmId': id,
-        'title': title,
-        'content': image.isEmpty ? '' : '<img src="$image">',
-        if (image.isNotEmpty) 'bgmImageUrl': image,
+        'title': nameCN.isEmpty ? raw['name'] as String : nameCN,
+        'bgmImageUrl': image,
         'sort': '番剧',
         'tag': relation,
         'info': relation,

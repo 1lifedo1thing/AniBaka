@@ -48,16 +48,6 @@
       "branches": [
         [
           {
-            "op": "regex",
-            "pattern": "^(https?:\\/\\/\\S+\\.(?:m3u8|mp4|mkv|flv)(?:[?#]\\S*)?)$",
-            "group": 1
-          },
-          {
-            "op": "videoUrl"
-          }
-        ],
-        [
-          {
             "op": "fetch",
             "url": "https://data.m3u8.in/player/?url={mediaToken}"
           },
@@ -72,16 +62,8 @@
             "value": "{url:raw}"
           },
           {
-            "op": "template",
-            "value": "https://data.m3u8.in/player/api.php?url={mediaToken}&sign={mediaSign}"
-          },
-          {
-            "op": "regex",
-            "pattern": "^(https:\\/\\/data\\.m3u8\\.in\\/player\\/api\\.php\\?url=[^&\\s]+&sign=[^&\\s]+)$",
-            "group": 1
-          },
-          {
             "op": "fetch",
+            "url": "https://data.m3u8.in/player/api.php?url={mediaToken}&sign={mediaSign}",
             "headers": {
               "X-Requested-With": "XMLHttpRequest",
               "Referer": "https://data.m3u8.in/player/?url={mediaToken}"
@@ -93,23 +75,25 @@
           },
           {
             "op": "regex",
-            "pattern": "^(https?:\\/\\/\\S+\\.(?:m3u8|mp4|mkv|flv)(?:[?#]\\S*)?)$",
+            "pattern": "^(https?://\\S+\\.(?:m3u8|mp4|mkv|flv)(?:[?#]\\S*)?)$",
             "group": 1
           }
         ],
         [
           {
+            "op": "template",
+            "value": "https://data.m3u8.in/player/?url={mediaToken}"
+          },
+          {
             "op": "sniff",
-            "goal": "video",
-            "url": "https://data.m3u8.in/player/?url={mediaToken}"
+            "goal": "video"
           }
         ],
         [
           {
             "op": "sniff",
             "goal": "video",
-            "url": "{episodeId:raw}",
-            "followEmbeddedPlayer": true
+            "url": "{episodeId:raw}"
           }
         ]
       ]

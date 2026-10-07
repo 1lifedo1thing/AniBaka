@@ -1,5 +1,5 @@
 import 'package:baka/models/skip_segment.dart';
-import 'package:baka/utils/duration_utils.dart';
+import 'package:baka/utils/format_utils.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 

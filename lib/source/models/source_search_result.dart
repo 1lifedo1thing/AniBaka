@@ -4,7 +4,7 @@ import 'package:baka/source/models/series.dart';
 
 /// A source result retains its Series. Only the legacy internal API needs a map.
 class SourceSearchResult {
-  const SourceSearchResult(
+  SourceSearchResult(
     this.series, {
     required this.source,
     required this.displayName,
@@ -22,11 +22,13 @@ class SourceSearchResult {
   final String source, displayName, fallbackDescription;
   String get title => series?.name ?? internalData!['title'] as String? ?? '';
   String get id => series?.seriesId ?? '${internalData!['id']}';
-  String get key => '$source|$id';
+  late final String key = '$source|$id';
   String get description => series?.description ?? fallbackDescription;
   String get cover =>
       series?.image ?? resolveCoverImage(internalData ?? const {}) ?? '';
-  int? get episodeCount {
+  late final int? episodeCount = _episodeCount();
+
+  int? _episodeCount() {
     final data = internalData;
     if (data == null) return null;
     final count = PlaybackEpisodeCatalog.countFrom(data);

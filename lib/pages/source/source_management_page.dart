@@ -1,5 +1,4 @@
 import 'package:baka/models/custom_source_config.dart';
-import 'package:baka/models/rule_hub.dart';
 import 'package:baka/pages/source/ai_rule_authoring_page.dart';
 import 'package:baka/services/source/rule_repository_service.dart';
 import 'package:baka/services/source/source_repository.dart';
@@ -25,13 +24,15 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
   final Set<String> _installing = <String>{};
 
   List<CustomSourceConfig> _customSources = const [];
-  List<RuleHubIndex> _indices = const [];
-  _HubCatalog _hubCatalog = const _HubCatalog.empty();
+  RuleHubCatalog get _hubCatalog => _repo.hubCatalog;
 
   bool _editing = false;
   bool _loadingSources = true;
   bool _loadingHub = true;
   bool _batchInstalling = false;
+  bool _batchUpdating = false;
+  int _batchCompleted = 0;
+  int _batchTotal = 0;
   String? _hubError;
   int _hubRequest = 0;
 
@@ -39,12 +40,14 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
   void initState() {
     super.initState();
     _catalog.addListener(_onSourcesChanged);
+    _repo.addListener(_onSourcesChanged);
     _loadData();
   }
 
   @override
   void dispose() {
     _catalog.removeListener(_onSourcesChanged);
+    _repo.removeListener(_onSourcesChanged);
     super.dispose();
   }
 
@@ -59,7 +62,6 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
 
     setState(() {
       _customSources = sources;
-      _hubCatalog = _HubCatalog.build(_indices, _repo);
     });
   }
 
@@ -73,7 +75,6 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
 
     setState(() {
       _customSources = _catalog.customSources;
-      _hubCatalog = _HubCatalog.build(_indices, _repo);
       _loadingSources = false;
     });
   }
@@ -92,8 +93,6 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
       if (!mounted || request != _hubRequest) return;
 
       setState(() {
-        _indices = indices;
-        _hubCatalog = _HubCatalog.build(indices, _repo);
         _loadingHub = false;
         _hubError = indices.isEmpty ? '没有可用的规则库，请检查订阅地址或网络。' : null;
       });
@@ -178,9 +177,9 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
     if (mounted) setState(() {});
   }
 
-  Future<void> _installRule(_HubRule rule) async {
+  Future<void> _installRule(RuleHubEntry rule) async {
     final key = rule.operationKey;
-    if (_installing.contains(key)) return;
+    if (_batchInstalling || _installing.contains(key)) return;
 
     HapticFeedback.mediumImpact();
     setState(() => _installing.add(key));
@@ -190,7 +189,6 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
     setState(() {
       _installing.remove(key);
       _customSources = _catalog.customSources;
-      _hubCatalog = _HubCatalog.build(_indices, _repo);
     });
 
     switch (result) {
@@ -206,36 +204,73 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
     }
   }
 
-  Future<void> _installAllRules() async {
-    if (_batchInstalling) return;
-    final rules = _hubCatalog.installable;
-    if (rules.isEmpty) {
-      showSnackBar('所有可用图源均已安装');
-      return;
-    }
+  Future<void> _installAllRules() =>
+      _installBatch(_hubCatalog.installable, updating: false);
+
+  Future<void> _updateAllRules() =>
+      _installBatch(_hubCatalog.updates, updating: true);
+
+  Future<void> _installBatch(
+    List<RuleHubEntry> rules, {
+    required bool updating,
+  }) async {
+    if (_batchInstalling || _installing.isNotEmpty || rules.isEmpty) return;
 
     HapticFeedback.mediumImpact();
-    setState(() => _batchInstalling = true);
+    setState(() {
+      _batchInstalling = true;
+      _batchUpdating = updating;
+      _batchCompleted = 0;
+      _batchTotal = rules.length;
+    });
 
     var success = 0;
     var failed = 0;
-    for (final rule in rules) {
-      final result = await _repo.install(rule.item, indexUrl: rule.indexUrl);
-      if (result == RuleInstallResult.failed) {
-        failed++;
-      } else {
-        success++;
+    var next = 0;
+    Future<void> installNext() async {
+      while (mounted && next < rules.length) {
+        final rule = rules[next++];
+        setState(() => _installing.add(rule.operationKey));
+        try {
+          final result = await _repo.install(
+            rule.item,
+            indexUrl: rule.indexUrl,
+          );
+          if (result == RuleInstallResult.failed) {
+            failed++;
+          } else {
+            success++;
+          }
+        } catch (error) {
+          failed++;
+          debugPrint('[RuleHub] Failed to install ${rule.item.name}: $error');
+        } finally {
+          if (mounted) {
+            setState(() {
+              _installing.remove(rule.operationKey);
+              _customSources = _catalog.customSources;
+              _batchCompleted++;
+            });
+          }
+        }
       }
     }
+
+    // Keep slow downloads from holding up the entire batch without flooding
+    // the subscription server. The repository serializes catalog writes.
+    await Future.wait([
+      for (var i = 0; i < 4 && i < rules.length; i++) installNext(),
+    ]);
     if (!mounted) return;
 
     setState(() {
       _batchInstalling = false;
       _customSources = _catalog.customSources;
-      _hubCatalog = _HubCatalog.build(_indices, _repo);
     });
     showSnackBar(
-      failed == 0 ? '一键安装完成，共 $success 个规则' : '安装完成：成功 $success 个，失败 $failed 个',
+      failed == 0
+          ? '${updating ? '更新' : '安装'}完成，共 $success 个源'
+          : '${updating ? '更新' : '安装'}完成：成功 $success 个，失败 $failed 个，可重试',
       isError: failed > 0,
     );
   }
@@ -307,8 +342,11 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
   @override
   Widget build(BuildContext context) {
     final builtinSources = _catalog.builtinSources;
+    final busy = _batchInstalling || _installing.isNotEmpty;
     final canInstallAll =
-        !_batchInstalling && _hubCatalog.installable.isNotEmpty;
+        !_batchInstalling &&
+        _installing.isEmpty &&
+        _hubCatalog.installable.isNotEmpty;
 
     return Scaffold(
       body: RefreshIndicator(
@@ -334,10 +372,12 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
                     _editing ? Icons.done_rounded : Icons.sort_rounded,
                     color: context.primaryColor,
                   ),
-                  onPressed: () {
-                    HapticFeedback.lightImpact();
-                    setState(() => _editing = !_editing);
-                  },
+                  onPressed: busy
+                      ? null
+                      : () {
+                          HapticFeedback.lightImpact();
+                          setState(() => _editing = !_editing);
+                        },
                   tooltip: _editing ? '完成排序' : '编辑排序',
                 ),
                 if (!_editing) ...[
@@ -346,7 +386,7 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
                       Icons.add_circle_rounded,
                       color: context.primaryColor,
                     ),
-                    onPressed: _openEditor,
+                    onPressed: busy ? null : _openEditor,
                     tooltip: '新建图源',
                   ),
                   IconButton(
@@ -354,10 +394,11 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
                       Icons.rss_feed_rounded,
                       color: context.primaryColor,
                     ),
-                    onPressed: _manageSubscriptions,
+                    onPressed: busy ? null : _manageSubscriptions,
                     tooltip: '订阅管理',
                   ),
                   PopupMenuButton<String>(
+                    enabled: !busy,
                     icon: Icon(
                       Icons.more_vert_rounded,
                       color: context.theme.hintColor,
@@ -395,7 +436,7 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
                           dense: true,
                           contentPadding: EdgeInsets.zero,
                           leading: Icon(Icons.refresh_rounded, size: 18),
-                          title: Text('刷新发现页'),
+                          title: Text('检查源更新'),
                         ),
                       ),
                       PopupMenuItem(
@@ -483,6 +524,7 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
                 ),
               )
             else ...[
+              SliverToBoxAdapter(child: _buildUpdateSummary()),
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -505,7 +547,7 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
                       const SizedBox(width: 12),
                       Expanded(
                         child: FilledButton.tonalIcon(
-                          onPressed: _customSources.isEmpty
+                          onPressed: busy || _customSources.isEmpty
                               ? null
                               : _deleteAllCustomSources,
                           icon: const Icon(
@@ -561,17 +603,103 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
     );
   }
 
+  Widget _buildUpdateSummary() {
+    final updates = _hubCatalog.updates;
+    final busy = _batchInstalling || _installing.isNotEmpty;
+    final title = _batchInstalling
+        ? '正在${_batchUpdating ? '更新' : '安装'}源 · $_batchCompleted / $_batchTotal'
+        : updates.isNotEmpty
+        ? '${updates.length} 个源有更新'
+        : _loadingHub
+        ? '正在检查源更新…'
+        : _hubError != null || _repo.usingCachedIndices
+        ? '暂时无法确认最新版本'
+        : '已安装的源均为最新版本';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Material(
+        color: context.colorScheme.primaryContainer.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  if (updates.isNotEmpty ||
+                      (_batchInstalling && _batchUpdating))
+                    FilledButton.icon(
+                      onPressed: busy ? null : _updateAllRules,
+                      icon: const Icon(
+                        Icons.system_update_alt_rounded,
+                        size: 18,
+                      ),
+                      label: const Text('全部更新'),
+                    )
+                  else
+                    TextButton.icon(
+                      onPressed: busy || _loadingHub
+                          ? null
+                          : () => _loadHub(forceRefresh: true),
+                      icon: const Icon(Icons.refresh_rounded, size: 18),
+                      label: const Text('检查更新'),
+                    ),
+                ],
+              ),
+              if (updates.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(
+                  updates.map((rule) => rule.item.name).join('、'),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: context.theme.hintColor,
+                  ),
+                ),
+              ],
+              if (_repo.usingCachedIndices) ...[
+                const SizedBox(height: 8),
+                const Text(
+                  '部分规则库连接失败，当前显示上次检查结果。可下拉重试。',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ],
+              if (_loadingHub || _batchInstalling) ...[
+                const SizedBox(height: 12),
+                LinearProgressIndicator(
+                  value: _batchInstalling
+                      ? _batchCompleted / _batchTotal
+                      : null,
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildSourceGrid(List<AdapterDescriptor> builtinSources) {
+    final gridDelegate = SliverGridDelegateWithMaxCrossAxisExtent(
+      maxCrossAxisExtent: 180,
+      mainAxisSpacing: 12,
+      crossAxisSpacing: 12,
+      mainAxisExtent: 180 + MediaQuery.textScalerOf(context).scale(32),
+    );
     if (_loadingSources) {
       return SliverPadding(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
         sliver: SliverGrid(
-          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-            maxCrossAxisExtent: 180,
-            mainAxisSpacing: 12,
-            crossAxisSpacing: 12,
-            childAspectRatio: 0.85,
-          ),
+          gridDelegate: gridDelegate,
           delegate: SliverChildBuilderDelegate(
             (context, _) => AppSkeletonizer(
               enabled: true,
@@ -606,12 +734,7 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
     return SliverPadding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
       sliver: SliverGrid(
-        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-          maxCrossAxisExtent: 180,
-          mainAxisSpacing: 12,
-          crossAxisSpacing: 12,
-          childAspectRatio: 0.85,
-        ),
+        gridDelegate: gridDelegate,
         delegate: SliverChildBuilderDelegate(
           (context, index) {
             if (index < customStart) {
@@ -624,6 +747,8 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
                   _catalog.builtinOverrideById(source.key) != null;
               final busy =
                   rule != null && _installing.contains(rule.operationKey);
+              final actionsBlocked = _batchInstalling || busy;
+              final version = _catalog.installedVersionFor(source.key);
               return SourceGridCard(
                 key: ValueKey('builtin-${source.key}'),
                 icon: SourceIcon(
@@ -641,42 +766,45 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
                     Uri.tryParse(config?.baseUrl ?? '')?.host ??
                     config?.baseUrl ??
                     source.statusLabel,
-                badge: hasLocalOverride
-                    ? '本地覆盖'
-                    : (rule == null
-                          ? '内置'
-                          : '内置 · v${rule.item.displayVersion}'),
+                badge: hasLocalOverride ? (version > 0 ? '规则库' : '本地') : '内置',
+                versionLabel: hasUpdate
+                    ? '${version > 0 ? 'v$version' : '本地版本'} → v${rule!.item.version}'
+                    : version > 0
+                    ? '当前 v$version'
+                    : null,
                 installed: true,
                 enabled: enabled,
                 hasUpdate: hasUpdate,
                 busy: busy,
                 buttonLabel: hasUpdate ? '更新' : (enabled ? '已启用' : '已停用'),
-                onTap: busy
+                onTap: actionsBlocked
                     ? null
                     : () async {
                         HapticFeedback.lightImpact();
                         await _catalog.toggleBuiltinSource(source.key);
                         if (mounted) setState(() {});
                       },
-                onButtonPressed: hasUpdate && rule != null
+                onButtonPressed: !actionsBlocked && hasUpdate && rule != null
                     ? () => _installRule(rule)
                     : null,
-                onEdit: () {
-                  final targetConfig =
-                      config ??
-                      CustomSourceConfig(
-                        id: source.key,
-                        name: source.displayName,
-                        baseUrl: '',
-                        pipeline: const <String, dynamic>{
-                          'search': <dynamic>[],
-                          'detail': <dynamic>[],
-                          'play': <dynamic>[],
-                        },
-                      );
-                  _openEditor(targetConfig);
-                },
-                onDelete: hasLocalOverride
+                onEdit: actionsBlocked
+                    ? null
+                    : () {
+                        final targetConfig =
+                            config ??
+                            CustomSourceConfig(
+                              id: source.key,
+                              name: source.displayName,
+                              baseUrl: '',
+                              pipeline: const <String, dynamic>{
+                                'search': <dynamic>[],
+                                'detail': <dynamic>[],
+                                'play': <dynamic>[],
+                              },
+                            );
+                        _openEditor(targetConfig);
+                      },
+                onDelete: hasLocalOverride && !actionsBlocked
                     ? () => _resetBuiltinOverride(
                         source.key,
                         config?.name ?? source.displayName,
@@ -693,6 +821,8 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
               final hasUpdate = rule?.status == InstallStatus.updateAvailable;
               final busy =
                   rule != null && _installing.contains(rule.operationKey);
+              final actionsBlocked = _batchInstalling || busy;
+              final version = _catalog.installedVersionFor(source.id);
               return SourceGridCard(
                 key: ValueKey('custom-${source.id}'),
                 icon: SourceIcon(
@@ -707,7 +837,12 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
                 ),
                 title: source.name,
                 subtitle: Uri.tryParse(source.baseUrl)?.host ?? source.baseUrl,
-                badge: rule == null ? '管线' : 'v${rule.item.displayVersion}',
+                badge: '自定义',
+                versionLabel: hasUpdate
+                    ? '${version > 0 ? 'v$version' : '本地版本'} → v${rule!.item.version}'
+                    : version > 0
+                    ? '当前 v$version'
+                    : null,
                 installed: true,
                 enabled: source.enabled,
                 hasUpdate: hasUpdate,
@@ -715,19 +850,22 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
                 buttonLabel: hasUpdate
                     ? '更新'
                     : (source.enabled ? '已启用' : '已停用'),
-                onTap: busy ? null : () => _toggleCustomSource(source),
-                onButtonPressed: hasUpdate && rule != null
+                onTap: actionsBlocked
+                    ? null
+                    : () => _toggleCustomSource(source),
+                onButtonPressed: !actionsBlocked && hasUpdate && rule != null
                     ? () => _installRule(rule)
                     : null,
-                onEdit: () => _openEditor(source),
-                onDelete: () => _deleteSource(source),
+                onEdit: actionsBlocked ? null : () => _openEditor(source),
+                onDelete: actionsBlocked ? null : () => _deleteSource(source),
               );
             }
 
             final rule = _hubCatalog.available[index - remoteStart];
             final item = rule.item;
             final busy = _installing.contains(rule.operationKey);
-            final canInstall = item.hasResolvableConfig && !busy;
+            final canInstall =
+                item.hasResolvableConfig && !_batchInstalling && !busy;
             final baseUrl = item.baseUrl;
             return SourceGridCard(
               key: ValueKey('remote-${rule.operationKey}'),
@@ -743,7 +881,7 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
               subtitle: baseUrl == null || baseUrl.isEmpty
                   ? '未知'
                   : (Uri.tryParse(baseUrl)?.host ?? baseUrl),
-              badge: 'v${item.displayVersion}',
+              badge: 'v${item.version}',
               installed: false,
               enabled: false,
               busy: busy,
@@ -757,85 +895,4 @@ class _SourceManagementPageState extends State<SourceManagementPage> {
       ),
     );
   }
-}
-
-class _HubCatalog {
-  final Map<String, _HubRule> installedBySourceId;
-  final List<_HubRule> available;
-  final List<_HubRule> installable;
-
-  const _HubCatalog.empty()
-    : installedBySourceId = const {},
-      available = const [],
-      installable = const [];
-
-  _HubCatalog({
-    required this.installedBySourceId,
-    required this.available,
-    required this.installable,
-  });
-
-  factory _HubCatalog.build(
-    List<RuleHubIndex> indices,
-    RuleRepositoryService repo,
-  ) {
-    final rawRules = <({RuleHubItem item, String indexUrl})>[
-      for (final index in indices)
-        for (final item in index.rules) (item: item, indexUrl: index.sourceUrl),
-    ];
-    if (rawRules.isEmpty) return const _HubCatalog.empty();
-
-    final inspected = repo.inspectItems(rawRules.map((rule) => rule.item));
-    final installed = <String, _HubRule>{};
-    final available = <String, _HubRule>{};
-
-    for (final raw in rawRules) {
-      final info = inspected[raw.item]!;
-      final rule = _HubRule(
-        item: raw.item,
-        indexUrl: raw.indexUrl,
-        status: info.status,
-      );
-      final sourceId = info.source?.id;
-      if (sourceId != null) {
-        final current = installed[sourceId];
-        if (current == null || current.item.version < rule.item.version) {
-          installed[sourceId] = rule;
-        }
-        continue;
-      }
-
-      final key = rule.catalogKey;
-      final current = available[key];
-      if (current == null || current.item.version < rule.item.version) {
-        available[key] = rule;
-      }
-    }
-
-    final availableRules = List<_HubRule>.unmodifiable(available.values);
-    return _HubCatalog(
-      installedBySourceId: Map<String, _HubRule>.unmodifiable(installed),
-      available: availableRules,
-      installable: List<_HubRule>.unmodifiable(
-        availableRules.where((rule) => rule.item.hasResolvableConfig),
-      ),
-    );
-  }
-}
-
-class _HubRule {
-  final RuleHubItem item;
-  final String indexUrl;
-  final InstallStatus status;
-
-  const _HubRule({
-    required this.item,
-    required this.indexUrl,
-    required this.status,
-  });
-
-  String get catalogKey =>
-      '${item.id}\n${item.name}\n${item.baseUrl ?? ''}\n${item.file}';
-
-  String get operationKey => '$indexUrl\n${item.installKey}';
 }

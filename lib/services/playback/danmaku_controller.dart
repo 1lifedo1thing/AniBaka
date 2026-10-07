@@ -288,21 +288,18 @@ class DanmakuController extends ChangeNotifier {
   SubstringMatcher? _blockMatcher;
 
   List<String> get blockWords => _blockWords;
-  set blockWords(List<String> words) {
+  set blockWords(Iterable<String> words) {
     _blockWords = List.unmodifiable(words);
-    _blockMatcher = words.isEmpty ? null : SubstringMatcher(_blockWords);
+    _blockMatcher = _blockWords.isEmpty ? null : SubstringMatcher(_blockWords);
   }
 
   void addBlockWord(String word) {
     if (_blockWords.contains(word)) return;
-    blockWords = [..._blockWords, word];
+    blockWords = _blockWords.followedBy([word]);
   }
 
   void removeBlockWord(String word) {
-    blockWords = [
-      for (final value in _blockWords)
-        if (value != word) value,
-    ];
+    blockWords = _blockWords.where((value) => value != word);
   }
 
   List<DanmakuItem> _items = const [];

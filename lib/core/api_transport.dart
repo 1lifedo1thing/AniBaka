@@ -111,6 +111,10 @@ class ApiTransport {
         abortTrigger: abortTrigger,
       );
       return read(response.body);
+    } on http.RequestAbortedException {
+      // Leaving a page or switching media intentionally cancels pending work.
+      // Keep cancellation visible to the caller without a global network toast.
+      rethrow;
     } catch (error) {
       if (error is ApiException &&
           error.statusCode == 404 &&

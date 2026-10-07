@@ -8,7 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'dlss_frame_generation_runtime.dart';
-import 'dlss_tool_installer.dart';
+import 'dlss_runtime_installer.dart';
 
 @immutable
 class DlssPlaybackEffects {
@@ -78,7 +78,7 @@ class DlssGlobalPlayback extends ChangeNotifier {
   String? error;
   Timer? _timer;
   CancelToken? _cancel;
-  DlssToolInstaller? _installer;
+  DlssRuntimeInstaller? _installer;
   bool _polling = false;
   Map<String, String> _runtimePaths = const {};
   DlssPlaybackEffects effects = const DlssPlaybackEffects();
@@ -201,10 +201,10 @@ class DlssGlobalPlayback extends ChangeNotifier {
     notifyListeners();
     final cancel = _cancel = CancelToken();
     try {
-      var tools = DlssToolchain.load(Instances.sp);
+      var tools = DlssRuntime.load(Instances.sp);
       if (!await tools.isAvailable()) {
         if (!allowInstall) throw StateError('增强环境缺失，请在实验室重新开启并配置');
-        final installer = _installer = DlssToolInstaller();
+        final installer = _installer = DlssRuntimeInstaller();
         void progress() {
           status = installer.status;
           notifyListeners();
@@ -240,7 +240,7 @@ class DlssGlobalPlayback extends ChangeNotifier {
           : null;
       if (cancel.isCancelled) throw cancel.cancelError!;
       final paths = {
-        'runtime': File(tools.executable).absolute.parent.path,
+        'runtime': Directory(tools.directory).absolute.path,
         'cache': cache.absolute.path,
         'fgRuntime': fg?.path ?? '',
       };

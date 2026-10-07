@@ -63,6 +63,10 @@ $ops
 Stage flags are optional booleans on play-stage steps (branch steps included):
 - materializeHls: serve a complete VOD HLS manifest through the app, so segment
   requests keep the rule's Referer/Cookie headers.
+- stripHlsTsPrefix: remove an image/junk prefix before MPEG-TS packets in HLS
+  segments. Implies materializeHls, including non-m3u8 playlist endpoints.
+  Segments are served in full because removing a prefix changes byte offsets;
+  encryption keys and initialization maps retain their original bytes/ranges.
 - hlsManifestDecode: decode a binary HLS manifest using a declared map, e.g.
   {scheme: xor, prefix: enc, key: [144,223,214,167,22,76,53], period: 10,
    fallbackIndex: 6, xor: 165, skipBytes: 3, trimPrefixBeforeM3u8: true}.
@@ -81,6 +85,11 @@ Stage flags are optional booleans on play-stage steps (branch steps included):
 The search stage must produce Series results, detail must produce playback
 lines and episodes, and play must produce a direct media URL. Prefer generic
 operations over inventing a new operation. Never return executable Dart code.
+JSON paths and HTML selectors are exact: a missing path or selector does not
+trigger a search elsewhere. Use explicit pipe-separated JSON paths or first
+branches for known alternatives. An empty JSON path selects the root value.
+HTML sniffing has no default settle delay. Declare readyRegex/readyContains for
+dynamic pages; set settleMs only when the site's protocol requires a delay.
 ''';
   }
 }

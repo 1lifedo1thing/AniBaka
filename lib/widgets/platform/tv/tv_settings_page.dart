@@ -1,3 +1,4 @@
+import 'package:baka/services/source/rule_repository_service.dart';
 import 'package:baka/core/account_session.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -210,11 +211,16 @@ class _TvSettingsPageState extends State<TvSettingsPage> {
     return ListView(
       physics: const BouncingScrollPhysics(),
       children: [
-        _buildSettingCard(
-          icon: Icons.extension_outlined,
-          title: '源管理',
-          subtitle: '管理并启用或禁用您的视频爬虫源',
-          onPressed: () => NavigationService.toSourceManagement(context),
+        ListenableBuilder(
+          listenable: ruleRepository,
+          builder: (context, _) => _buildSettingCard(
+            icon: Icons.extension_outlined,
+            title: '源管理',
+            subtitle: ruleRepository.updateCount > 0
+                ? '${ruleRepository.updateCount} 个源有更新'
+                : '管理并启用或禁用您的视频爬虫源',
+            onPressed: () => NavigationService.toSourceManagement(context),
+          ),
         ),
         const SizedBox(height: 16),
         _buildSettingCard(

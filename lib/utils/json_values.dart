@@ -1,13 +1,3 @@
-Map<String, dynamic>? asMap(dynamic value) {
-  if (value is Map<String, dynamic>) return value;
-  return null;
-}
-
-List<Map<String, dynamic>> asMapList(dynamic value) {
-  if (value is! List) return const [];
-  return value.cast<Map<String, dynamic>>();
-}
-
 int? toInt(dynamic value) {
   if (value is int) return value;
   if (value is num) return value.toInt();

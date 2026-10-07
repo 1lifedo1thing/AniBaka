@@ -80,10 +80,6 @@ set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}")
 
 install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
   COMPONENT Runtime)
-install(TARGETS baka_dlss_pipeline RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
-  COMPONENT Runtime)
-install(TARGETS baka_dlss_realtime RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
-  COMPONENT Runtime)
 install(FILES "runner/dlss_realtime/vendor/LICENSE"
   DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/licenses/video2dlssnr" COMPONENT Runtime)
 install(FILES "${FLUTTER_MANAGED_DIR}/ephemeral/.plugin_symlinks/media_kit_video/LICENSE"

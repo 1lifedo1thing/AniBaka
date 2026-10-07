@@ -8,7 +8,6 @@ import 'package:baka/models/collection.dart';
 import 'package:baka/core/api_transport.dart';
 import 'package:baka/core/http_request.dart';
 import 'package:baka/core/system_proxy.dart';
-import 'package:baka/utils/bgm_utils.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 
@@ -192,32 +191,6 @@ class BangumiOAuthBroker {
   }
 }
 
-AnimeCollection parseBangumiCollection(Map<String, dynamic> json) {
-  final subject = asMap(json['subject']);
-  final nameCn = subject?['name_cn']?.toString().trim() ?? '';
-  final name = subject?['name']?.toString().trim() ?? '';
-  final rawTags = json['tags'];
-  final tags = rawTags is List
-      ? rawTags.map((e) => e.toString()).toList()
-      : const <String>[];
-  return AnimeCollection(
-    bgmId: toInt(json['subject_id']) ?? 0,
-    status: toInt(json['type']) ?? CollectionStatus.wish.value,
-    rating: toInt(json['rate']) ?? 0,
-    epWatched: toInt(json['ep_status']) ?? 0,
-    tags: tags.isEmpty ? null : tags.join(','),
-    bangumiTags: tags,
-    bgmImage: BgmUtils.bgmCoverProxyUrl(toInt(json['subject_id']) ?? 0),
-    isPrivate: json['private'] == true,
-    bgmTitle: nameCn.isNotEmpty ? nameCn : name,
-    comment: json['comment']?.toString().trim().isNotEmpty == true
-        ? json['comment'].toString().trim()
-        : null,
-    epTotal: toInt(subject?['eps']),
-    bgmRating: toDouble(subject?['score']),
-  );
-}
-
 class _BangumiEpisodeRecord {
   const _BangumiEpisodeRecord({
     required this.id,
@@ -230,11 +203,11 @@ class _BangumiEpisodeRecord {
   final double sort;
 
   factory _BangumiEpisodeRecord.fromJson(Map<String, dynamic> json) {
-    final episode = asMap(json['episode']);
+    final episode = json['episode'] as Map<String, dynamic>;
     return _BangumiEpisodeRecord(
-      id: toInt(episode?['id']) ?? 0,
-      collectionType: toInt(json['type']) ?? 0,
-      sort: toDouble(episode?['sort']) ?? 0,
+      id: episode['id'] as int,
+      collectionType: json['type'] as int,
+      sort: (episode['sort'] as num).toDouble(),
     );
   }
 }
@@ -269,7 +242,7 @@ class BangumiApi {
         '/v0/users/-/collections/$subjectId',
         token: token,
       );
-      return parseBangumiCollection(json);
+      return AnimeCollection.fromBangumi(json);
     } on BangumiSyncException catch (error) {
       if (error.statusCode == 404) return null;
       rethrow;
@@ -299,10 +272,12 @@ class BangumiApi {
         path,
         token: token,
       );
-      total = toInt(page['total']) ?? 0;
+      total = page['total'] as int;
       final items = page['data'] as List? ?? const [];
       for (final item in items) {
-        final record = parseBangumiCollection(item as Map<String, dynamic>);
+        final record = AnimeCollection.fromBangumi(
+          item as Map<String, dynamic>,
+        );
         if ((record.bgmId ?? 0) > 0) result.add(record);
       }
       if (items.isEmpty) break;
@@ -323,7 +298,7 @@ class BangumiApi {
         'rate': collection.rating,
         'comment': collection.comment ?? '',
         'private': collection.isPrivate,
-        'tags': parseCollectionTags(collection.tags),
+        'tags': collection.tags,
       },
     );
   }
@@ -428,40 +403,10 @@ class BangumiApi {
   }
 }
 
-String localCollectionFingerprint(AnimeCollection collection) =>
-    collectionFingerprint(
-      status: collection.status,
-      rating: collection.rating,
-      comment: collection.comment,
-      episodeWatched: collection.epWatched ?? 0,
-      tags: collection.bangumiTags ?? parseCollectionTags(collection.tags),
-      isPrivate: collection.isPrivate,
-    );
-
-String collectionFingerprint({
-  required int status,
-  required int rating,
-  required String? comment,
-  required int episodeWatched,
-  required List<String> tags,
-  required bool isPrivate,
-}) {
-  final tagStr = tags.isEmpty
-      ? ''
-      : (tags.length == 1
-            ? tags.first
-            : (List<String>.from(tags)..sort()).join(','));
-  return '$status|$rating|${comment?.trim() ?? ''}|$episodeWatched|$tagStr|${isPrivate ? 1 : 0}';
-}
-
-final _collectionTagSeparator = RegExp(r'[,，\s]+');
-
-List<String> parseCollectionTags(String? value) {
-  if (value == null || value.trim().isEmpty) return const [];
-  return value
-      .split(_collectionTagSeparator)
-      .map((t) => t.trim())
-      .where((t) => t.isNotEmpty)
-      .toSet()
-      .toList();
+String localCollectionFingerprint(AnimeCollection collection) {
+  final tags = collection.tags;
+  final tagStr = tags.length < 2
+      ? tags.join()
+      : (List<String>.of(tags)..sort()).join(',');
+  return '${collection.status}|${collection.rating}|${collection.comment?.trim() ?? ''}|${collection.epWatched ?? 0}|$tagStr|${collection.isPrivate ? 1 : 0}';
 }

@@ -126,6 +126,7 @@
     {
       "op": "fetch",
       "url": "/api/videos/resolve-play-url?episodeId={tvtEpisodeId}",
+      "delayMs": 600,
       "headers": {
         "Accept": "application/json",
         "Referer": "https://www.tvtfun.net/video/{tvtVideoSlug}/play?source={tvtSourceIndex}&episode={tvtEpisodeIndex}",

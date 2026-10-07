@@ -186,21 +186,26 @@ class SkipSession {
 /// Only explicit episode labels are used; playlist order is not an identity.
 double? skipEpisodeNumber(String title) {
   final text = title.trim();
-  final number = RegExp(
-    r'^(?:第\s*(\d+(?:\.\d+)?)\s*[集话話]|(?:EP?|Episode)\s*(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?))$',
-    caseSensitive: false,
-  ).firstMatch(text);
+  final number = _episodeNumber.firstMatch(text);
   if (number == null) return null;
   return double.tryParse(
     number.group(1) ?? number.group(2) ?? number.group(3)!,
   );
 }
 
+final _episodeNumber = RegExp(
+  r'^(?:第\s*(\d+(?:\.\d+)?)\s*[集话話]|(?:EP?|Episode)\s*(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?))$',
+  caseSensitive: false,
+);
+
 int? matchSkipEpisode(String title, List<Map<String, dynamic>> episodes) {
   final value = skipEpisodeNumber(title);
   if (value == null) return null;
-  final matches = episodes.where(
-    (episode) => episode['type'] == 0 && episode['sort'] == value,
-  );
-  return matches.length == 1 ? (matches.single['id'] as num).toInt() : null;
+  int? match;
+  for (final episode in episodes) {
+    if (episode['type'] != 0 || episode['sort'] != value) continue;
+    if (match != null) return null;
+    match = episode['id'] as int;
+  }
+  return match;
 }

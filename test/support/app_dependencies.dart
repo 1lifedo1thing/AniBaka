@@ -6,12 +6,12 @@ import 'package:baka/services/account/bangumi_session.dart';
 import 'package:baka/services/collection/collection_repository.dart';
 import 'package:baka/services/playback/history_repository.dart';
 import 'package:baka/services/source/source_repository.dart';
-import 'package:baka/services/source/rule_repository_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
-void configureTestServices() {
+void configurePlaybackServices() {
+  configureSourceServices();
   final session = AccountSession(
     Instances.sp,
     refreshTokens: (_) async => null,
@@ -31,12 +31,13 @@ void configureTestServices() {
   );
   collections = CollectionRepository(session, bangumiSession);
   historyRepository = HistoryRepository(session, bangumiSession);
-  sourceCatalog = SourceCatalog(Instances.sp);
-  sourceRepository = SourceAdapterService(sourceCatalog);
-  ruleRepository = RuleRepositoryService(sourceRepository, sourceCatalog);
-  addTearDown(ruleRepository.dispose);
-  addTearDown(sourceRepository.dispose);
-  addTearDown(sourceCatalog.dispose);
   addTearDown(bangumiSession.api.close);
   addTearDown(client.close);
+}
+
+void configureSourceServices() {
+  sourceCatalog = SourceCatalog(Instances.sp);
+  addTearDown(sourceCatalog.dispose);
+  sourceRepository = SourceAdapterService(sourceCatalog);
+  addTearDown(sourceRepository.dispose);
 }

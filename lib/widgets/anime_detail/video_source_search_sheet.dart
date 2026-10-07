@@ -1,3 +1,5 @@
+import 'package:baka/source/models/source_search_result.dart';
+import 'package:baka/utils/format_utils.dart';
 import 'package:baka/models/playback_request.dart';
 import 'package:baka/models/bgm.dart';
 import 'package:baka/utils/json_values.dart';
@@ -67,7 +69,7 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
   late final bool _ownsController;
   String _selectedFilter = 'all';
   late List<String> _sourceKeys;
-  final _meta = SourceMetaLookup();
+  final _meta = <String, SourceMeta>{};
 
   late final Set<String> _currentIds;
   late final String _title;
@@ -94,7 +96,7 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
     _cover = resolveCoverImage(seed) ?? '';
     final score = BgmInfo.fromData(seed).score;
     _scoreText = score != null && score > 0 ? score.toStringAsFixed(1) : null;
-    final rating = asMap(asMap(seed['bgmDetailData'])?['rating']);
+    final rating = (seed['bgmDetailData'] as Map?)?['rating'] as Map?;
     _scoreCount = toInt(rating?['total']);
 
     _currentIds = {
@@ -112,11 +114,8 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
         );
 
     _sourceKeys = _currentSourceKeys();
-    _refreshRoutes();
 
-    _controller.addListener(_onCandidatesChanged);
-
-    _controller.ensureAdapterReady().then<void>(
+    sourceRepository.init().then<void>(
       (_) {
         if (!mounted) return;
         setState(() {
@@ -143,27 +142,11 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
 
   @override
   void dispose() {
-    _controller.removeListener(_onCandidatesChanged);
     if (_ownsController &&
         !VideoSourceSearchController.isGlobalCached(_controller)) {
       _controller.dispose();
     }
     super.dispose();
-  }
-
-  void _onCandidatesChanged() {
-    if (!mounted) return;
-    _refreshRoutes();
-  }
-
-  @override
-  void didUpdateWidget(covariant VideoSourceSearchSheet oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.currentEpisodeIndex != widget.currentEpisodeIndex ||
-        oldWidget.currentLineIndex != widget.currentLineIndex ||
-        oldWidget.currentSource != widget.currentSource) {
-      _refreshRoutes();
-    }
   }
 
   void _refreshRoutes() {
@@ -200,12 +183,12 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
     final routes = <DirectSourceGroup>[];
     for (final group in _routes) {
       if (group.origins.length == 1) {
-        if (group.primary.item.sourceType == _selectedFilter) routes.add(group);
+        if (group.primary.item.source == _selectedFilter) routes.add(group);
         continue;
       }
-      List<SourceCandidateState>? origins;
+      List<SourceProbeState>? origins;
       for (final origin in group.origins) {
-        if (origin.item.sourceType == _selectedFilter) {
+        if (origin.item.source == _selectedFilter) {
           (origins ??= []).add(origin);
         }
       }
@@ -213,25 +196,21 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
         routes.add(
           origins.length == group.origins.length
               ? group
-              : DirectSourceGroup(
-                  key: group.key,
-                  origins: origins,
-                  status: origins.first.status,
-                ),
+              : DirectSourceGroup(key: group.key, origins: origins),
         );
       }
     }
     _visibleRoutes = routes;
   }
 
-  bool _matchesCurrent(SourceCandidateState origin) {
+  bool _matchesCurrent(SourceProbeState origin) {
     if (_currentIds.isEmpty ||
-        origin.item.sourceType != widget.currentSource ||
-        (origin.probe.resolvedLineIndex ?? origin.probe.preferredLine) !=
+        origin.item.source != widget.currentSource ||
+        (origin.resolvedLineIndex ?? origin.preferredLine) !=
             widget.currentLineIndex) {
       return false;
     }
-    return _currentIds.contains(origin.item.seriesId);
+    return _currentIds.contains(origin.item.id);
   }
 
   Future<void> _selectBest() async {
@@ -260,7 +239,11 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
 
     setState(() => _selectingKey = group.key);
     try {
-      final probe = await _controller.resolveSwitchCandidate(origin);
+      final probe = await _controller.ensureCandidatePlayable(
+        origin.item,
+        episodeIndex: origin.episodeIndex,
+        preferredLine: origin.preferredLine,
+      );
       if (!mounted ||
           _controller.isDisposed ||
           !_controller.results.contains(origin.item)) {
@@ -379,40 +362,45 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
           top: false,
           child: ListenableBuilder(
             listenable: _controller,
-            builder: (context, _) => CustomScrollView(
-              controller: scrollController,
-              slivers: [
-                SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                  sliver: SliverToBoxAdapter(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Center(
-                          child: Container(
-                            width: 36,
-                            height: 4,
-                            decoration: BoxDecoration(
-                              color: colors.outlineVariant,
-                              borderRadius: BorderRadius.circular(2),
+            builder: (context, _) {
+              // ListenableBuilder coalesces progress events into one build per
+              // frame, so grouping and filtering run only for a rendered frame.
+              _refreshRoutes();
+              return CustomScrollView(
+                controller: scrollController,
+                slivers: [
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                    sliver: SliverToBoxAdapter(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Center(
+                            child: Container(
+                              width: 36,
+                              height: 4,
+                              decoration: BoxDecoration(
+                                color: colors.outlineVariant,
+                                borderRadius: BorderRadius.circular(2),
+                              ),
                             ),
                           ),
-                        ),
-                        const SizedBox(height: 12),
-                        _buildHeaderCard(isDark, colors.primary),
-                        _buildErrorBanner(isDark),
-                        const SizedBox(height: 12),
-                        _buildProgressSection(colors.primary),
-                        const SizedBox(height: 8),
-                        _buildFilterChips(),
-                        const SizedBox(height: 12),
-                      ],
+                          const SizedBox(height: 12),
+                          _buildHeaderCard(isDark, colors.primary),
+                          _buildErrorBanner(isDark),
+                          const SizedBox(height: 12),
+                          _buildProgressSection(colors.primary),
+                          const SizedBox(height: 8),
+                          _buildFilterChips(),
+                          const SizedBox(height: 12),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-                _buildResultList(isDark),
-              ],
-            ),
+                  _buildResultList(isDark),
+                ],
+              );
+            },
           ),
         ),
       ),
@@ -738,7 +726,7 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
       separatorBuilder: (_, _) => const SizedBox(width: 6),
       itemBuilder: (context, index) {
         final key = _sourceKeys[index];
-        final meta = _meta[key];
+        final meta = _meta.putIfAbsent(key, () => _resolveSourceMeta(key));
         final count = key == 'all'
             ? _controller.results.length
             : _controller.resultCountFor(key);
@@ -752,7 +740,6 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
             if (_selectedFilter == key) return;
             setState(() {
               _selectedFilter = key;
-              _filterRoutes();
             });
           },
           visualDensity: VisualDensity.compact,
@@ -840,6 +827,10 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
     ColorScheme colors,
   ) {
     final item = group.primary.item;
+    final data = group.primary.data;
+    final lineCount = data == null
+        ? 0
+        : data.episodes[data.episodeIndex!].lines.length;
     final labels = <String>{};
     var isCurrent = false;
     for (final origin in group.origins) {
@@ -915,9 +906,14 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
             child: Row(
               children: [
                 _buildCoverThumb(
-                  item.coverUrl.isNotEmpty ? item.coverUrl : _cover,
+                  item.cover.isNotEmpty ? item.cover : _cover,
                   isDark: isDark,
-                  fallbackIcon: _meta[item.sourceType].icon,
+                  fallbackIcon: _meta
+                      .putIfAbsent(
+                        item.source,
+                        () => _resolveSourceMeta(item.source),
+                      )
+                      .icon,
                   fallbackColor: accent,
                 ),
                 const SizedBox(width: 12),
@@ -955,9 +951,9 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
                               color: colors.secondary,
                               isDark: isDark,
                             ),
-                          if (item.lineInfo case final info?)
+                          if (lineCount > 1)
                             _chipBadge(
-                              label: info,
+                              label: '包含 $lineCount 条线路',
                               color: colors.secondary,
                               isDark: isDark,
                             ),
@@ -1096,28 +1092,19 @@ class _VideoSourceSearchSheetState extends State<VideoSourceSearchSheet> {
     ),
   );
 
-  String _sourceLabel(SearchResultItem item) {
-    if (item.sourceType == 'internal') {
+  String _sourceLabel(SourceSearchResult item) {
+    if (item.source == 'internal') {
       return '站内';
     }
     final displayName = item.displayName.trim();
     if (displayName.isNotEmpty) return displayName;
-    return _meta[item.sourceType].label;
+    return _meta
+        .putIfAbsent(item.source, () => _resolveSourceMeta(item.source))
+        .label;
   }
 }
 
 typedef SourceMeta = ({String label, IconData icon, Color color});
-
-/// 来源标签解析结果按 sheet 生命周期记忆化：一次构建会重复查询
-/// descriptor / 自定义源列表十余次。
-class SourceMetaLookup {
-  final Map<String, SourceMeta> _cache = {};
-
-  void clear() => _cache.clear();
-
-  SourceMeta operator [](String key) =>
-      _cache.putIfAbsent(key, () => _resolveSourceMeta(key));
-}
 
 SourceMeta _resolveSourceMeta(String key) {
   if (key == 'all') {
@@ -1169,4 +1156,20 @@ SourceMeta _resolveSourceMeta(String key) {
     icon: Icons.layers_rounded,
     color: const Color(0xFF9E9E9E),
   );
+}
+
+extension _SearchPresentation on SourceSearchResult {
+  String? get episodeInfo => switch (episodeCount) {
+    final int count when count > 0 => '约 $count 集',
+    _ => null,
+  };
+  String? get updateInfo => _updateInfo(internalData ?? const {});
+
+  static String? _updateInfo(Map data) {
+    final s = data['time']?.toString().trim() ?? '';
+    if (s.isEmpty) {
+      return null;
+    }
+    return '更新时间 ${formatDate(s)}';
+  }
 }

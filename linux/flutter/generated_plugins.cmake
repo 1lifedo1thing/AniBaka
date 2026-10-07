@@ -3,18 +3,19 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  app_links_linux
   bitsdojo_window_linux
   dynamic_color
   flutter_secure_storage_linux
   flutter_volume_controller
   fullscreen_window
-  gtk
   media_kit_libs_linux
   media_kit_video
   url_launcher_linux
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST
+  jni
 )
 
 set(PLUGIN_BUNDLED_LIBRARIES)

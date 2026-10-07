@@ -16,6 +16,7 @@ import 'package:baka/pages/mine/mine_profile.dart';
 import 'package:baka/pages/player/download_page.dart';
 import 'package:baka/pages/setting/app_settings_page.dart';
 import 'package:baka/pages/source/source_management_page.dart';
+import 'package:baka/services/source/rule_repository_service.dart';
 import 'package:baka/app/update_presenter.dart';
 import 'package:baka/utils/toast_utils.dart';
 import 'package:baka/widgets/common/scale_button.dart';
@@ -618,13 +619,20 @@ class _MinePageState extends State<MinePage> {
         ),
         const SizedBox(width: 12),
         Expanded(
-          child: _FeatureCard(
-            title: '源管理',
-            subtitle: '扩展与自定义源',
-            icon: Icons.extension_outlined,
-            color: Colors.deepOrangeAccent,
-            isDark: isDark,
-            onTap: () => _navTo(const SourceManagementPage()),
+          child: ListenableBuilder(
+            listenable: ruleRepository,
+            builder: (context, _) => _FeatureCard(
+              title: ruleRepository.updateCount > 0 ? '源管理 · 有更新' : '源管理',
+              subtitle: ruleRepository.updateCount > 0
+                  ? '${ruleRepository.updateCount} 个源待更新'
+                  : '扩展与自定义源',
+              icon: ruleRepository.updateCount > 0
+                  ? Icons.system_update_alt_rounded
+                  : Icons.extension_outlined,
+              color: Colors.deepOrangeAccent,
+              isDark: isDark,
+              onTap: () => _navTo(const SourceManagementPage()),
+            ),
           ),
         ),
       ],

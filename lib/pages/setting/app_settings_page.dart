@@ -20,6 +20,7 @@ import 'package:baka/pages/setting/font_settings_page.dart';
 import 'package:baka/pages/setting/labs_settings_page.dart';
 import 'package:baka/pages/setting/playback_settings_page.dart';
 import 'package:baka/pages/source/source_management_page.dart';
+import 'package:baka/services/source/rule_repository_service.dart';
 import 'package:baka/services/account/bangumi_session.dart';
 import 'package:baka/services/account/login_service.dart';
 import 'package:baka/theme.dart';
@@ -97,10 +98,12 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
       if (archive == null) {
         showSnackBar('已取消导出日志');
       } else {
-        showActionSnackBar(
+        showSnackBar(
           '日志已导出：${archive.fileName}',
-          actionLabel: '打开',
-          onAction: () => OpenFilex.open(archive.file.path),
+          action: SnackBarAction(
+            label: '打开',
+            onPressed: () => OpenFilex.open(archive.file.path),
+          ),
         );
       }
     } catch (e, st) {
@@ -326,11 +329,21 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
               icon: Icons.play_circle_outline_rounded,
               onTap: () => _pushPage(const PlaybackSettingsPage()),
             ),
-            SettingsTile(
-              title: '搜索源管理',
-              value: '开关 / 排序 / 自定义导入',
-              icon: Icons.extension_rounded,
-              onTap: () => _pushPage(const SourceManagementPage()),
+            ListenableBuilder(
+              listenable: ruleRepository,
+              builder: (context, _) => SettingsTile(
+                title: '搜索源管理',
+                value: ruleRepository.updateCount > 0
+                    ? '${ruleRepository.updateCount} 个源有更新'
+                    : '开关 / 排序 / 自定义导入',
+                icon: Icons.extension_rounded,
+                iconWidget: Badge.count(
+                  count: ruleRepository.updateCount,
+                  isLabelVisible: ruleRepository.updateCount > 0,
+                  child: const Icon(Icons.extension_rounded, size: 18),
+                ),
+                onTap: () => _pushPage(const SourceManagementPage()),
+              ),
             ),
             SettingsTile(
               title: 'AI 规则编写',

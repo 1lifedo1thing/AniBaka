@@ -1,7 +1,7 @@
 import 'package:baka/widgets/player/skip_segments_panel.dart';
 import 'package:baka/models/playback_state.dart';
 import 'package:baka/models/skip_segment.dart';
-import 'package:baka/utils/duration_utils.dart';
+import 'package:baka/utils/format_utils.dart';
 import 'package:baka/widgets/player/skip_segment_track.dart';
 import 'package:baka/services/playback/playback_settings.dart';
 import 'package:flutter/material.dart';

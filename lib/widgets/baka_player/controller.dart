@@ -15,7 +15,7 @@ import 'package:baka/services/playback/anime4k.dart';
 import 'package:baka/services/playback/danmaku_controller.dart';
 import 'package:baka/services/playback/playback_settings.dart';
 import 'package:baka/core/app_logger.dart';
-import 'package:baka/utils/duration_utils.dart';
+import 'package:baka/utils/format_utils.dart';
 
 const String mediacodecEmbedRenderer = 'mediacodec_embed';
 
@@ -824,23 +824,28 @@ class PlaybackController {
       return false;
     }
     final previous = skipSelection.value;
-    final ranges = <String, SkipRange>{...?previous?.ranges};
-    ranges.putIfAbsent(type, () {
+    var range = type == 'op' ? previous?.ranges.op : previous?.ranges.ed;
+    if (range == null) {
       final segment = skipData.value.editableSegments
           .where((s) => s.type == type && s.fits(duration))
           .firstOrNull;
       if (segment != null) {
-        return (startMs: segment.startMs, endMs: segment.endMs);
+        range = (startMs: segment.startMs, endMs: segment.endMs);
+      } else {
+        // A new ending starts near the tail, independent of the current playhead.
+        // Switching back to a new opening must not reuse that ending position.
+        final position = type == 'ed'
+            ? duration - 90000
+            : previous?.type == 'ed'
+            ? 0
+            : timeline.value.position.inMilliseconds;
+        final start = position.clamp(0, duration - 1);
+        range = (
+          startMs: start,
+          endMs: (start + 90000).clamp(start + 1, duration),
+        );
       }
-      final start = timeline.value.position.inMilliseconds.clamp(
-        0,
-        duration - 1,
-      );
-      return (
-        startMs: start,
-        endMs: (start + 90000).clamp(start + 1, duration),
-      );
-    });
+    }
     if (previous == null) {
       _selectionGeneration++;
       _playingBeforeSkipSelection = core.value.playing;
@@ -857,10 +862,16 @@ class PlaybackController {
       context: context,
       durationMs: duration,
       type: type,
-      ranges: ranges,
-      changed: previous?.changed ?? {},
+      ranges: (
+        op: type == 'op' ? range : previous?.ranges.op,
+        ed: type == 'ed' ? range : previous?.ranges.ed,
+      ),
+      changed: previous?.changed ?? (op: false, ed: false),
     );
-    if (previous == null) unawaited(pause());
+    if (previous?.type != type) {
+      _pendingSelectionSeek = range.startMs;
+      if (!_selectionSeeking) unawaited(_seekSelectionBoundary());
+    }
     setControlsVisible(true);
     return true;
   }
@@ -886,11 +897,18 @@ class PlaybackController {
     final old = selection.range;
     if (old.startMs == start && old.endMs == end) return;
     skipSelection.value = selection.copyWith(
-      ranges: {
-        ...selection.ranges,
-        selection.type: (startMs: start, endMs: end),
-      },
-      changed: {...selection.changed, selection.type},
+      ranges: (
+        op: selection.type == 'op'
+            ? (startMs: start, endMs: end)
+            : selection.ranges.op,
+        ed: selection.type == 'ed'
+            ? (startMs: start, endMs: end)
+            : selection.ranges.ed,
+      ),
+      changed: (
+        op: selection.changed.op || selection.type == 'op',
+        ed: selection.changed.ed || selection.type == 'ed',
+      ),
     );
     _pendingSelectionSeek = old.startMs != start ? start : end;
     if (!_selectionSeeking) unawaited(_seekSelectionBoundary());
@@ -933,7 +951,11 @@ class PlaybackController {
     final saving = selection.copyWith(saving: true);
     skipSelection.value = saving;
     try {
-      for (final type in {...selection.changed, selection.type}) {
+      for (final type in const ['op', 'ed']) {
+        if (type != selection.type &&
+            !(type == 'op' ? selection.changed.op : selection.changed.ed)) {
+          continue;
+        }
         if (_disposed ||
             !identical(skipSelection.value, saving) ||
             !identical(_skipContext, selection.context)) {
@@ -1303,38 +1325,33 @@ class PlaybackController {
 
   Future<void> _syncVideoEnhancement() async {
     final mode = preferences.value.videoEnhancementMode;
-    final pipeline = selectEnhancementPipeline(mode);
     if (Platform.isAndroid &&
         preferences.value.videoRenderer == mediacodecEmbedRenderer &&
-        pipeline != VideoEnhancementPipeline.off) {
+        mode != VideoEnhancementMode.off) {
       await _setNativeProperty('glsl-shaders', '');
       if (_disposed) return;
-      enhancement.value = enhancement.value.copyWith(
+      enhancement.value = VideoEnhancementState(
         requestedMode: mode,
-        appliedPipeline: VideoEnhancementPipeline.off,
+        appliedPipeline: VideoEnhancementMode.off,
         fallbackReason: 'mediacodec_embed 直接输出不经过 GPU 着色器',
       );
       return;
     }
 
     final framebuffer = buildVideoEnhancementFramebufferProperties(
-      enabled: pipeline != VideoEnhancementPipeline.off,
+      enabled: mode != VideoEnhancementMode.off,
     );
-    if (pipeline == VideoEnhancementPipeline.off) {
+    if (mode == VideoEnhancementMode.off) {
       await _setNativeProperty('glsl-shaders', '');
     }
     await _syncProperties(framebuffer);
-    if (pipeline != VideoEnhancementPipeline.off) {
-      await _setNativeProperty(
-        'glsl-shaders',
-        await Anime4K.shaderPath(pipeline),
-      );
+    if (mode != VideoEnhancementMode.off) {
+      await _setNativeProperty('glsl-shaders', await Anime4K.shaderPath(mode));
     }
     if (_disposed) return;
-    enhancement.value = enhancement.value.copyWith(
+    enhancement.value = VideoEnhancementState(
       requestedMode: mode,
-      appliedPipeline: pipeline,
-      clearFallbackReason: true,
+      appliedPipeline: mode,
     );
   }
 

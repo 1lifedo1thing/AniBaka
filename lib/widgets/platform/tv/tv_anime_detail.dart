@@ -19,8 +19,13 @@ import 'package:baka/widgets/platform/tv/tv_theme_util.dart';
 
 class TvAnimeDetailPlaceholder extends StatefulWidget {
   final Map data;
+  final List<PlaybackEpisode>? episodes;
 
-  const TvAnimeDetailPlaceholder({required this.data, super.key});
+  const TvAnimeDetailPlaceholder({
+    required this.data,
+    this.episodes,
+    super.key,
+  });
 
   @override
   State<TvAnimeDetailPlaceholder> createState() =>
@@ -52,13 +57,13 @@ class _TvAnimeDetailPlaceholderState extends State<TvAnimeDetailPlaceholder> {
       bgmInfo: _bgmInfo,
       bgm: bgm,
     );
-    _videoList = PlaybackEpisodeCatalog.episodesOf(_data);
+    _videoList = widget.episodes ?? PlaybackEpisodeCatalog.episodesOf(_data);
   }
 
   @override
   void initState() {
     super.initState();
-    _data = widget.data.cast<String, dynamic>();
+    _data = Map<String, dynamic>.from(widget.data);
     _initializeDetail();
     _fetchBgmData();
     _fetchCollectionStatus();

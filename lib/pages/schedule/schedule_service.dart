@@ -3,7 +3,6 @@ import 'package:baka/api/bgm.dart';
 import 'package:baka/models/anime_schedule.dart';
 import 'package:baka/models/bgm.dart';
 import 'package:baka/pages/home/home_controller.dart';
-import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/utils/json_values.dart';
 
 /// Owns only this page's compact metadata; full schedules remain in PostgreSQL.
@@ -66,7 +65,7 @@ class ScheduleService {
     return _covers.putIfAbsent(id, () async {
       try {
         final subject = await getBgmSubject(id, notifyOnError: false);
-        return BgmUtils.pickImageUrl(subject['images']);
+        return (subject['images'] as Map)['large'] as String;
       } catch (_) {
         return null;
       }

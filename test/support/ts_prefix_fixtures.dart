@@ -56,11 +56,8 @@ const String adPrefixBase64 =
     'qiwUU/abv7iV39ibqO34RrTmACp+vQCagfyfceDAexsDAlhSYB67V/KScxm+sd0UH1HehtZzfClCPevmPHWjPUcBABXqxFrt'
     'OF5pt85xHXdRbZWUPpjWGIqJVvr4O6QO';
 
-Uint8List _bytes(String base64Text) =>
-    Uint8List.fromList(base64Decode(base64Text));
-
 /// 正片分片前缀字节。
-final Uint8List contentPrefixBytes = _bytes(contentPrefixBase64);
+final Uint8List contentPrefixBytes = base64Decode(contentPrefixBase64);
 
 /// 广告分片前缀字节。
-final Uint8List adPrefixBytes = _bytes(adPrefixBase64);
+final Uint8List adPrefixBytes = base64Decode(adPrefixBase64);

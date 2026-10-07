@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'package:baka/services/playback/history_repository.dart';
 import 'package:baka/models/playback_episode.dart';
-import 'package:baka/utils/date_util.dart';
+import 'package:baka/utils/format_utils.dart';
 import 'package:baka/utils/reg_utils.dart';
 
 final _reSpecial = RegExp(r'(ova|sp|剧场版)', caseSensitive: false);
@@ -118,7 +118,7 @@ Widget buildEpisodeToolbar({
   String? content,
 }) {
   final primary = Theme.of(context).colorScheme.primary;
-  final delayInfo = RegUtils.parseDelayOrSuspensionInfo(content);
+  final delayInfo = parseDelayOrSuspensionInfo(content);
   final infoColor = delayInfo != null ? Colors.orange : primary;
   final info = _episodeInfo(videoList?.length ?? 0, delayInfo, updateTime);
 

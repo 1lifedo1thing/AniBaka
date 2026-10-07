@@ -70,7 +70,10 @@ class WebViewAdapter {
     for (var i = 0; i < 2; i++) {
       var n = t.replace(/&amp;/g, '&').replace(/\\u0026/ig, '&').replace(/\\u002f/ig, '/')
         .replace(/\\\//g, '/').replace(/^["']+|["']+$/g, '');
-      try { var d = decodeURIComponent(n); if (d !== n) n = d; } catch (e) {}
+      // Decode an encoded URL envelope, never an already usable URL's signed query.
+      if (!/^(?:https?:\/\/|\/)/i.test(n)) {
+        try { var d = decodeURIComponent(n); if (d !== n) n = d; } catch (e) {}
+      }
       if (n === t) break;
       t = n;
     }
@@ -148,6 +151,27 @@ class WebViewAdapter {
     }
   }
 
+  // MacCMS exposes the current episode before its player and remote scripts load.
+  // Match playerAaaa's encoding contract; do not scan url_next or other episodes.
+  function scanPlayerConfig(w) {
+    try {
+      var p = w.player_aaaa;
+      if (!p || typeof p.url !== 'string') return;
+      var u = p.url, mode = String(p.encrypt || 0);
+      if (mode === '2') {
+        var bytes = w.atob(u.replace(/-/g, '+').replace(/_/g, '/'));
+        u = new TextDecoder('utf-8', { fatal: true }).decode(
+          Uint8Array.from(bytes, function (c) { return c.charCodeAt(0); }));
+      }
+      if (mode === '1' || (mode === '2' && u.indexOf('%') !== -1)) {
+        u = decodeURIComponent(u);
+      } else if (mode !== '0' && mode !== '2') {
+        return;
+      }
+      consider(u, 1);
+    } catch (e) {}
+  }
+
   function considerFrame(el) {
     if (!el || S.frame || S.best) return;
     var raw = '';
@@ -172,6 +196,8 @@ class WebViewAdapter {
       var d = el.contentDocument;
       if (!w || !d) return;
       consider(w.__bakaSniffer && w.__bakaSniffer.best, 1);
+      scanPlayerConfig(w);
+      if (S.best) return;
       var nodes = d.querySelectorAll('video, source, iframe, embed, object');
       for (var i = 0; i < nodes.length && i < 50; i++) {
         var node = nodes[i];
@@ -270,6 +296,8 @@ class WebViewAdapter {
 
   var perfIndex = 0;
   S.scan = function () {
+    if (S.best) return S.best;
+    scanPlayerConfig(window);
     if (S.best) return S.best;
     try {
       var nodes = document.querySelectorAll('video, source, iframe, embed, object');
@@ -734,31 +762,28 @@ class WebViewAdapter {
     final watch = Stopwatch()..start();
     final timeoutMicros = timeout.inMicroseconds;
 
-    // 先等目标文档加载完成（复位页视作未到达），最多 6 秒，防止读到半截 HTML。
-    final loadWaitMicros = const Duration(seconds: 6).inMicroseconds;
-    while (!cancelled() &&
-        watch.elapsedMicroseconds < loadWaitMicros &&
-        watch.elapsedMicroseconds < timeoutMicros) {
-      try {
-        if (_cleanJsResult(await exec(_readyStateScript)) == 'complete') break;
-      } catch (_) {}
-      await SourceOperation.delay(const Duration(milliseconds: 250));
-    }
-
-    // 静置，给页面 JS 留出渲染时间。
-    if (settleDelay > Duration.zero) await SourceOperation.delay(settleDelay);
-
-    var html = '';
+    var settled = settleDelay == Duration.zero;
     while (!cancelled() && watch.elapsedMicroseconds < timeoutMicros) {
       try {
+        // Explicit readiness can succeed before slow subresources finish loading.
+        // Without it, wait for the target document's load event.
+        if (isReady == null &&
+            _cleanJsResult(await exec(_readyStateScript)) != 'complete') {
+          await SourceOperation.delay(const Duration(milliseconds: 250));
+          continue;
+        }
+        if (!settled) {
+          await SourceOperation.delay(settleDelay);
+          settled = true;
+        }
         final current = _cleanJsResult(await exec(_htmlExtractScript));
         if (current.isNotEmpty) {
-          html = current;
           // JS/CDN challenge 页面只是中间态。即使文档已经 complete，也要
           // 等其自动 POST / reload 完成后再把 HTML 交给管线。
           final transient = _transientChallengePattern.hasMatch(current);
           if (!transient && (isReady == null || isReady(current))) {
-            break;
+            final cookies = _cleanJsResult(await exec(_cookieReadScript));
+            return (current, cookies);
           }
           // MacCMS 智能验证页：自动点击验证按钮，页面会自行 POST 并 reload。
           if (transient && _macCmsSmartVerifyPattern.hasMatch(current)) {
@@ -775,11 +800,7 @@ class WebViewAdapter {
       await SourceOperation.delay(const Duration(milliseconds: 700));
     }
 
-    var cookies = '';
-    try {
-      cookies = _cleanJsResult(await exec(_cookieReadScript));
-    } catch (_) {}
-    return (html, cookies);
+    return ('', '');
   }
 
   /// 加载播放器页面并嗅探视频直链，未嗅到返回 null。
@@ -812,13 +833,13 @@ class WebViewAdapter {
     String url, {
     bool Function(String html)? isReady,
     Duration timeout = const Duration(seconds: 30),
-    Duration settleDelay = const Duration(seconds: 1),
+    Duration settleDelay = Duration.zero,
     String? userAgent,
     WebViewTaskScope? taskScope,
   }) => _run(
     url: url,
     userAgent: userAgent ?? desktopUserAgent,
-    timeout: timeout + settleDelay + const Duration(seconds: 5),
+    timeout: timeout,
     sniff: false,
     taskScope: taskScope,
     poll: (exec, cancelled) => _pollPageContent(

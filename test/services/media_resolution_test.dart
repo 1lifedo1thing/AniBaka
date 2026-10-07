@@ -8,16 +8,21 @@ import 'package:baka/source/pipeline_source_adapter.dart';
 import 'package:baka/source/video_url_extractor.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-class _DirectUrlAdapter extends AdapterBase {
-  _DirectUrlAdapter(this.mediaUrl, String name) : super(name);
-
-  final String mediaUrl;
+class _MediaAdapter extends AdapterBase {
+  _MediaAdapter(this.url) : super('media') {
+    addTearDown(dispose);
+  }
+  String url;
+  int calls = 0;
 
   @override
-  String get baseUrl => mediaUrl;
+  String get baseUrl => url;
 
   @override
-  Future<String> getDownloadUrl(String episodeId) async => mediaUrl;
+  Future<String> getDownloadUrl(String id) async {
+    calls++;
+    return url;
+  }
 
   @override
   Future<PlaybackCatalog> getPlaybackCatalog(String seriesId) async =>
@@ -30,31 +35,9 @@ class _DirectUrlAdapter extends AdapterBase {
   }) async => const [];
 }
 
-class _CachedUrlAdapter extends PipelineSourceAdapter {
-  _CachedUrlAdapter(String id, this.url)
-    : super(
-        SourceRule(
-          id: id,
-          name: 'Same name',
-          baseUrl: 'https://fixture.invalid',
-        ),
-      );
-  String url;
-  int calls = 0;
-  @override
-  Future<String> getDownloadUrl(String id) async {
-    calls++;
-    return url;
-  }
-}
-
 void main() {
   test('episode invalidation forces one fresh parse, then caches it', () async {
-    final adapter = _CachedUrlAdapter(
-      'refresh',
-      'https://fixture.invalid/old.mp4',
-    );
-    addTearDown(adapter.dispose);
+    final adapter = _MediaAdapter('https://fixture.invalid/old.mp4');
     await adapter.resolveDownloadUrl('1', skipValidation: true);
     adapter.url = 'https://fixture.invalid/new.mp4';
     adapter.invalidateDownloadUrl('1');
@@ -77,8 +60,7 @@ void main() {
         fail('skipValidation unexpectedly sent a media probe');
       });
       final url = 'http://${server.address.address}:${server.port}/video.mp4';
-      final adapter = _DirectUrlAdapter(url, 'fast-profile');
-      addTearDown(adapter.dispose);
+      final adapter = _MediaAdapter(url);
       final media = await adapter.resolvePlaybackMedia(
         'episode',
         skipValidation: true,
@@ -109,10 +91,7 @@ void main() {
       });
 
       final url = 'http://${server.address.address}:${server.port}/孤独摇滚/01.mp4';
-      final adapter = _DirectUrlAdapter(
-        url,
-        'head-fallback-${DateTime.now().microsecondsSinceEpoch}',
-      );
+      final adapter = _MediaAdapter(url);
 
       expect(await adapter.resolveDownloadUrl('episode'), url);
       expect(headRequests, 1);
@@ -129,10 +108,7 @@ void main() {
       });
 
       final url = 'http://${server.address.address}:${server.port}/missing.mp4';
-      final adapter = _DirectUrlAdapter(
-        url,
-        'blocked-${DateTime.now().microsecondsSinceEpoch}',
-      );
+      final adapter = _MediaAdapter(url);
 
       expect(await adapter.resolveDownloadUrl('episode'), isEmpty);
     });
@@ -159,10 +135,7 @@ void main() {
       final url =
           'http://${server.address.address}:${server.port}/issue-hls-playback'
           '?mode=playlist&resource=episode-1';
-      final adapter = _DirectUrlAdapter(
-        url,
-        'query-hls-${DateTime.now().microsecondsSinceEpoch}',
-      );
+      final adapter = _MediaAdapter(url);
 
       expect(await adapter.resolveDownloadUrl('episode'), url);
       expect(requests, 1);
@@ -188,10 +161,7 @@ void main() {
 
       final url =
           'http://${server.address.address}:${server.port}/temp/2607/与你01.mp4';
-      final adapter = _DirectUrlAdapter(
-        url,
-        'slow-direct-${DateTime.now().microsecondsSinceEpoch}',
-      );
+      final adapter = _MediaAdapter(url);
 
       // Hold the response until the short probe budget expires.
       expect(
@@ -227,11 +197,8 @@ void main() {
       // 网盘取流地址没有视频扩展名，形态上判不出是媒体，只能靠探测。
       final url =
           'http://${server.address.address}:${server.port}/pan/download'
-          '?fid=${DateTime.now().microsecondsSinceEpoch}';
-      final adapter = _DirectUrlAdapter(
-        url,
-        'bare-stream-${DateTime.now().microsecondsSinceEpoch}',
-      );
+          '?fid=episode';
+      final adapter = _MediaAdapter(url);
 
       expect(await adapter.resolveDownloadUrl('episode'), url);
     });
@@ -250,11 +217,8 @@ void main() {
 
       final url =
           'http://${server.address.address}:${server.port}/media/parse'
-          '?id=${DateTime.now().microsecondsSinceEpoch}';
-      final adapter = _DirectUrlAdapter(
-        url,
-        'html-shell-${DateTime.now().microsecondsSinceEpoch}',
-      );
+          '?id=episode';
+      final adapter = _MediaAdapter(url);
 
       expect(await adapter.resolveDownloadUrl('episode'), isEmpty);
     });
@@ -279,10 +243,7 @@ void main() {
 
       final url =
           'http://${server.address.address}:${server.port}/temp/2607/与你01.mp4';
-      final adapter = _DirectUrlAdapter(
-        url,
-        'on-demand-${DateTime.now().microsecondsSinceEpoch}',
-      );
+      final adapter = _MediaAdapter(url);
 
       // 临时媒体首包 404 只说明「还没生成」：保留直链交给播放器验证。
       expect(await adapter.resolveDownloadUrl('episode'), url);
@@ -310,10 +271,7 @@ void main() {
 
       final url =
           'http://${server.address.address}:${server.port}/temp/2607/与你01.mp4';
-      final adapter = _DirectUrlAdapter(
-        url,
-        'on-demand-auth-${DateTime.now().microsecondsSinceEpoch}',
-      );
+      final adapter = _MediaAdapter(url);
 
       expect(await adapter.resolveDownloadUrl('episode'), url);
       expect(requests, greaterThanOrEqualTo(2));
@@ -330,10 +288,7 @@ void main() {
 
       final url =
           'http://${server.address.address}:${server.port}/vod/2607/01.mp4';
-      final adapter = _DirectUrlAdapter(
-        url,
-        'forbidden-vod-${DateTime.now().microsecondsSinceEpoch}',
-      );
+      final adapter = _MediaAdapter(url);
 
       expect(await adapter.resolveDownloadUrl('episode'), isEmpty);
     });
@@ -352,10 +307,7 @@ void main() {
 
       final url =
           'http://${server.address.address}:${server.port}/temp/2607/01.mp4';
-      final adapter = _DirectUrlAdapter(
-        url,
-        'forbidden-html-${DateTime.now().microsecondsSinceEpoch}',
-      );
+      final adapter = _MediaAdapter(url);
 
       expect(await adapter.resolveDownloadUrl('episode'), isEmpty);
     });

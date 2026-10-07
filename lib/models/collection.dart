@@ -1,6 +1,7 @@
 /// 追番收藏数据模型
 library;
 
+import 'package:baka/utils/bgm_utils.dart';
 import 'package:baka/utils/json_values.dart';
 
 /// 收藏状态枚举
@@ -18,25 +19,20 @@ enum CollectionStatus {
 
   static CollectionStatus? fromValue(int? value) {
     if (value == null || value < 1 || value > values.length) return null;
-    final status = values[value - 1];
-    return status.value == value ? status : null;
+    return values[value - 1];
   }
 }
 
 /// 追番收藏记录
 class AnimeCollection {
-  final int? id;
-  final int? userId;
   final int? postId;
   final int? bgmId;
   final int status;
-  final String? statusText;
   final int rating;
   final String? comment;
   final int? epTotal;
   final int? epWatched;
-  final String? tags;
-  final List<String>? bangumiTags;
+  final List<String> tags;
   final bool isPrivate;
   final String? postTitle;
   final String? postCover;
@@ -44,19 +40,15 @@ class AnimeCollection {
   final String? bgmImage;
   final String? bgmTitle;
 
-  AnimeCollection({
+  const AnimeCollection({
     required this.status,
-    this.id,
-    this.userId,
     this.postId,
     this.bgmId,
-    this.statusText,
     this.rating = 0,
     this.comment,
     this.epTotal,
     this.epWatched,
-    this.tags,
-    this.bangumiTags,
+    this.tags = const [],
     this.isPrivate = false,
     this.postTitle,
     this.postCover,
@@ -71,39 +63,64 @@ class AnimeCollection {
 
   String get displayCover => bgmImage ?? postCover ?? '';
 
-  factory AnimeCollection.fromJson(Map<String, dynamic> json) =>
-      AnimeCollection(
-        id: toInt(json['id']),
-        userId: toInt(json['user_id']),
-        postId: toInt(json['post_id']),
-        bgmId: toInt(json['bgm_id']),
-        status: toInt(json['status']) ?? 1,
-        statusText: json['status_text']?.toString(),
-        rating: toInt(json['rating']) ?? 0,
-        comment: json['comment']?.toString(),
-        epTotal: toInt(json['ep_total']),
-        epWatched: toInt(json['ep_watched']),
-        tags: json['tags']?.toString(),
-        isPrivate: json['is_private'] as bool? ?? false,
-        postTitle: json['post_title']?.toString(),
-        postCover: json['post_cover']?.toString(),
-        bgmRating: toDouble(json['bgm_rating']),
-        bgmImage: json['bgm_image']?.toString(),
-        bgmTitle: json['bgm_title']?.toString(),
-      );
+  factory AnimeCollection.fromJson(
+    Map<String, dynamic> json,
+  ) => AnimeCollection(
+    postId: json['post_id'] as int?,
+    bgmId: json['bgm_id'] as int?,
+    status: json['status'] as int,
+    rating: json['rating'] as int? ?? 0,
+    comment: json['comment'] as String?,
+    epTotal: json['ep_total'] as int?,
+    epWatched: json['ep_watched'] as int?,
+    // Local storage now retains the list; older records and AniBaka use CSV.
+    tags: switch (json['tags']) {
+      final List value => value.cast<String>(),
+      final String value when value.isNotEmpty =>
+        value
+            .split(_tagSeparator)
+            .where((tag) => tag.isNotEmpty)
+            .toSet()
+            .toList(growable: false),
+      _ => const [],
+    },
+    isPrivate: json['is_private'] as bool? ?? false,
+    postTitle: json['post_title'] as String?,
+    postCover: json['post_cover'] as String?,
+    bgmRating: (json['bgm_rating'] as num?)?.toDouble(),
+    bgmImage: json['bgm_image'] as String?,
+    bgmTitle: json['bgm_title'] as String?,
+  );
+
+  factory AnimeCollection.fromBangumi(Map<String, dynamic> json) {
+    final subject = json['subject'] as Map<String, dynamic>?;
+    final subjectId = json['subject_id'] as int;
+    return AnimeCollection(
+      bgmId: subjectId,
+      status: json['type'] as int,
+      rating: json['rate'] as int,
+      epWatched: json['ep_status'] as int,
+      tags: (json['tags'] as List).cast<String>(),
+      bgmImage: BgmUtils.bgmCoverProxyUrl(subjectId),
+      isPrivate: json['private'] as bool,
+      bgmTitle: trimmed(subject?['name_cn']) ?? trimmed(subject?['name']) ?? '',
+      comment: trimmed(json['comment']),
+      epTotal: subject?['eps'] as int?,
+      bgmRating: (subject?['score'] as num?)?.toDouble(),
+    );
+  }
+
+  static final _tagSeparator = RegExp(r'[,，\s]+');
 
   Map<String, dynamic> toJson({bool includeLocalFields = false}) => {
-    if (includeLocalFields && id != null) 'id': id,
-    if (includeLocalFields && userId != null) 'user_id': userId,
     if (postId != null) 'post_id': postId,
     if (bgmId != null) 'bgm_id': bgmId,
     'status': status,
-    if (includeLocalFields && statusText != null) 'status_text': statusText,
     if (rating > 0) 'rating': rating,
     if (comment != null && comment!.isNotEmpty) 'comment': comment,
     if (epTotal != null) 'ep_total': epTotal,
     if (epWatched != null) 'ep_watched': epWatched,
-    if (tags != null && tags!.isNotEmpty) 'tags': tags,
+    if (tags.isNotEmpty) 'tags': includeLocalFields ? tags : tags.join(','),
     'is_private': isPrivate,
     if (postTitle != null && postTitle!.isNotEmpty) 'post_title': postTitle,
     if (postCover != null && postCover!.isNotEmpty) 'post_cover': postCover,
@@ -133,12 +150,12 @@ class CollectionStats {
 
   factory CollectionStats.fromJson(Map<String, dynamic> json) =>
       CollectionStats(
-        wish: toInt(json['wish']) ?? 0,
-        collect: toInt(json['collect']) ?? 0,
-        doing: toInt(json['do']) ?? 0,
-        onHold: toInt(json['on_hold']) ?? 0,
-        dropped: toInt(json['dropped']) ?? 0,
-        total: toInt(json['total']) ?? 0,
+        wish: json['wish'] as int,
+        collect: json['collect'] as int,
+        doing: json['do'] as int,
+        onHold: json['on_hold'] as int,
+        dropped: json['dropped'] as int,
+        total: json['total'] as int,
       );
 
   int countForStatus(CollectionStatus status) => switch (status) {

@@ -101,9 +101,8 @@ class PipelineStep {
   List<String> strList(String key) {
     final value = params[key];
     if (value is String) return [value];
-    if (value is List) {
-      return value.map((e) => e.toString()).toList(growable: false);
-    }
+    if (value is List<String>) return value;
+    if (value is List) return value.cast<String>();
     return const [];
   }
 }
@@ -209,8 +208,7 @@ class SourceRule {
           : const {},
       recipes: json['recipes'] is List
           ? List<String>.unmodifiable(
-              (json['recipes'] as List)
-                  .map((e) => e.toString()),
+              (json['recipes'] as List).map((e) => e.toString()),
             )
           : const [],
       search: parseSteps(json['search']),

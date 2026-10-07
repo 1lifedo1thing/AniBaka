@@ -6,7 +6,7 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:encrypt/encrypt.dart' as enc;
-import 'package:html/parser.dart' show parse;
+import 'package:baka/source/html_parser.dart';
 
 import 'package:baka/utils/title_matcher.dart';
 import 'package:baka/source/models/series.dart';
@@ -43,6 +43,7 @@ class _PipelineContext {
        pageUrl = '',
        _seriesById = <String, Series>{},
        _sources = <Source>[],
+       htmlParser = HtmlParser(),
        mediaHeaders = const <String, String>{},
        cookieNames = const <String>[],
        cookiePrefixes = const <String>[];
@@ -55,6 +56,9 @@ class _PipelineContext {
       pageUrl = source.pageUrl,
       _seriesById = source._seriesById,
       _sources = source._sources,
+      htmlParser = source.htmlParser,
+      _jsonInput = source._jsonInput,
+      _jsonValue = source._jsonValue,
       mediaHeaders = source.mediaHeaders,
       cookieNames = source.cookieNames,
       cookiePrefixes = source.cookiePrefixes;
@@ -70,6 +74,17 @@ class _PipelineContext {
   String pageUrl;
   final Map<String, Series> _seriesById;
   final List<Source> _sources;
+  final HtmlParser htmlParser;
+  Object? _jsonInput;
+  Object? _jsonValue;
+  Object? get json {
+    if (!identical(_jsonInput, value)) {
+      _jsonValue = PipelineInterpreter._asJson(value);
+      _jsonInput = value;
+    }
+    return _jsonValue;
+  }
+
   Map<String, String> mediaHeaders;
   List<String> cookieNames;
   List<String> cookiePrefixes;
@@ -85,6 +100,8 @@ class _PipelineContext {
     value = trial.value;
     pageUrl = trial.pageUrl;
     vars = trial.vars;
+    _jsonInput = trial._jsonInput;
+    _jsonValue = trial._jsonValue;
     mediaHeaders = trial.mediaHeaders;
     cookieNames = trial.cookieNames;
     cookiePrefixes = trial.cookiePrefixes;
@@ -144,22 +161,22 @@ class PipelineInterpreter {
   );
   static final RegExp _trailingSlashesPattern = RegExp(r'/+$');
 
-  /// 规则里的 `regex`/`replace` pattern 绝大多数是固定串，却在每个源 × 每次
-  /// 搜索时重新编译。按 pattern+flags 缓存编译结果，超限整体清空兜底
-  /// （含模板变量的动态 pattern 不会无界增长）。
+  /// Bound dynamically rendered patterns without flushing unrelated entries.
   static const _regexCacheLimit = 64;
-  static final Map<String, RegExp> _regexCache = {};
+  static final Map<(String, bool, bool), RegExp> _regexCache = {};
 
   static RegExp _cachedRegExp(
     String pattern, {
     bool ignoreCase = false,
     bool dotAll = false,
   }) {
-    final key = '$pattern\u0000${ignoreCase ? 1 : 0}${dotAll ? 1 : 0}';
+    final key = (pattern, ignoreCase, dotAll);
     final hit = _regexCache[key];
     if (hit != null) return hit;
     final regex = RegExp(pattern, caseSensitive: !ignoreCase, dotAll: dotAll);
-    if (_regexCache.length >= _regexCacheLimit) _regexCache.clear();
+    if (_regexCache.length >= _regexCacheLimit) {
+      _regexCache.remove(_regexCache.keys.first);
+    }
     return _regexCache[key] = regex;
   }
 
@@ -207,7 +224,7 @@ class PipelineInterpreter {
       input: seriesId,
       priority: priority,
     );
-    ctx.pageUrl = host.toAbsolute(seriesId, rule.baseUrl);
+    ctx.pageUrl = VideoUrlExtractor.toAbsolute(seriesId.trim(), rule.baseUrl);
     await _runSteps(rule.detail, ctx);
     return ctx._sources;
   }
@@ -240,7 +257,7 @@ class PipelineInterpreter {
       input: episodeId,
       priority: priority,
     );
-    ctx.pageUrl = host.toAbsolute(episodeId, rule.baseUrl);
+    ctx.pageUrl = VideoUrlExtractor.toAbsolute(episodeId.trim(), rule.baseUrl);
     await _runSteps(rule.play, ctx);
     final url = ctx.currentString;
     if (url.isEmpty) {
@@ -252,7 +269,11 @@ class PipelineInterpreter {
       );
     }
     return (
-      url: host.normalizeUrl(url, ctx.pageUrl),
+      url: VideoUrlExtractor.normalizeResolvedUrl(
+        url,
+        ctx.pageUrl.isEmpty ? ctx.baseUrl : ctx.pageUrl,
+        preserveMagnet: true,
+      ),
       mediaHeaders: ctx.mediaHeaders,
       cookieNames: ctx.cookieNames,
       cookiePrefixes: ctx.cookiePrefixes,
@@ -363,7 +384,7 @@ class PipelineInterpreter {
       return;
     }
 
-    final url = ctx.host.toAbsolute(
+    final url = VideoUrlExtractor.toAbsolute(
       rawUrl,
       ctx.pageUrl.isEmpty ? ctx.baseUrl : ctx.pageUrl,
     );
@@ -391,7 +412,6 @@ class PipelineInterpreter {
 
   /// `select`：CSS 选择器取值。all=true 取列表，否则取单值（attr 或文本）。
   void _opSelect(PipelineStep step, _PipelineContext ctx) {
-    final html = ctx.currentString;
     final selector = step.str('css') ?? '';
     final attr = step.str('attr') ?? 'text';
     if (selector.isEmpty) {
@@ -399,9 +419,24 @@ class PipelineInterpreter {
       return;
     }
     if (step.flag('all')) {
-      ctx.value = ctx.host.selectAll(html, selector, attr);
+      ctx.value = [
+        for (final element
+            in ctx.htmlParser
+                .documentFor(ctx.currentString)
+                .querySelectorAll(selector))
+          if ((attr == 'text'
+                  ? element.text.trim()
+                  : element.attributes[attr] ?? '')
+              case final value when value.isNotEmpty)
+            value,
+      ];
     } else {
-      ctx.value = ctx.host.selectAttr(html, selector, attr) ?? '';
+      final element = ctx.htmlParser
+          .documentFor(ctx.currentString)
+          .querySelector(selector);
+      ctx.value = attr == 'text'
+          ? element?.text.trim() ?? ''
+          : element?.attributes[attr] ?? '';
     }
   }
 
@@ -498,17 +533,7 @@ class PipelineInterpreter {
 
   /// `json`：从 JSON（当前值为字符串则先解析）按点路径取值。
   void _opJson(PipelineStep step, _PipelineContext ctx) {
-    final data = _asJson(ctx.value);
-    final path = step.str('path') ?? '';
-    var val = AnimeRuleOps.jsonPath(data, path);
-    if ((val == null || val == '') && path.isNotEmpty) {
-      if (path.startsWith('data.')) {
-        val = AnimeRuleOps.jsonPath(data, path.substring(5));
-      } else if (!path.contains('.')) {
-        val = AnimeRuleOps.jsonPath(data, 'data.$path');
-      }
-    }
-    ctx.value = val;
+    ctx.value = AnimeRuleOps.jsonPath(ctx.json, step.str('path') ?? '');
   }
 
   /// `crypto`：加解密 / 摘要变换。
@@ -735,7 +760,7 @@ class PipelineInterpreter {
     final queryFingerprint = TitleFingerprint(kw);
     for (final path in paths) {
       SourceOperation.check();
-      final url = ctx.host.toAbsolute(
+      final url = VideoUrlExtractor.toAbsolute(
         '$path?mid=$mid&wd=${Uri.encodeComponent(keyword)}&limit=$limit',
         base,
       );
@@ -798,9 +823,10 @@ class PipelineInterpreter {
       final decrypted = enc.Encrypter(
         enc.AES(enc.Key.fromUtf8(key), mode: enc.AESMode.cbc, padding: 'PKCS7'),
       ).decrypt64(encryptedUrl, iv: enc.IV.fromUtf8(iv)).trim();
-      ctx.value = ctx.host.normalizeUrl(
+      ctx.value = VideoUrlExtractor.normalizeResolvedUrl(
         decrypted.replaceAll(r'\/', '/'),
-        ctx.pageUrl,
+        ctx.pageUrl.isEmpty ? ctx.baseUrl : ctx.pageUrl,
+        preserveMagnet: true,
       );
     } catch (e) {
       _debugLog('[pipeline] ecPlayer 解密失败: $e');
@@ -852,7 +878,7 @@ class PipelineInterpreter {
   ) async {
     final base = ctx.baseUrl.replaceFirst(_trailingSlashesPattern, '');
     final response = await ctx.host.fetch(
-      ctx.host.toAbsolute(verifyUrl, base),
+      VideoUrlExtractor.toAbsolute(verifyUrl, base),
       method: 'POST',
       body: body,
       headers: const {'X-Requested-With': 'XMLHttpRequest'},
@@ -927,21 +953,17 @@ class PipelineInterpreter {
     ctx.sinkRuns++;
     final html = ctx.currentString;
     if (html.isEmpty) return;
-    List<Series> results;
-    if (step.str('listXPath') != null) {
-      results = ctx.host.parseSearchListXPath(
-        html,
-        listXPath: step.str('listXPath') ?? '',
-        nameXPath: step.str('nameXPath') ?? '',
-        linkXPath: step.str('linkXPath') ?? '',
-      );
-    } else {
-      results = ctx.host.parseSearchList(
-        html,
-        selectors: step.strList('selectors'),
-        detailPattern: step.str('detailPattern'),
-      );
-    }
+    final results = HtmlParser.parseSearchResults(
+      ctx.htmlParser.documentFor(html),
+      baseUrl: ctx.baseUrl,
+      selectors: step.params['selectors'] == null
+          ? null
+          : step.strList('selectors'),
+      detailPattern: step.str('detailPattern'),
+      listXPath: step.str('listXPath'),
+      nameXPath: step.str('nameXPath') ?? '',
+      linkXPath: step.str('linkXPath') ?? '',
+    );
     RegExp? namePattern;
     final nameFilter = step.str('nameFilter') ?? '';
     if (nameFilter.isNotEmpty) {
@@ -979,20 +1001,7 @@ class PipelineInterpreter {
   /// `jsonSeries`：从 JSON 列表构建 Series（JSON API 搜索）。
   void _opJsonSeries(PipelineStep step, _PipelineContext ctx) {
     ctx.sinkRuns++;
-    final rawData = _asJson(ctx.value);
-    if (rawData == null) return;
-
-    final listPath = step.str('listPath') ?? '';
-    Object? target = AnimeRuleOps.jsonPath(rawData, listPath);
-    if (target is! List) {
-      if (rawData is List) {
-        target = rawData;
-      } else if (rawData is Map && rawData['data'] is List) {
-        target = rawData['data'];
-      } else if (rawData is Map && rawData['list'] is List) {
-        target = rawData['list'];
-      }
-    }
+    final target = AnimeRuleOps.jsonPath(ctx.json, step.str('listPath') ?? '');
     if (target is! List) return;
 
     _appendJsonSeries(target, step, ctx);
@@ -1032,9 +1041,9 @@ class PipelineInterpreter {
           : item[urlKey]?.toString().trim() ?? '';
       String seriesUrl;
       if (rawUrl.isNotEmpty) {
-        seriesUrl = ctx.host.toAbsolute(rawUrl, baseUrl);
+        seriesUrl = VideoUrlExtractor.toAbsolute(rawUrl, baseUrl);
       } else if (template != null && id.isNotEmpty) {
-        seriesUrl = ctx.host.toAbsolute(
+        seriesUrl = VideoUrlExtractor.toAbsolute(
           template.replaceAll('{id}', id).replaceAll('{rawId}', rawId),
           baseUrl,
         );
@@ -1043,12 +1052,15 @@ class PipelineInterpreter {
       } else {
         continue;
       }
+      if (ctx._seriesById.containsKey(seriesUrl)) continue;
       final pic = item[imageKey]?.toString().trim() ?? '';
       ctx.addSeries(
         Series(
           seriesUrl,
           name,
-          image: pic.isEmpty ? null : ctx.host.toAbsolute(pic, baseUrl),
+          image: pic.isEmpty
+              ? null
+              : VideoUrlExtractor.toAbsolute(pic, baseUrl),
           description: descKey == null ? null : item[descKey]?.toString(),
         ),
       );
@@ -1074,22 +1086,18 @@ class PipelineInterpreter {
     ctx.sinkRuns++;
     final html = ctx.currentString;
     if (html.isEmpty) return;
-    List<Source> sources;
-    if (step.str('roadsXPath') != null) {
-      sources = ctx.host.parseEpisodesXPath(
-        html,
-        roadsXPath: step.str('roadsXPath') ?? '',
-        itemsXPath: step.str('itemsXPath') ?? '',
-      );
-    } else {
-      sources = ctx.host.parseEpisodes(
-        html,
-        listSelectors: step.strList('listSelectors'),
-        tabSelectors: step.params['tabSelectors'] == null
-            ? null
-            : step.strList('tabSelectors'),
-      );
-    }
+    final sources = HtmlParser.parseSources(
+      ctx.htmlParser.documentFor(html),
+      baseUrl: ctx.baseUrl,
+      listSelectors: step.params['listSelectors'] == null
+          ? null
+          : step.strList('listSelectors'),
+      tabSelectors: step.params['tabSelectors'] == null
+          ? null
+          : step.strList('tabSelectors'),
+      roadsXPath: step.str('roadsXPath'),
+      itemsXPath: step.str('itemsXPath') ?? '',
+    );
     final orderedSources = step.flag('reverse') ? sources.reversed : sources;
     if (!step.flag('reverseEpisodes')) {
       ctx._sources.addAll(orderedSources);
@@ -1120,7 +1128,7 @@ class PipelineInterpreter {
   /// `source_index` 与剧集自身的 `sort` 拼进 episodeId 才能在播放阶段还原。
   void _opJsonEpisodes(PipelineStep step, _PipelineContext ctx) {
     ctx.sinkRuns++;
-    final data = _asJson(ctx.value);
+    final data = ctx.json;
     final episodesPath = step.str('episodesPath') ?? '';
     if (episodesPath.isNotEmpty) {
       final epList = AnimeRuleOps.jsonPath(data, episodesPath);
@@ -1166,12 +1174,12 @@ class PipelineInterpreter {
   /// `vod_play_url` 以 `$$$` 分线路、`#` 分剧集、`$` 分标题与地址。
   void _opMaccmsApiEpisodes(PipelineStep step, _PipelineContext ctx) {
     ctx.sinkRuns++;
-    final data = _asJson(ctx.value);
+    final data = ctx.json;
     final list = AnimeRuleOps.jsonPath(data, step.str('listPath') ?? 'list');
     if (list is! List || list.isEmpty) return;
 
-    final requestedIndex = step.intValue('index') ?? 0;
-    final index = requestedIndex.clamp(0, list.length - 1).toInt();
+    final index = step.intValue('index') ?? 0;
+    if (index < 0 || index >= list.length) return;
     final item = list[index];
     if (item is! Map) return;
 
@@ -1201,7 +1209,11 @@ class PipelineInterpreter {
         final isDirect = _httpSchemePattern.hasMatch(rawId);
         if (directOnly && !isDirect) continue;
         final episodeId = isDirect
-            ? ctx.host.normalizeUrl(rawId, ctx.pageUrl)
+            ? VideoUrlExtractor.normalizeResolvedUrl(
+                rawId,
+                ctx.pageUrl.isEmpty ? ctx.baseUrl : ctx.pageUrl,
+                preserveMagnet: true,
+              )
             : rawId;
         episodes.add(
           Episode(
@@ -1305,7 +1317,10 @@ class PipelineInterpreter {
         !raw.contains('{')) {
       url = raw;
     } else {
-      url = ctx.host.extractVideoUrl(raw, ctx.pageUrl);
+      url = VideoUrlExtractor.extractBest(
+        raw,
+        ctx.pageUrl.isEmpty ? ctx.baseUrl : ctx.pageUrl,
+      );
     }
     if (url.isNotEmpty && !VideoUrlExtractor.isSignedCdnUrl(url)) {
       try {
@@ -1327,7 +1342,7 @@ class PipelineInterpreter {
     Map<String, String>? updated = staticHeaders.isEmpty ? null : staticHeaders;
     final jsonPath = step.str('jsonPath') ?? '';
     if (jsonPath.isNotEmpty) {
-      final data = _asJson(ctx.value);
+      final data = ctx.json;
       final headers = AnimeRuleOps.jsonPath(data, jsonPath);
       if (headers is Map) {
         updated ??= Map<String, String>.of(ctx.mediaHeaders);
@@ -1390,7 +1405,7 @@ class PipelineInterpreter {
           charsetSelector != null ||
           viewportId.isEmpty ||
           charsetId.isEmpty) {
-        final document = parse(html);
+        final document = ctx.htmlParser.documentFor(html);
         viewportId =
             document
                 .querySelector(viewportSelector ?? 'meta[name="viewport"]')
@@ -1484,7 +1499,10 @@ class PipelineInterpreter {
       return;
     }
     final url = step.str('url') != null
-        ? ctx.host.toAbsolute(_render(step.str('url')!, ctx), ctx.baseUrl)
+        ? VideoUrlExtractor.toAbsolute(
+            _render(step.str('url')!, ctx),
+            ctx.baseUrl,
+          )
         : ctx.currentString;
     if (url.isEmpty) {
       ctx.value = '';
@@ -1532,9 +1550,7 @@ class PipelineInterpreter {
       final timeoutMs = (step.intValue('timeoutMs') ?? 30000)
           .clamp(1000, 120000)
           .toInt();
-      final settleMs = (step.intValue('settleMs') ?? 1000)
-          .clamp(0, 30000)
-          .toInt();
+      final settleMs = (step.intValue('settleMs') ?? 0).clamp(0, 30000).toInt();
       ctx.value = await ctx.host.renderWithWebview(
         url,
         isReady: hasReadiness ? isReady : null,
@@ -1552,7 +1568,7 @@ class PipelineInterpreter {
     final keyword = ctx.vars['keyword']?.toString().trim() ?? '';
     if (keyword.isEmpty) return;
 
-    final url = ctx.host.toAbsolute(
+    final url = VideoUrlExtractor.toAbsolute(
       step.str('url') ?? 'https://d1zquzjgwo9yb.cloudfront.net/',
       ctx.baseUrl,
     );
@@ -1575,7 +1591,7 @@ class PipelineInterpreter {
 
     final urlTemplate =
         step.str('url') ?? 'https://anime1.me/?cat={seriesId:raw}';
-    final firstPageUrl = ctx.host.toAbsolute(
+    final firstPageUrl = VideoUrlExtractor.toAbsolute(
       _render(urlTemplate, ctx),
       ctx.baseUrl,
     );
@@ -1606,7 +1622,7 @@ class PipelineInterpreter {
       return;
     }
 
-    final url = ctx.host.toAbsolute(
+    final url = VideoUrlExtractor.toAbsolute(
       step.str('url') ?? 'https://v.anime1.me/api',
       ctx.baseUrl,
     );
@@ -1645,7 +1661,7 @@ class PipelineInterpreter {
     }
 
     final iframeHtml = await ctx.host.fetch(
-      ctx.host.toAbsolute(iframeUrl, ctx.baseUrl),
+      VideoUrlExtractor.toAbsolute(iframeUrl, ctx.baseUrl),
       priority: ctx.priority,
     );
     SourceOperation.check();
@@ -1675,7 +1691,10 @@ class PipelineInterpreter {
       return;
     }
 
-    final apiUrl = ctx.host.toAbsolute(step.str('apiUrl') ?? '', ctx.baseUrl);
+    final apiUrl = VideoUrlExtractor.toAbsolute(
+      step.str('apiUrl') ?? '',
+      ctx.baseUrl,
+    );
     final urlField = step.str('urlField') ?? 'url';
     final timestampField = step.str('timestampField') ?? 't';
     final keyField = step.str('keyField') ?? 'key';
@@ -1832,11 +1851,11 @@ class PipelineInterpreter {
     return true;
   }
 
-  dynamic _asJson(Object? value) {
+  static dynamic _asJson(Object? value) {
     if (value is String) {
       try {
-        return jsonDecode(value.trim());
-      } catch (_) {
+        return jsonDecode(value);
+      } on FormatException {
         return null;
       }
     }

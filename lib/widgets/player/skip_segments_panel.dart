@@ -4,7 +4,7 @@ import 'package:baka/api/bgm.dart';
 import 'package:baka/models/skip_segment.dart';
 import 'package:baka/models/playback_state.dart';
 import 'package:baka/utils/toast_utils.dart';
-import 'package:baka/utils/duration_utils.dart';
+import 'package:baka/utils/format_utils.dart';
 import 'package:baka/widgets/player/skip_segment_track.dart';
 import 'package:baka/widgets/baka_player/controller.dart';
 import 'package:baka/widgets/player/settings_panel.dart';

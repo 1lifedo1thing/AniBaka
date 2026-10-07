@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 /// Decodes a rule-declared binary playlist without executing site scripts.
 class HlsManifestDecoder {
@@ -45,14 +46,13 @@ class HlsManifestDecoder {
     }
 
     final key = rawKey.cast<int>();
-    final decoded = <int>[];
+    final decoded = Uint8List(bytes.length - skipBytes);
     for (var index = skipBytes; index < bytes.length; index++) {
       final position = index % period;
-      decoded.add(
-        bytes[index] ^
-            key[position < key.length ? position : fallbackIndex] ^
-            xor,
-      );
+      decoded[index - skipBytes] =
+          bytes[index] ^
+          key[position < key.length ? position : fallbackIndex] ^
+          xor;
     }
     var manifest = utf8.decode(decoded);
     if (declaration['trimPrefixBeforeM3u8'] == true) {

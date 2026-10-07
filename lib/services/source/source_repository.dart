@@ -286,6 +286,18 @@ class SourceCatalog extends ChangeNotifier {
   static String installedVersionKey(String sourceId) =>
       '$_ruleVersionKeyPrefix$sourceId';
 
+  /// The revision of the rule actually used by the adapter.
+  int installedVersionFor(String sourceId) {
+    if (AdapterRegistry.isBuiltinSource(sourceId)) {
+      return builtinOverrideById(sourceId) == null
+          ? BundledRuleStore.versionFor(sourceId)
+          : preferences.getInt(installedVersionKey(sourceId)) ?? 0;
+    }
+    return customSourceById(sourceId) == null
+        ? 0
+        : preferences.getInt(installedVersionKey(sourceId)) ?? 0;
+  }
+
   late Set<String> _disabledKeys;
   late List<AdapterDescriptor> _allSources;
   late List<AdapterDescriptor> _enabledBuiltin;
@@ -358,12 +370,13 @@ class SourceCatalog extends ChangeNotifier {
   });
 
   Future<void> _loadSources() async {
+    await BundledRuleStore.load();
     await AppStorage.open(AppStorage.customSourcesBoxName);
     var storageChanged = false;
     final staleVersionKeys = <String>[];
 
     void loadBuiltinOverride(CustomSourceConfig source) {
-      if (_bundledRuleReplacesKnownLegacyOverride(source)) {
+      if (_bundledRuleReplacesOverride(source)) {
         storageChanged = true;
         staleVersionKeys.add(installedVersionKey(source.id));
         return;
@@ -413,34 +426,11 @@ class SourceCatalog extends ChangeNotifier {
     _rebuildCustomIndex();
   }
 
-  bool _bundledRuleReplacesKnownLegacyOverride(CustomSourceConfig source) {
-    if (source.id == 'xifanacg') {
-      final legacyHost = Uri.tryParse(source.baseUrl)?.host.toLowerCase();
-      if (legacyHost != 'anime.xifanacg.com') return false;
-      final installedVersion = preferences.getInt(
-        installedVersionKey(source.id),
-      );
-      return installedVersion == null ||
-          BundledRuleStore.versionFor(source.id) > installedVersion;
-    }
-    if (source.id == 'tvtfun') {
-      final installedVersion = preferences.getInt(
-        installedVersionKey(source.id),
-      );
-      if (installedVersion == null ||
-          BundledRuleStore.versionFor(source.id) > installedVersion) {
-        return true;
-      }
-      final play = source.rule.play;
-      final hasDelay = play.any(
-        (s) =>
-            s.op == 'delay' ||
-            s.params['delayMs'] != null ||
-            s.params['delay'] != null,
-      );
-      if (!hasDelay) return true;
-    }
-    return false;
+  bool _bundledRuleReplacesOverride(CustomSourceConfig source) {
+    final revision = preferences.getInt(installedVersionKey(source.id));
+    // Keep unversioned local edits and rules newer than the bundled snapshot.
+    return revision != null &&
+        BundledRuleStore.versionFor(source.id) > revision;
   }
 
   Future<void> _commit() async {
@@ -487,7 +477,7 @@ class SourceCatalog extends ChangeNotifier {
 
   CustomSourceConfig? builtinOverrideById(String key) {
     final override = _builtinOverrides[key];
-    if (override == null || _bundledRuleReplacesKnownLegacyOverride(override)) {
+    if (override == null || _bundledRuleReplacesOverride(override)) {
       return null;
     }
     return override;
@@ -509,11 +499,17 @@ class SourceCatalog extends ChangeNotifier {
 
   Future<bool> updateBuiltinSource(
     String key,
-    CustomSourceConfig source,
-  ) async {
+    CustomSourceConfig source, {
+    int? revision,
+  }) async {
     if (!AdapterRegistry.isBuiltinSource(key) || source.id != key) return false;
     final validation = RuleValidator.validate(source.rule);
     if (!validation.isValid) return false;
+    if (revision == null) {
+      await preferences.remove(installedVersionKey(key));
+    } else {
+      await preferences.setInt(installedVersionKey(key), revision);
+    }
     _builtinOverrides[key] = source.copyWith(updatedAt: DateTime.now());
     await _commit();
     return true;
@@ -521,6 +517,7 @@ class SourceCatalog extends ChangeNotifier {
 
   Future<bool> resetBuiltinSource(String key) async {
     if (_builtinOverrides.remove(key) == null) return false;
+    await preferences.remove(installedVersionKey(key));
     await _commit();
     return true;
   }
@@ -544,6 +541,7 @@ class SourceCatalog extends ChangeNotifier {
     final index = _customIndexById[id];
     if (index == null) return false;
     _customSources.removeAt(index);
+    await preferences.remove(installedVersionKey(id));
     await _commit();
     return true;
   }
@@ -586,11 +584,13 @@ class SourceCatalog extends ChangeNotifier {
         try {
           final source = _sourceFromJson(Map<String, dynamic>.from(item));
           if (AdapterRegistry.isBuiltinSource(source.id)) {
+            await preferences.remove(installedVersionKey(source.id));
             _builtinOverrides[source.id] = source.copyWith(updatedAt: now);
             count++;
             continue;
           }
           final index = _customIndexById[source.id];
+          await preferences.remove(installedVersionKey(source.id));
           if (index == null) {
             _customIndexById[source.id] = _customSources.length;
             _customSources.add(source);
@@ -621,6 +621,11 @@ class SourceCatalog extends ChangeNotifier {
 
   Future<void> clearCustomSources() async {
     if (_customSources.isEmpty) return;
+    await Future.wait(
+      _customSources.map(
+        (source) => preferences.remove(installedVersionKey(source.id)),
+      ),
+    );
     _customSources.clear();
     await _commit();
   }

@@ -11,6 +11,9 @@ import 'package:baka/services/account/login_service.dart';
 import 'package:baka/services/account/bangumi_session.dart';
 import 'package:baka/api/playback.dart';
 import 'package:baka/models/collection.dart';
+import 'package:baka/models/app_user.dart';
+import 'package:baka/pages/login/login_page.dart';
+import 'package:baka/utils/toast_utils.dart';
 import 'package:http/testing.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
@@ -19,6 +22,8 @@ import 'dart:io';
 import 'package:baka/instance.dart';
 import 'package:baka/core/api_transport.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/material.dart';
+import 'package:get/get.dart' hide ContextExtensionss;
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -37,7 +42,10 @@ void main() {
     Instances.sp = await SharedPreferences.getInstance();
     apiTransport = ApiTransport(
       session: AccountSession(Instances.sp, refreshTokens: (_) async => null),
-      client: http.Client(),
+      client: MockClient(
+        (request) async =>
+            throw StateError('Unexpected request: ${request.url}'),
+      ),
       version: 'test',
       credentialOrigin: () => Uri.parse('https://www.anibaka.com'),
     );
@@ -254,6 +262,187 @@ void main() {
   );
 
   test(
+    'account forms preserve HTTP rejection reasons without a network toast',
+    () async {
+      var notices = 0;
+      var status = 400;
+      var body = <String, dynamic>{'code': 400, 'msg': 'QQ已存在'};
+      useClient(
+        MockClient(
+          (_) async => http.Response(
+            jsonEncode(body),
+            status,
+            headers: {'content-type': 'text/plain; charset=utf-8'},
+          ),
+        ),
+        onError: (_) => notices++,
+      );
+      final service = LoginService(apiTransport.session, apiTransport);
+      for (final reason in ['QQ已存在', '用户名已存在']) {
+        body = {'code': 400, 'msg': reason};
+        final result = await service.performRegister(
+          name: 'name',
+          pwd: 'password',
+          qq: '12345',
+        );
+        expect(result, (success: false, message: reason));
+      }
+      status = 429;
+      body = {'code': 429, 'message': '请求限速'};
+      expect(
+        (await service.performRegister(
+          name: 'name',
+          pwd: 'pwd',
+          qq: '12345',
+        )).message,
+        '请求限速',
+      );
+      status = 400;
+      body = {'code': 400, 'msg': '用户名或密码错误'};
+      expect(
+        (await service.performLogin(name: 'name', pwd: 'wrong')).message,
+        '用户名或密码错误',
+      );
+      body = {'code': 400, 'msg': 'QQ已存在'};
+      expect(
+        (await service.updateUser(
+          const AppUser(id: 1, name: 'name', qq: '12345', sign: '', level: 1),
+          'qq',
+          '23456',
+        )).message,
+        'QQ已存在',
+      );
+      // Older servers can return an error envelope with HTTP 200.
+      status = 200;
+      expect(
+        await service.performRegister(name: 'name', pwd: 'pwd', qq: '12345'),
+        (success: false, message: 'QQ已存在'),
+      );
+      expect(notices, 0);
+    },
+  );
+
+  test(
+    'registration distinguishes connection, timeout and server failures',
+    () async {
+      var notices = 0;
+      for (final scenario in [
+        (
+          error: http.ClientException('offline'),
+          body: '',
+          status: 200,
+          message: '无法连接服务器，请检查网络或切换 APP 线路',
+        ),
+        (
+          error: TimeoutException('timeout'),
+          body: '',
+          status: 200,
+          message: '注册请求超时，请稍后重试',
+        ),
+        (
+          error: null,
+          body: '<html>upstream failure</html>',
+          status: 503,
+          message: '服务器暂时不可用（HTTP 503），请稍后重试',
+        ),
+        (
+          error: null,
+          body: 'rate limited',
+          status: 429,
+          message: '请求过于频繁，请稍后重试',
+        ),
+        (
+          error: null,
+          body: '<html>unexpected response</html>',
+          status: 200,
+          message: '服务器响应异常，请稍后重试',
+        ),
+      ]) {
+        useClient(
+          MockClient((_) async {
+            if (scenario.error != null) throw scenario.error!;
+            return http.Response(scenario.body, scenario.status);
+          }),
+          onError: (_) => notices++,
+        );
+        expect(
+          await LoginService(
+            apiTransport.session,
+            apiTransport,
+          ).performRegister(name: 'name', pwd: 'password', qq: '12345'),
+          (success: false, message: scenario.message),
+        );
+      }
+      expect(notices, 0);
+    },
+  );
+
+  testWidgets('registration can retry a rejection then switch to login', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(Get.reset);
+    var requests = 0;
+    var notices = 0;
+    useClient(
+      MockClient((request) async {
+        requests++;
+        expect(request.method, 'POST');
+        expect(request.url.path, '/user/register');
+        expect(jsonDecode(request.body), {
+          'name': 'new-user',
+          'pwd': ' password ',
+          'qq': '12345',
+        });
+        return http.Response(
+          jsonEncode(
+            requests == 1
+                ? {'code': 400, 'msg': 'QQ已存在'}
+                : {'code': 200, 'msg': '注册成功啦'},
+          ),
+          requests == 1 ? 400 : 200,
+          headers: {'content-type': 'text/plain; charset=utf-8'},
+        );
+      }),
+      onError: (_) => notices++,
+    );
+    Get.put<AccountSession>(apiTransport.session);
+    Get.put<ApiTransport>(apiTransport);
+    bangumiSession = BangumiSession(
+      Instances.sp,
+      apiTransport.session,
+      BangumiApi(client: apiTransport.client),
+      const BangumiOAuthBroker(),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        scaffoldMessengerKey: scaffoldMessengerKey,
+        home: const Login(),
+      ),
+    );
+    await tester.tap(find.text('注册'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextFormField).at(0), ' 12345 ');
+    await tester.enterText(find.byType(TextFormField).at(1), ' new-user ');
+    await tester.enterText(find.byType(TextFormField).at(2), ' password ');
+    await tester.tap(find.text('注 册'));
+    await tester.pumpAndSettle();
+    expect(find.text('QQ已存在'), findsOneWidget);
+    expect(find.text('注 册'), findsOneWidget);
+    await tester.tap(find.text('注 册'));
+    await tester.pumpAndSettle();
+    expect(find.text('登 录'), findsOneWidget);
+    expect(find.byType(TextFormField), findsNWidgets(2));
+    expect(requests, 2);
+    expect(notices, 0);
+    expect(apiTransport.session.isLoggedIn, isFalse);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  test(
     'credential requests refuse redirects and server changes invalidate detail cache',
     () async {
       var calls = 0;
@@ -318,6 +507,68 @@ void main() {
     },
   );
 
+  for (final readingBody in [false, true]) {
+    test(
+      'request cancellation is silent (reading body: $readingBody)',
+      () async {
+        var notices = 0;
+        final started = Completer<void>();
+        final abort = Completer<void>();
+        useClient(
+          _StreamingClient((request) async {
+            final trigger = (request as http.AbortableRequest).abortTrigger!;
+            started.complete();
+            if (!readingBody) {
+              await trigger;
+              throw http.RequestAbortedException(request.url);
+            }
+            final body = StreamController<List<int>>();
+            trigger.then((_) {
+              body.addError(http.RequestAbortedException(request.url));
+              unawaited(body.close());
+            });
+            return http.StreamedResponse(body.stream, 200);
+          }),
+          onError: (_) => notices++,
+        );
+        final result = apiTransport.getJson<Object>(
+          '$host/cancelled',
+          abortTrigger: abort.future,
+        );
+        final assertion = expectLater(
+          result,
+          throwsA(isA<http.RequestAbortedException>()),
+        );
+        await started.future;
+        abort.complete();
+        await assertion;
+        expect(notices, 0);
+      },
+    );
+  }
+
+  test('request timeout still notifies when the sender aborts HTTP', () async {
+    final notices = <Object>[];
+    final aborted = Completer<void>();
+    useClient(
+      _StreamingClient((request) async {
+        await (request as http.AbortableRequest).abortTrigger;
+        aborted.complete();
+        throw http.RequestAbortedException(request.url);
+      }),
+      onError: notices.add,
+    );
+    await expectLater(
+      apiTransport.getJson<Object>(
+        '$host/timeout',
+        timeout: const Duration(milliseconds: 10),
+      ),
+      throwsA(isA<TimeoutException>()),
+    );
+    await aborted.future;
+    expect(notices, [isA<TimeoutException>()]);
+  });
+
   test(
     'Bangumi keeps its own credentials and preserves 404/204 semantics',
     () async {
@@ -343,7 +594,7 @@ void main() {
       expect(await api.getCollection('bgm-token', 1), isNull);
       await api.putCollection(
         'bgm-token',
-        AnimeCollection(bgmId: 1, status: 3),
+        const AnimeCollection(bgmId: 1, status: 3),
       );
     },
   );
@@ -485,6 +736,7 @@ void main() {
   });
 
   test('POST timeout returns without waiting for the server', () async {
+    useClient(http.Client());
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     addTearDown(() => server.close(force: true));
     // Leave the response pending so only the client's timeout can finish it.
@@ -501,6 +753,7 @@ void main() {
   });
 
   test('abortable POST keeps JSON request and response behavior', () async {
+    useClient(http.Client());
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     addTearDown(() => server.close(force: true));
     server.listen((request) async {

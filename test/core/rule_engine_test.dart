@@ -5,9 +5,6 @@ import 'package:baka/source/engine/pipeline_host.dart';
 import 'package:baka/source/engine/pipeline_interpreter.dart';
 import 'package:baka/source/engine/recipes.dart';
 import 'package:baka/source/engine/rule_validator.dart';
-import 'package:baka/source/models/episode.dart';
-import 'package:baka/source/models/series.dart';
-import 'package:baka/source/models/source.dart';
 import 'package:baka/source/models/source_rule.dart';
 import 'package:baka/source/pipeline_source_adapter.dart';
 import 'package:baka/source/runtime/request_scheduler.dart';
@@ -15,30 +12,14 @@ import 'package:crypto/crypto.dart';
 import 'package:encrypt/encrypt.dart' as encrypt;
 import 'package:test/test.dart';
 
-/// 可控的宿主替身：fetch 从预置表返回，解析类方法给出可预测的最小实现。
+/// Stub only I/O; fixtures run through the same parsers as production.
 class FakeHost implements PipelineHost {
   FakeHost(this.responses);
   final Map<String, String> responses;
   final List<String> fetched = [];
 
   @override
-  String get baseUrl => 'https://example.com';
-  @override
-  Map<String, String> get ruleHeaders => const {};
-  @override
   bool get allowWebview => false;
-
-  @override
-  String toAbsolute(String url, String base) {
-    if (url.startsWith('http')) return url;
-    return 'https://example.com${url.startsWith('/') ? '' : '/'}$url';
-  }
-
-  @override
-  String normalizeUrl(String url, String pageUrl) => url;
-
-  @override
-  bool isPlayable(String url) => url.contains('.m3u8') || url.contains('.mp4');
 
   @override
   Future<String> fetch(
@@ -56,71 +37,14 @@ class FakeHost implements PipelineHost {
   }
 
   @override
-  List<Series> parseSearchList(
-    String html, {
-    required List<String> selectors,
-    String? detailPattern,
-  }) => const [];
-  @override
-  List<Series> parseSearchListXPath(
-    String html, {
-    required String listXPath,
-    required String nameXPath,
-    required String linkXPath,
-  }) => const [];
-  @override
-  List<Source> parseEpisodes(
-    String html, {
-    required List<String> listSelectors,
-    List<String>? tabSelectors,
-  }) => const [];
-  @override
-  List<Source> parseEpisodesXPath(
-    String html, {
-    required String roadsXPath,
-    required String itemsXPath,
-  }) => const [];
-  @override
-  String extractVideoUrl(String content, String pageUrl) {
-    final m = RegExp(
-      r'https?://[^\s"'
-      "'"
-      r']+\.(?:m3u8|mp4)',
-    ).firstMatch(content);
-    return m?.group(0) ?? '';
-  }
-
-  @override
-  String? selectAttr(String html, String selector, String attr) => null;
-  @override
-  List<String> selectAll(String html, String selector, String attr) => const [];
-
-  @override
   Future<String> renderWithWebview(
     String url, {
     bool Function(String html)? isReady,
     Duration timeout = const Duration(seconds: 30),
-    Duration settleDelay = const Duration(seconds: 1),
+    Duration settleDelay = Duration.zero,
   }) async => '';
   @override
   Future<String> sniffWithWebview(String url) async => '';
-}
-
-class ReverseEpisodesHost extends FakeHost {
-  ReverseEpisodesHost() : super(const {'https://example.com/detail': 'html'});
-
-  @override
-  List<Source> parseEpisodesXPath(
-    String html, {
-    required String roadsXPath,
-    required String itemsXPath,
-  }) => [
-    Source([
-      Episode('/episode/3', 0, '第3集'),
-      Episode('/episode/2', 1, '第2集'),
-      Episode('/episode/1', 2, '第1集'),
-    ], '主线'),
-  ];
 }
 
 class VerifyCheckHost extends FakeHost {
@@ -159,32 +83,18 @@ class VerifyCheckHost extends FakeHost {
           </script>
         ''';
       }
-      return '<html>verified</html>';
+      return '<li><a href="/detail/1" title="verified">verified</a></li>';
     }
     return '';
   }
-
-  @override
-  List<Series> parseSearchList(
-    String html, {
-    required List<String> selectors,
-    String? detailPattern,
-  }) {
-    if (!html.contains('verified')) return const [];
-    return [Series('https://example.com/detail/1', 'verified')];
-  }
 }
 
-class AltchaWebviewHost extends FakeHost {
-  AltchaWebviewHost()
-    : super(const {
-        'https://example.com/blocked':
-            '<html><altcha-widget></altcha-widget><script src="/aegis_altcha_object/altcha.min.js"></script></html>',
-      });
+class _WebviewHost extends FakeHost {
+  _WebviewHost(this.render, {Map<String, String> responses = const {}})
+    : super(responses);
 
-  final rendered = <String>[];
-  var rejectedChallenge = false;
-  var acceptedResult = false;
+  final String Function(String, bool Function(String)?, Duration, Duration)
+  render;
 
   @override
   bool get allowWebview => true;
@@ -192,58 +102,10 @@ class AltchaWebviewHost extends FakeHost {
   @override
   Future<String> renderWithWebview(
     String url, {
-    bool Function(String html)? isReady,
+    bool Function(String)? isReady,
     Duration timeout = const Duration(seconds: 30),
-    Duration settleDelay = const Duration(seconds: 1),
-  }) async {
-    rendered.add(url);
-    rejectedChallenge =
-        isReady?.call('<html><altcha-widget></altcha-widget></html>') == false;
-    const html = '<html><body>{"list":[{"id":30,"name":"鬼灭之刃"}]}</body></html>';
-    acceptedResult = isReady?.call(html) == true;
-    return html;
-  }
-
-  @override
-  String? selectAttr(String html, String selector, String attr) {
-    if (selector == 'body' && attr == 'text') {
-      return '{"list":[{"id":30,"name":"鬼灭之刃"}]}';
-    }
-    return null;
-  }
-}
-
-class _PlayerOpsHost extends FakeHost {
-  _PlayerOpsHost([super.responses = const {}]);
-  bool challengeRejected = false;
-  bool readyAccepted = false;
-  Duration? receivedTimeout;
-  Duration? receivedSettleDelay;
-  @override
-  bool get allowWebview => true;
-  @override
-  Future<String> renderWithWebview(
-    String url, {
-    bool Function(String html)? isReady,
-    Duration timeout = const Duration(seconds: 30),
-    Duration settleDelay = const Duration(seconds: 1),
-  }) async {
-    receivedTimeout = timeout;
-    receivedSettleDelay = settleDelay;
-    challengeRejected =
-        !(isReady?.call(
-              '<title>DokiDoki CDN</title><script>var player_aaaa={};</script>',
-            ) ??
-            true);
-    readyAccepted =
-        isReady?.call(
-          '<script>var player_aaaa={};</script>'
-          'https://cdn.example.com/ready.mp4',
-        ) ??
-        true;
-    return '<script>var player_aaaa={};</script>'
-        'https://cdn.example.com/ready.mp4';
-  }
+    Duration settleDelay = Duration.zero,
+  }) async => render(url, isReady, timeout, settleDelay);
 }
 
 SourceRule _rule(List<Map<String, dynamic>> play) => SourceRule.fromJson({
@@ -269,23 +131,6 @@ SourceRule _pipelineRule({
   detail: detail,
   play: play,
 );
-
-class _HtmlHost extends FakeHost {
-  _HtmlHost() : super({});
-  @override
-  bool get allowWebview => true;
-  @override
-  Future<String> renderWithWebview(
-    String url, {
-    bool Function(String)? isReady,
-    Duration timeout = const Duration(seconds: 30),
-    Duration settleDelay = const Duration(seconds: 1),
-  }) async {
-    expect(isReady!('episode-2026'), isTrue);
-    expect(isReady('episode-2'), isFalse);
-    return 'episode-2026';
-  }
-}
 
 void main() {
   test('rule edits isolate mutable input and survive persistence', () {
@@ -331,6 +176,193 @@ void main() {
 
   group('pipeline', () {
     const interp = PipelineInterpreter();
+
+    test(
+      'JSON paths do not guess envelopes and alternatives are explicit',
+      () async {
+        const payload =
+            '{"list":[{"id":"wrong","name":"Wrong"}],'
+            '"data":{"list":[{"id":"right","name":"Right"}]}}';
+        for (final (path, expected) in [
+          ('missing', <String>[]),
+          ('missing|data.list', ['right']),
+          ('list', ['wrong']),
+        ]) {
+          final results = await interp.runSearch(
+            _pipelineRule(
+              search: [
+                const PipelineStep('template', {'value': payload}),
+                PipelineStep('jsonSeries', {'listPath': path}),
+              ],
+            ),
+            FakeHost({}),
+            'query',
+          );
+          expect(results.map((series) => series.seriesId), expected);
+        }
+        final result = await interp.runSearch(
+          _pipelineRule(
+            search: const [
+              PipelineStep('template', {'value': payload}),
+              PipelineStep('json', {'path': 'missing'}),
+              PipelineStep('jsonSeries', {}),
+            ],
+          ),
+          FakeHost({}),
+          'query',
+        );
+        expect(result, isEmpty);
+      },
+    );
+
+    test(
+      'new responses replace decoded data without losing prior results',
+      () async {
+        final results = await interp.runSearch(
+          _pipelineRule(
+            search: const [
+              PipelineStep('template', {
+                'value': '[{"id":"1","name":"First"}]',
+              }),
+              PipelineStep('jsonSeries', {}),
+              PipelineStep('jsonSeries', {}),
+              PipelineStep('template', {
+                'value': '[{"id":"2","name":"Second"}]',
+              }),
+              PipelineStep('jsonSeries', {}),
+            ],
+          ),
+          FakeHost({}),
+          'query',
+        );
+        expect(results.map((series) => series.name), ['First', 'Second']);
+      },
+    );
+
+    test('missing CSS selectors advance to the declared branch', () async {
+      final results = await interp.runSearch(
+        _pipelineRule(
+          search: const [
+            PipelineStep('template', {
+              'value':
+                  '<div class="module-items"><div class="module-item">'
+                  '<a href="/detail/wrong" title="Wrong">Wrong</a></div></div>'
+                  '<section><a href="/detail/right" title="Right">Right</a></section>',
+            }),
+            PipelineStep.first([
+              [
+                PipelineStep('searchList', {
+                  'selectors': ['.missing'],
+                  'detailPattern': '/detail/',
+                }),
+              ],
+              [
+                PipelineStep('searchList', {
+                  'selectors': ['section'],
+                }),
+              ],
+            ]),
+          ],
+        ),
+        FakeHost({}),
+        'query',
+      );
+      expect(results.map((series) => series.name), ['Right']);
+    });
+
+    test('episode parsing deduplicates whole lines and retains line order', () async {
+      final sources = await interp.runDetail(
+        _pipelineRule(
+          detail: const [
+            PipelineStep('template', {
+              'value':
+                  '<nav><b>Line A</b><b>Duplicate</b><b>Line B</b></nav>'
+                  '<section><a href="/a1">One</a><a href="/a2">Two</a></section>'
+                  '<section><a href="/a1">One</a><a href="/a2">Two</a></section>'
+                  '<section><a href="/b1">One</a><a href="/b2">Two</a></section>',
+            }),
+            PipelineStep('episodes', {
+              'listSelectors': ['section'],
+              'tabSelectors': ['nav b'],
+            }),
+          ],
+        ),
+        FakeHost({}),
+        'query',
+      );
+      expect(sources.map((source) => source.sourceName), ['Line A', 'Line B']);
+      expect(sources.last.episodes.map((episode) => episode.episodeId), [
+        'https://example.com/b1',
+        'https://example.com/b2',
+      ]);
+    });
+
+    test('HTML readiness does not add an implicit settling delay', () async {
+      final host = _WebviewHost(
+        expectAsync4((url, isReady, timeout, settleDelay) {
+          const html =
+              '<script>var player_aaaa={};</script>https://cdn.example.com/ready.mp4';
+          expect(settleDelay, Duration.zero);
+          expect(isReady!(html), isTrue);
+          return html;
+        }),
+      );
+      await interp.runPlay(
+        _pipelineRule(
+          play: const [
+            PipelineStep('sniff', {
+              'goal': 'html',
+              'url': '/page',
+              'readyContains': ['player_aaaa'],
+            }),
+            PipelineStep('videoUrl', {}),
+          ],
+        ),
+        host,
+        '/episode',
+      );
+    });
+
+    test(
+      'torrent search groups releases with ordered fansubs and first cover',
+      () async {
+        final results = await interp.runSearch(
+          _pipelineRule(
+            search: const [
+              PipelineStep('template', {
+                'value':
+                    '<ul>'
+                    '<li><a href="/a">[A] Series - 01</a></li>'
+                    '<li><a href="/b">[B] Series - 02</a><img src="/cover.jpg"></li>'
+                    '<li><a href="/c">[A] Series - 03</a><img src="/later.jpg"></li>'
+                    '<li><a href="/d">[C] Other - 01</a></li>'
+                    '<li><a href="/e">[A] Series - 04 Trailer</a></li>'
+                    '</ul>',
+              }),
+              PipelineStep('torrentRecords', {
+                'rowSelector': 'li',
+                'titleSelector': 'a',
+                'idSelector': 'a',
+                'imageSelector': 'img',
+                'fansubPattern': r'^\[([^\]]+)\]',
+                'animeNamePatterns': [r'\]\s*(.+?)\s+- \d+'],
+                'episodePatterns': [r'- (\d+)'],
+                'excludePatterns': ['Trailer'],
+                'seriesIdTemplate': '/?q={animeName}',
+                'descriptionTemplate': '{count:raw} releases {fansubs:raw}',
+              }),
+            ],
+          ),
+          FakeHost({}),
+          'query',
+        );
+        expect(results.map((series) => series.name), ['Series', 'Other']);
+        expect(results.first.seriesId, 'https://example.com/?q=Series');
+        expect(results.first.description, '3 releases A, B');
+        expect(results.first.image, 'https://example.com/cover.jpg');
+        expect(results.last.description, '1 releases C');
+      },
+    );
 
     test('jsonSeries 搜索：fetch → jsonSeries 构建 Series 列表', () async {
       final host = FakeHost({
@@ -495,7 +527,10 @@ void main() {
     test(
       'episodes can reverse a newest-first list and rebuild indexes',
       () async {
-        final host = ReverseEpisodesHost();
+        final host = FakeHost(const {
+          'https://example.com/detail':
+              '<section><a href="/episode/3">第3集</a><a href="/episode/2">第2集</a><a href="/episode/1">第1集</a></section>',
+        });
         final rule = SourceRule.fromJson({
           'format': kSourceRuleFormatV2,
           'id': 'reverse-episodes',
@@ -648,7 +683,7 @@ void main() {
         ],
       });
       final out = await interp.runPlay(rule, host, '123456');
-      expect(out, '123456');
+      expect(out, 'https://example.com/123456');
     });
 
     test('jsonSeries：支持 baseN id 转换生成短码详情页', () async {
@@ -807,7 +842,23 @@ void main() {
     );
 
     test('ALTCHA challenge falls back to ready WebView JSON', () async {
-      final host = AltchaWebviewHost();
+      final host = _WebviewHost(
+        expectAsync4((url, isReady, timeout, settleDelay) {
+          expect(url, 'https://example.com/suggest');
+          expect(
+            isReady!('<html><altcha-widget></altcha-widget></html>'),
+            isFalse,
+          );
+          const html =
+              '<html><body>{"list":[{"id":30,"name":"鬼灭之刃"}]}</body></html>';
+          expect(isReady(html), isTrue);
+          return html;
+        }),
+        responses: const {
+          'https://example.com/blocked':
+              '<html><altcha-widget></altcha-widget><script src="/aegis_altcha_object/altcha.min.js"></script></html>',
+        },
+      );
       final rule = SourceRule.fromJson({
         'format': kSourceRuleFormatV2,
         'id': 'altcha',
@@ -848,9 +899,6 @@ void main() {
 
       final results = await interp.runSearch(rule, host, '鬼灭');
 
-      expect(host.rendered, ['https://example.com/suggest']);
-      expect(host.rejectedChallenge, isTrue);
-      expect(host.acceptedResult, isTrue);
       expect(results, hasLength(1));
       expect(results.single.name, '鬼灭之刃');
       expect(results.single.seriesId, 'https://example.com/bangumi/30.html');
@@ -1156,7 +1204,7 @@ void main() {
           {'op': 'template', 'value': r'https:\/\/player.example.com\/parse'},
           {'op': 'replace', 'pattern': r'\/', 'replacement': '/'},
         ]),
-        _PlayerOpsHost(),
+        FakeHost(const {}),
         '/unused',
       );
 
@@ -1181,7 +1229,7 @@ void main() {
           '<meta charset="UTF-8" id="now_$charsetId">'
           '<meta name="viewport" id="now_$viewportId">'
           '<script>var config = {"url":"$cipher"};</script>';
-      final host = _PlayerOpsHost({'https://example.com/player': html});
+      final host = FakeHost({'https://example.com/player': html});
 
       for (final decryptStep in <Map<String, dynamic>>[
         {'op': 'playerDecrypt', 'salt': salt},
@@ -1203,7 +1251,7 @@ void main() {
         expect(result, direct);
       }
 
-      final unquotedHost = _PlayerOpsHost({
+      final unquotedHost = FakeHost({
         'https://example.com/player':
             '<meta charset=UTF-8 id=now_$charsetId>'
             '<meta name=viewport id=now_$viewportId>'
@@ -1221,7 +1269,22 @@ void main() {
     });
 
     test('sniff html forwards rule readiness and timing', () async {
-      final host = _PlayerOpsHost();
+      final host = _WebviewHost(
+        expectAsync4((url, isReady, timeout, settleDelay) {
+          expect(
+            isReady!(
+              '<title>DokiDoki CDN</title><script>var player_aaaa={};</script>',
+            ),
+            isFalse,
+          );
+          const html =
+              '<script>var player_aaaa={};</script>https://cdn.example.com/ready.mp4';
+          expect(isReady(html), isTrue);
+          expect(timeout, const Duration(seconds: 35));
+          expect(settleDelay, const Duration(seconds: 6));
+          return html;
+        }),
+      );
       final result = await interpreter.runPlay(
         _rule([
           {'op': 'template', 'value': 'https://example.com/rendered'},
@@ -1240,10 +1303,6 @@ void main() {
         '/unused',
       );
 
-      expect(host.challengeRejected, isTrue);
-      expect(host.readyAccepted, isTrue);
-      expect(host.receivedTimeout, const Duration(seconds: 35));
-      expect(host.receivedSettleDelay, const Duration(seconds: 6));
       expect(result, 'https://cdn.example.com/ready.mp4');
     });
   });
@@ -1269,7 +1328,7 @@ void main() {
         expect(RuleValidator.validate(source).isValid, isTrue);
         expect(
           await interpreter.runPlay(source, FakeHost({}), 'episode'),
-          '1234',
+          'https://example.com/1234',
         );
         expect(
           PipelineInterpreter.renderTemplate(
@@ -1291,7 +1350,13 @@ void main() {
             }),
           ],
         ),
-        _HtmlHost(),
+        _WebviewHost(
+          expectAsync4((url, isReady, timeout, settleDelay) {
+            expect(isReady!('episode-2026'), isTrue);
+            expect(isReady('episode-2'), isFalse);
+            return 'episode-2026';
+          }),
+        ),
         'episode',
       );
     });

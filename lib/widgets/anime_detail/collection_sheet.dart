@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:baka/models/collection.dart';
 
-const _statusData = <CollectionStatus, (Color, IconData, String)>{
+const collectionStatusVisuals = <CollectionStatus, (Color, IconData, String)>{
   CollectionStatus.doing: (
     Color(0xFF007AFF),
     Icons.play_arrow_rounded,
@@ -17,9 +17,6 @@ const _statusData = <CollectionStatus, (Color, IconData, String)>{
   CollectionStatus.onHold: (Color(0xFFFF9500), Icons.pause_rounded, '暂时搁置中'),
   CollectionStatus.dropped: (Color(0xFFFF3B30), Icons.close_rounded, '不再追了'),
 };
-
-(Color, IconData, String) statusVisual(CollectionStatus status) =>
-    _statusData[status]!;
 
 class CollectionStatusSheet extends StatelessWidget {
   final CollectionStatus? currentStatus;
@@ -133,7 +130,7 @@ class _CurrentBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (color, _, _) = _statusData[status]!;
+    final (color, _, _) = collectionStatusVisuals[status]!;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
@@ -179,7 +176,7 @@ class _StatusChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final (color, icon, desc) = _statusData[status]!;
+    final (color, icon, desc) = collectionStatusVisuals[status]!;
 
     return GestureDetector(
       onTap: onTap,

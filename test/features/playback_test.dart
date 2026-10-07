@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:baka/instance.dart';
 import 'package:baka/models/playback_state.dart';
 import 'package:baka/models/skip_segment.dart';
@@ -31,6 +33,27 @@ class _DanmakuSyncCounter implements DanmakuListener {
   void onDanmakuReset() {}
   @override
   void onDanmakuResume() {}
+}
+
+class _SelectionPlayback extends PlaybackController {
+  Completer<void>? pauseGate;
+  final seeks = <Duration>[];
+
+  @override
+  Future<void> pause({bool remote = false}) async {
+    await pauseGate?.future;
+    await super.pause(remote: remote);
+  }
+
+  @override
+  Future<void> seek(
+    Duration target, {
+    bool fromSlider = false,
+    bool remote = false,
+  }) {
+    seeks.add(target);
+    return super.seek(target, fromSlider: fromSlider, remote: remote);
+  }
 }
 
 void main() {
@@ -73,6 +96,119 @@ void main() {
       await controller.dispose();
     },
   );
+
+  group('OP/ED selection position', () {
+    Future<_SelectionPlayback> createController(Duration duration) async {
+      SharedPreferences.setMockInitialValues({});
+      Instances.sp = await SharedPreferences.getInstance();
+      final controller = _SelectionPlayback();
+      controller.setSkipContext(
+        const SkipContext(sourceKey: 'video', episodeNumber: 2),
+      );
+      controller.timeline.value = PlaybackTimelineState(duration: duration);
+      return controller;
+    }
+
+    test(
+      'ending starts near the tail and switching restores each draft',
+      () async {
+        final controller = await createController(const Duration(minutes: 24));
+        final events = <Duration>[];
+        final subscription = controller.seekEvents.listen(events.add);
+
+        expect(controller.beginSkipSelection('ed'), isTrue);
+        await pumpEventQueue();
+        expect(
+          controller.timeline.value.position,
+          const Duration(minutes: 22, seconds: 30),
+        );
+        expect(controller.skipSelection.value!.range, (
+          startMs: 1350000,
+          endMs: 1440000,
+        ));
+        controller.beginSkipSelection('op');
+        await pumpEventQueue();
+        expect(controller.timeline.value.position, Duration.zero);
+        controller.updateSkipSelection(12000, 102000);
+        controller.beginSkipSelection('ed');
+        await pumpEventQueue();
+        expect(controller.timeline.value.position.inMilliseconds, 1350000);
+        controller.updateSkipSelection(1330000, 1420000);
+        controller.beginSkipSelection('op');
+        await pumpEventQueue();
+        expect(controller.timeline.value.position.inMilliseconds, 12000);
+        controller.beginSkipSelection('ed');
+        await pumpEventQueue();
+        expect(controller.timeline.value.position.inMilliseconds, 1330000);
+        expect(controller.skipSelection.value!.range.endMs, 1420000);
+        expect(events, isEmpty);
+        controller.cancelSkipSelection();
+        expect(
+          controller.skipService.mergeLocal(
+            controller.skipContext!,
+            1440000,
+            [],
+          ),
+          isEmpty,
+        );
+        await subscription.cancel();
+        await controller.dispose();
+      },
+    );
+
+    test(
+      'saved ending takes priority and short clips stay within bounds',
+      () async {
+        final controller = await createController(const Duration(minutes: 24));
+        const ending = SkipSegment(
+          id: 'ed',
+          type: 'ed',
+          startMs: 1310000,
+          endMs: 1400000,
+          durationMs: 1440000,
+          origin: 'local',
+          automatic: true,
+        );
+        await controller.skipService.saveLocal(controller.skipContext!, ending);
+        await controller.refreshSkipSegments(force: true);
+        controller.beginSkipSelection('ed');
+        await pumpEventQueue();
+        expect(
+          controller.timeline.value.position.inMilliseconds,
+          ending.startMs,
+        );
+        expect(controller.skipSelection.value!.range.endMs, ending.endMs);
+        controller.cancelSkipSelection();
+        controller.timeline.value = const PlaybackTimelineState(
+          duration: Duration(seconds: 30),
+        );
+        controller.beginSkipSelection('ed');
+        await pumpEventQueue();
+        expect(controller.skipSelection.value!.range, (
+          startMs: 0,
+          endMs: 30000,
+        ));
+        expect(controller.timeline.value.position, Duration.zero);
+        await controller.dispose();
+      },
+    );
+
+    test('a pending ending jump cannot seek a newly selected video', () async {
+      final controller = await createController(const Duration(minutes: 24));
+      final gate = Completer<void>();
+      controller.pauseGate = gate;
+      controller.beginSkipSelection('ed');
+      controller.setSkipContext(
+        const SkipContext(sourceKey: 'next-video', episodeNumber: 3),
+      );
+      gate.complete();
+      await pumpEventQueue();
+      expect(controller.seeks, isEmpty);
+      expect(controller.skipSelection.value, isNull);
+      expect(controller.timeline.value.position, Duration.zero);
+      await controller.dispose();
+    });
+  });
 
   group('controls', () {
     setUp(() async {

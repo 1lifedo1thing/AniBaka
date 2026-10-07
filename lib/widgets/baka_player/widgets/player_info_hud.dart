@@ -225,7 +225,7 @@ class _PlayerInfoHudState extends State<PlayerInfoHud> {
   }
 
   String _formatEnhancement(PlaybackTechnicalInfo info) {
-    if (info.appliedEnhancementPipeline == VideoEnhancementPipeline.off) {
+    if (info.appliedEnhancementPipeline == VideoEnhancementMode.off) {
       return '关闭';
     }
     return 'Anime4K · ${info.appliedEnhancementPipeline.label}';

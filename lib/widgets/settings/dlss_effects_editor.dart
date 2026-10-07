@@ -113,7 +113,7 @@ class _DlssEffectsEditorState extends State<DlssEffectsEditor> {
                   ? null
                   : (value) => setState(() => _sharpness = value),
             ),
-            const Text('增强轮廓对比，0% 关闭；应用时无需重建模型。锐化不会恢复片源中缺失的细节。'),
+            const Text('按局部对比度锐化，限制轮廓光晕并抑制细小噪点；0% 关闭。锐化不会恢复片源中缺失的细节。'),
             const SizedBox(height: 16),
             DropdownButtonFormField<int>(
               initialValue: _maxHeight,
@@ -167,7 +167,7 @@ class _DlssEffectsEditorState extends State<DlssEffectsEditor> {
                   : (value) => setState(() => _comparison = value),
             ),
             const Text(
-              '保留细节请用 1080p 上限，720p 会先缩小较大的片源。超分开关或处理尺寸变化需要重新初始化；强度仅更新 NR。播放器开关保留当前模型以便快速恢复，关闭实验室总开关可释放显存。',
+              '保留细节请用 1080p 上限，720p 会先缩小较大的片源。超分开关或处理尺寸变化需要重新初始化；NR 仅在开启时加载，关闭后释放模型。播放器开关保留当前模型以便快速恢复，关闭实验室总开关可释放显存。',
             ),
             const SizedBox(height: 12),
             Wrap(

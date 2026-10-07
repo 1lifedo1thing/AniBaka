@@ -51,11 +51,20 @@ class AdapterRegistry {
       factory: () => _createBundledRuleAdapter('akianime'),
     ),
     AdapterDescriptor(
-      key: 'anime7',
-      displayName: 'Anime7',
+      key: '7sefun',
+      displayName: '七色番',
+      idPattern: r'/voddetail/(\d+)\.html',
       icon: Icons.movie_creation_outlined,
       color: const Color(0xFF26C6DA),
-      factory: () => _createBundledRuleAdapter('anime7'),
+      factory: () => _createBundledRuleAdapter('7sefun'),
+    ),
+    AdapterDescriptor(
+      key: '2kdm',
+      displayName: 'MuteFun',
+      idPattern: r'/voddetail/(\d+)\.html',
+      icon: Icons.smart_display_rounded,
+      color: const Color(0xFF42A5F5),
+      factory: () => _createBundledRuleAdapter('2kdm'),
     ),
     AdapterDescriptor(
       key: 'dm84',
@@ -79,6 +88,14 @@ class AdapterRegistry {
       icon: Icons.favorite_rounded,
       color: const Color(0xFFEC407A),
       factory: () => _createBundledRuleAdapter('girigirilove'),
+    ),
+    AdapterDescriptor(
+      key: 'girigirilove_beta',
+      displayName: 'GirigiriLove Beta',
+      idPattern: r'/detail/(\d+)',
+      icon: Icons.favorite_rounded,
+      color: const Color(0xFFEC407A),
+      factory: () => _createBundledRuleAdapter('girigirilove_beta'),
     ),
     AdapterDescriptor(
       key: 'lm6',

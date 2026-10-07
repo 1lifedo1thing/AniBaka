@@ -1,3 +1,4 @@
+import 'package:baka/services/source/rule_repository_service.dart';
 import 'package:baka/core/account_session.dart';
 import 'package:baka/models/app_user.dart';
 import 'dart:async';
@@ -522,13 +523,18 @@ class _TvMyPageState extends State<TvMyPage> {
           subtitle: '历史与追番仅存本地',
           color: Colors.grey,
         ),
-        _buildStatsCard(
-          icon: Icons.extension_rounded,
-          title: '源管理',
-          value: '管理',
-          subtitle: '启用/添加番剧视频源',
-          color: Colors.orangeAccent,
-          onPressed: () => NavigationService.toSourceManagement(context),
+        ListenableBuilder(
+          listenable: ruleRepository,
+          builder: (context, _) => _buildStatsCard(
+            icon: Icons.extension_rounded,
+            title: '源管理',
+            value: ruleRepository.updateCount > 0 ? '有更新' : '管理',
+            subtitle: ruleRepository.updateCount > 0
+                ? '${ruleRepository.updateCount} 个源待更新'
+                : '启用/添加番剧视频源',
+            color: Colors.orangeAccent,
+            onPressed: () => NavigationService.toSourceManagement(context),
+          ),
         ),
         _buildStatsCard(
           icon: Icons.alt_route_rounded,

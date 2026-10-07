@@ -22,7 +22,6 @@ import 'package:baka/services/source/source_repository.dart';
 import 'package:baka/services/torrent/torrent_service.dart';
 import 'package:baka/source/adapter_base.dart';
 import 'package:baka/source/source_registry.dart';
-import 'package:baka/utils/bgm_utils.dart';
 
 /// 播放器业务逻辑服务
 ///
@@ -39,10 +38,10 @@ class PlaybackContent {
   }) : _request = request.copyWith() {
     if (!isLocalSource) {
       bgmInfo = BgmInfo.fromData(data);
-      bgmDetailData = asMap(data['bgmDetailData']);
+      bgmDetailData = data['bgmDetailData'] as Map<String, dynamic>?;
       final embeddedEpisodes = bgmDetailData?['episodes'];
       if (embeddedEpisodes is List) {
-        bgmEpisodes = asMapList(embeddedEpisodes);
+        bgmEpisodes = embeddedEpisodes.cast<Map<String, dynamic>>();
         _bgmEpisodesLoaded = true;
       }
       // Auto matching starts before loadDetail. Keep the desired episode even
@@ -165,11 +164,10 @@ class PlaybackContent {
   String? get coverImageUrl => resolveCoverImage(data, bgmInfo: bgmInfo);
 
   String? _logoUrl;
-  String? _airDate;
   String get logoUrl => _logoUrl ?? AnimeDetailViewData.resolveLogoUrl(data);
 
   /// A fresh projection for old views/search sheets; never shared writable state.
-  Map<String, dynamic> buildSourceSeedData() => {
+  Map<String, dynamic> buildDetailData() => {
     ...data,
     'source': request.source,
     if (bgmInfo.subjectId != null) 'bgmId': bgmInfo.subjectId,
@@ -177,23 +175,6 @@ class PlaybackContent {
     if (coverImageUrl != null) 'bgmImageUrl': coverImageUrl,
     if (bgmDetailData != null) 'bgmDetailData': bgmDetailData,
     if (logoUrl.isNotEmpty) 'logoUrl': logoUrl,
-    if (_airDate != null) 'airDate': _airDate,
-  };
-
-  Map<String, dynamic> buildLegacyData() => {
-    ...data,
-    'source': request.source,
-    'videoList': videoList,
-    'sourceNames': sourceNames,
-    'currPlayIndex': currPlayIndex,
-    'currUrl': currUrl,
-    if (request.httpHeaders != null) 'httpHeaders': request.httpHeaders,
-    if (bgmInfo.subjectId != null) 'bgmId': bgmInfo.subjectId,
-    if (bgmInfo.score != null) 'score': bgmInfo.score,
-    if (coverImageUrl != null) 'bgmImageUrl': coverImageUrl,
-    if (bgmDetailData != null) 'bgmDetailData': bgmDetailData,
-    if (logoUrl.isNotEmpty) 'logoUrl': logoUrl,
-    if (_airDate != null) 'airDate': _airDate,
   };
 
   PlaybackMediaInfo get initialMediaInfo => PlaybackMediaInfo(
@@ -337,12 +318,8 @@ class PlaybackContent {
       videoList,
       sourceNames: sourceNames,
       preferredEpisodeIndex:
-          toInt(
-            explicitEpisodeIndex ?? remembered?.episodeIndex ?? currPlayIndex,
-          ) ??
-          0,
-      preferredLineIndex:
-          toInt(explicitLineIndex ?? remembered?.lineIndex ?? currUrl) ?? 1,
+          explicitEpisodeIndex ?? remembered?.episodeIndex ?? currPlayIndex,
+      preferredLineIndex: explicitLineIndex ?? remembered?.lineIndex ?? currUrl,
     );
   }
 
@@ -598,8 +575,6 @@ class PlaybackContent {
       bgmDetailData = detail;
       final resolvedLogo = AnimeDetailViewData.resolveLogoUrl(animeDetail);
       if (resolvedLogo.isNotEmpty) _logoUrl = resolvedLogo;
-      final airDate = BgmUtils.formatPlainDate(detail['date']);
-      if (airDate != null) _airDate = airDate;
       return detail;
     } catch (e) {
       debugPrint('获取 BGM 放映信息失败: $e');

@@ -62,6 +62,4 @@ class RuleHubItem {
   final List<String> tags;
 
   bool get hasResolvableConfig => file.isNotEmpty;
-  String get displayVersion => version.toString();
-  String get installKey => id;
 }

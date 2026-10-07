@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:baka/source/hls/hls_ad_filter.dart';
+import 'package:baka/source/hls/hls_ts_prefix.dart';
 import 'package:baka/source/hls/hls_master_playlist.dart';
 import 'package:baka/source/hls/mpeg_ts_fingerprint.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -104,6 +106,83 @@ seg0.ts
 final _baseUri = Uri.parse('https://vip.example/20260906/35899/index.m3u8');
 
 void main() {
+  group('HLS TS prefix', () {
+    test('removes an image prefix split across network chunks', () async {
+      final wrapped = Uint8List.fromList([
+        137,
+        80,
+        78,
+        71,
+        13,
+        10,
+        26,
+        10,
+        ...List.filled(459, 0),
+        ...contentPrefixBytes,
+      ]);
+      final offsets = <int>[];
+      final output = await HlsTsPrefix.strip(
+        Stream.fromIterable([
+          wrapped.sublist(0, 3),
+          wrapped.sublist(3, 800),
+          wrapped.sublist(800, 1000),
+          wrapped.sublist(1000),
+        ]),
+        onTransportStream: offsets.add,
+      ).expand((bytes) => bytes).toList();
+      expect(offsets, [467]);
+      expect(output, contentPrefixBytes);
+    });
+
+    test('plain transport streams retain every byte', () async {
+      final offsets = <int>[];
+      final output = await HlsTsPrefix.strip(
+        Stream.value(contentPrefixBytes),
+        onTransportStream: offsets.add,
+      ).expand((bytes) => bytes).toList();
+      expect(offsets, [0]);
+      expect(output, contentPrefixBytes);
+    });
+
+    test(
+      'short and unknown responses pass through without truncation',
+      () async {
+        for (final size in [0, 16, HlsTsPrefix.probeBytes * 2]) {
+          final bytes = Uint8List(size);
+          final output = await HlsTsPrefix.strip(
+            Stream.value(bytes),
+            onTransportStream: (_) => fail('not a transport stream'),
+          ).expand((bytes) => bytes).toList();
+          expect(output, bytes);
+        }
+      },
+    );
+
+    test(
+      'stops probing at the limit and streams later chunks unchanged',
+      () async {
+        final prefix = Uint8List(HlsTsPrefix.probeBytes);
+        final stream = HlsTsPrefix.strip(
+          Stream.fromIterable([prefix, contentPrefixBytes]),
+          onTransportStream: (_) => fail('must not search the entire segment'),
+        );
+        expect(await stream.expand((bytes) => bytes).toList(), [
+          ...prefix,
+          ...contentPrefixBytes,
+        ]);
+      },
+    );
+
+    test('cancelling downstream cancels the upstream stream', () async {
+      final cancelled = Completer<void>();
+      final source = StreamController<Uint8List>(onCancel: cancelled.complete);
+      source.add(contentPrefixBytes);
+      await HlsTsPrefix.strip(source.stream, onTransportStream: (_) {}).first;
+      await cancelled.future;
+      await source.close();
+    });
+  });
+
   group('ad filtering', () {
     test('删除整组异编码分片，保留其余分片与清单结构', () async {
       final manifest = _build([
@@ -345,7 +424,10 @@ void main() {
 
   group('master playlists', () {
     test('解析变体：地址按主清单地址解析，属性缺失不致命', () {
-      final variants = HlsMasterPlaylist.variants(_multiVariant, _baseUri);
+      final variants = HlsMasterPlaylist.variants(
+        _multiVariant,
+        _baseUri,
+      ).toList();
 
       // I-FRAME 变体不算在内。
       expect(variants, hasLength(3));
@@ -366,6 +448,30 @@ void main() {
       expect(selected, isNotNull);
       expect(selected!.uri.toString(), endsWith('1080p/index.m3u8'));
       expect(selected.label, '1920x816@2000kbps');
+    });
+
+    test('BANDWIDTH is distinct from AVERAGE-BANDWIDTH', () {
+      const manifest =
+          '#EXTM3U\n'
+          '#EXT-X-STREAM-INF:AVERAGE-BANDWIDTH=100000,BANDWIDTH=2000000\n'
+          'high.m3u8\n'
+          '#EXT-X-STREAM-INF:BANDWIDTH=1000000\n'
+          'low.m3u8\n';
+      expect(
+        HlsMasterPlaylist.selectVariant(manifest, _baseUri)!.uri.path,
+        endsWith('/high.m3u8'),
+      );
+    });
+
+    test('a missing variant URI is not borrowed from a later variant', () {
+      const manifest =
+          '#EXTM3U\n'
+          '#EXT-X-STREAM-INF:BANDWIDTH=2000000\n'
+          '#EXT-X-STREAM-INF:BANDWIDTH=1000000\n'
+          'low.m3u8\n';
+      final selected = HlsMasterPlaylist.selectVariant(manifest, _baseUri)!;
+      expect(selected.bandwidth, 1000000);
+      expect(HlsMasterPlaylist.variants(manifest, _baseUri), hasLength(1));
     });
 
     test('带独立音轨的清单不接管，返回 null', () {

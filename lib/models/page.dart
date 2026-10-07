@@ -1,5 +1,3 @@
-import 'package:baka/utils/json_values.dart';
-
 /// Shared pagination data; items are passed through without copying.
 typedef PageData<T> = ({List<T> list, int total, int page, int pageSize});
 
@@ -8,15 +6,21 @@ PageData<T> parsePage<T>(
   T Function(Map<String, dynamic>) parseItem,
 ) => (
   list: parseList(json['list'], parseItem),
-  total: toInt(json['total']) ?? 0,
-  page: toInt(json['page']) ?? 1,
-  pageSize: toInt(json['page_size']) ?? 20,
+  total: json['total'] as int,
+  page: json['page'] as int,
+  pageSize: json['page_size'] as int,
 );
 
 List<T> parseList<T>(
   Object? value,
   T Function(Map<String, dynamic>) parseItem,
-) => (value as List<dynamic>? ?? const [])
-    .whereType<Map<String, dynamic>>()
-    .map(parseItem)
-    .toList(growable: false);
+) {
+  // Go serializes an empty nil slice as null.
+  final items = value as List<dynamic>?;
+  if (items == null || items.isEmpty) return const [];
+  return List.generate(
+    items.length,
+    (index) => parseItem(items[index] as Map<String, dynamic>),
+    growable: false,
+  );
+}

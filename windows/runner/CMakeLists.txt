@@ -42,11 +42,5 @@ target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
 
-# Offline video frames stay in native pipes instead of the Flutter UI isolate.
-add_executable(baka_dlss_pipeline "dlss_pipeline.cpp")
-apply_standard_settings(baka_dlss_pipeline)
-target_compile_definitions(baka_dlss_pipeline PRIVATE "NOMINMAX")
-add_dependencies(${BINARY_NAME} baka_dlss_pipeline)
-
+# Shared GPU backend for the embedded media_kit renderer.
 add_subdirectory(dlss_realtime)
-add_dependencies(${BINARY_NAME} baka_dlss_realtime)

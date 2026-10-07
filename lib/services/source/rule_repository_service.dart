@@ -11,7 +11,6 @@ import 'package:baka/models/rule_hub.dart';
 import 'package:baka/services/source/source_codec.dart';
 import 'package:baka/services/source/source_repository.dart';
 import 'package:baka/source/source_registry.dart';
-import 'package:baka/source/store/bundled_rule_store.dart';
 
 enum RuleInstallResult { added, updated, failed }
 
@@ -23,9 +22,54 @@ typedef RuleInstallInfo = ({CustomSourceConfig? source, InstallStatus status});
 late RuleRepositoryService ruleRepository;
 
 class RuleRepositoryService extends ChangeNotifier {
-  RuleRepositoryService(this.adapters, this.catalog);
+  RuleRepositoryService(this.adapters, this.catalog) {
+    catalog.addListener(_rebuildCatalog);
+  }
   final SourceAdapterService adapters;
   final SourceCatalog catalog;
+  List<RuleHubIndex> _indices = const [];
+  RuleHubCatalog hubCatalog = const RuleHubCatalog.empty();
+  final Set<String> _offlineSubscriptions = {};
+  bool _disposed = false;
+  int _fetchGeneration = 0;
+  Future<void>? _checking;
+  Future<void> _installQueue = Future.value();
+  DateTime? _lastCheck;
+
+  int get updateCount => hubCatalog.updates.length;
+  bool get usingCachedIndices =>
+      _offlineSubscriptions.any(subscriptions.contains);
+
+  void _rebuildCatalog() {
+    if (_disposed) return;
+    hubCatalog = RuleHubCatalog.build(_indices, this);
+    notifyListeners();
+  }
+
+  /// Called after startup and on resume. Never blocks launching the app.
+  Future<void> checkForUpdates() {
+    if (_disposed) return Future.value();
+    if (_checking != null) return _checking!;
+    final lastCheck = _lastCheck;
+    if (lastCheck != null && DateTime.now().difference(lastCheck) < _cacheTtl) {
+      return Future.value();
+    }
+    return _checking = _checkForUpdates().whenComplete(() => _checking = null);
+  }
+
+  Future<void> _checkForUpdates() async {
+    try {
+      await adapters.init();
+      if (_disposed) return;
+      if (_indices.isEmpty) {
+        _indices = [for (final url in subscriptions) ?_loadPersistedIndex(url)];
+        _rebuildCatalog();
+      }
+      await fetchAll();
+    } catch (error) {
+      debugPrint('[RuleHub] Update check failed: $error');
+    }
+  }
 
   static const String directSubscription =
       'https://raw.githubusercontent.com/AniBakaBaka/AniBakaRule/main/index.json';
@@ -58,6 +102,8 @@ class RuleRepositoryService extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
+    catalog.removeListener(_rebuildCatalog);
     _dio.close(force: true);
     _memoryCache.clear();
     super.dispose();
@@ -86,6 +132,7 @@ class RuleRepositoryService extends ChangeNotifier {
     final current = subscriptions;
     if (current.contains(value)) return false;
     current.add(value);
+    _lastCheck = null;
     await Instances.sp.setStringList(_subscriptionsKey, current);
     notifyListeners();
     return true;
@@ -95,14 +142,20 @@ class RuleRepositoryService extends ChangeNotifier {
     final value = url.trim();
     final current = subscriptions;
     if (!current.remove(value)) return false;
+    _lastCheck = null;
     _memoryCache.remove(value);
+    _indices = _indices.where((index) => index.sourceUrl != value).toList();
+    _offlineSubscriptions.remove(value);
     await Instances.sp.setStringList(_subscriptionsKey, current);
     await Instances.sp.remove('$_cacheKeyPrefix$value');
-    notifyListeners();
+    _rebuildCatalog();
     return true;
   }
 
   Future<List<RuleHubIndex>> fetchAll({bool forceRefresh = false}) async {
+    final generation = ++_fetchGeneration;
+    await adapters.init();
+    if (_disposed) return const [];
     final results = await Future.wait([
       for (final url in subscriptions)
         fetchIndex(url, forceRefresh: forceRefresh).then<RuleHubIndex?>(
@@ -113,7 +166,16 @@ class RuleRepositoryService extends ChangeNotifier {
           },
         ),
     ]);
-    return results.whereType<RuleHubIndex>().toList(growable: false);
+    final indices = results.whereType<RuleHubIndex>().toList(growable: false);
+    if (!_disposed && generation == _fetchGeneration) {
+      final active = subscriptions.toSet();
+      _indices = indices
+          .where((index) => active.contains(index.sourceUrl))
+          .toList();
+      _lastCheck = DateTime.now();
+      _rebuildCatalog();
+    }
+    return indices;
   }
 
   Future<RuleHubIndex> fetchIndex(String url, {bool forceRefresh = false}) {
@@ -122,11 +184,13 @@ class RuleRepositoryService extends ChangeNotifier {
       try {
         final body = await _getString(url, forceRefresh: forceRefresh);
         final index = _parseIndex(body, url);
+        _offlineSubscriptions.remove(url);
         if (!local && subscriptions.contains(url)) {
           await Instances.sp.setString('$_cacheKeyPrefix$url', body);
         }
         return index;
       } catch (_) {
+        _offlineSubscriptions.add(url);
         final persisted = local ? null : _loadPersistedIndex(url);
         if (persisted != null) return persisted;
         rethrow;
@@ -166,35 +230,53 @@ class RuleRepositoryService extends ChangeNotifier {
       );
       await adapters.init();
 
-      if (AdapterRegistry.isBuiltinSource(item.id)) {
-        if (!await catalog.updateBuiltinSource(item.id, config)) {
-          return RuleInstallResult.failed;
-        }
-        await _saveInstalledVersion(item);
-        return RuleInstallResult.updated;
-      }
-
-      final existing = catalog.customSourceById(item.id);
-      final now = DateTime.now();
-      final next = existing == null
-          ? config.copyWith(updatedAt: now)
-          : config.copyWith(
-              enabled: existing.enabled,
-              createdAt: existing.createdAt,
-              updatedAt: now,
-            );
-      final installed = existing == null
-          ? await catalog.addCustomSource(next)
-          : await catalog.updateCustomSource(next);
-      if (!installed) return RuleInstallResult.failed;
-      await _saveInstalledVersion(item);
-      return existing == null
-          ? RuleInstallResult.added
-          : RuleInstallResult.updated;
+      // Downloads may overlap, but each config and its revision must finish
+      // saving before the next install reads or changes the catalog.
+      final pending = _installQueue.then((_) => _installResolved(item, config));
+      _installQueue = pending.then<void>(
+        (_) {},
+        onError: (Object error, StackTrace stack) {},
+      );
+      return await pending;
     } catch (error) {
       debugPrint('[RuleHub] Failed to install ${item.name}: $error');
       return RuleInstallResult.failed;
     }
+  }
+
+  Future<RuleInstallResult> _installResolved(
+    RuleHubItem item,
+    CustomSourceConfig config,
+  ) async {
+    if (AdapterRegistry.isBuiltinSource(item.id)) {
+      if (!await catalog.updateBuiltinSource(
+        item.id,
+        config,
+        revision: item.version,
+      )) {
+        return RuleInstallResult.failed;
+      }
+      return RuleInstallResult.updated;
+    }
+
+    final existing = catalog.customSourceById(item.id);
+    final now = DateTime.now();
+    final next = existing == null
+        ? config.copyWith(updatedAt: now)
+        : config.copyWith(
+            enabled: existing.enabled,
+            createdAt: existing.createdAt,
+            updatedAt: now,
+          );
+    final installed = existing == null
+        ? await catalog.addCustomSource(next)
+        : await catalog.updateCustomSource(next);
+    if (!installed) return RuleInstallResult.failed;
+    await _saveInstalledVersion(item);
+    _rebuildCatalog();
+    return existing == null
+        ? RuleInstallResult.added
+        : RuleInstallResult.updated;
   }
 
   Map<RuleHubItem, RuleInstallInfo> inspectItems(Iterable<RuleHubItem> items) {
@@ -204,9 +286,7 @@ class RuleRepositoryService extends ChangeNotifier {
       final source = builtin
           ? catalog.builtinSourceById(item.id)
           : catalog.customSourceById(item.id);
-      final installedVersion =
-          Instances.sp.getInt(SourceCatalog.installedVersionKey(item.id)) ??
-          (builtin ? BundledRuleStore.versionFor(item.id) : 0);
+      final installedVersion = catalog.installedVersionFor(item.id);
       result[item] = (
         source: source,
         status: source == null
@@ -288,4 +368,95 @@ class RuleRepositoryService extends ChangeNotifier {
     final uri = Uri.tryParse(url);
     return uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
   }
+}
+
+class RuleHubCatalog {
+  final Map<String, RuleHubEntry> installedBySourceId;
+  final List<RuleHubEntry> available;
+  final List<RuleHubEntry> installable;
+  final List<RuleHubEntry> updates;
+
+  const RuleHubCatalog.empty()
+    : installedBySourceId = const {},
+      available = const [],
+      installable = const [],
+      updates = const [];
+
+  RuleHubCatalog({
+    required this.installedBySourceId,
+    required this.available,
+    required this.installable,
+    required this.updates,
+  });
+
+  factory RuleHubCatalog.build(
+    List<RuleHubIndex> indices,
+    RuleRepositoryService repo,
+  ) {
+    final rawRules = <({RuleHubItem item, String indexUrl})>[
+      for (final index in indices)
+        for (final item in index.rules) (item: item, indexUrl: index.sourceUrl),
+    ];
+    if (rawRules.isEmpty) return const RuleHubCatalog.empty();
+
+    final inspected = repo.inspectItems(rawRules.map((rule) => rule.item));
+    final installed = <String, RuleHubEntry>{};
+    final available = <String, RuleHubEntry>{};
+
+    for (final raw in rawRules) {
+      final info = inspected[raw.item]!;
+      final rule = RuleHubEntry(
+        item: raw.item,
+        indexUrl: raw.indexUrl,
+        status: info.status,
+      );
+      final sourceId = info.source?.id;
+      if (sourceId != null) {
+        final current = installed[sourceId];
+        if (current == null || current.item.version < rule.item.version) {
+          installed[sourceId] = rule;
+        }
+        continue;
+      }
+
+      final key = rule.catalogKey;
+      final current = available[key];
+      if (current == null || current.item.version < rule.item.version) {
+        available[key] = rule;
+      }
+    }
+
+    final availableRules = List<RuleHubEntry>.unmodifiable(available.values);
+    return RuleHubCatalog(
+      installedBySourceId: Map<String, RuleHubEntry>.unmodifiable(installed),
+      available: availableRules,
+      updates: List<RuleHubEntry>.unmodifiable(
+        installed.values.where(
+          (rule) =>
+              rule.status == InstallStatus.updateAvailable &&
+              rule.item.hasResolvableConfig,
+        ),
+      ),
+      installable: List<RuleHubEntry>.unmodifiable(
+        availableRules.where((rule) => rule.item.hasResolvableConfig),
+      ),
+    );
+  }
+}
+
+class RuleHubEntry {
+  final RuleHubItem item;
+  final String indexUrl;
+  final InstallStatus status;
+
+  const RuleHubEntry({
+    required this.item,
+    required this.indexUrl,
+    required this.status,
+  });
+
+  String get catalogKey =>
+      '${item.id}\n${item.name}\n${item.baseUrl ?? ''}\n${item.file}';
+
+  String get operationKey => '$indexUrl\n${item.id}';
 }

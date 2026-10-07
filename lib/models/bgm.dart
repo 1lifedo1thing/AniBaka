@@ -54,7 +54,7 @@ class BgmSubjectInfo {
 String? _readBgmImageUrl(Map data) {
   final detail = data['bgmDetailData'] as Map?;
   return trimmed(data['bgmImageUrl']) ??
-      BgmUtils.pickImageUrl(detail?['images']);
+      trimmed((detail?['images'] as Map?)?['large']);
 }
 
 String? _readContentImage(dynamic content) {
@@ -80,15 +80,14 @@ List<Map<String, dynamic>> convertBgmSubjectsToAppFormat(
   for (final item in items) {
     final subject = trending ? item['subject'] as Map<String, dynamic> : item;
 
-    final id = toInt(subject['id']);
-    if (id == null || id <= 0) continue;
+    final id = subject['id'] as int;
     final nameCn = trimmed(subject[trending ? 'nameCN' : 'name_cn']);
     final name = trimmed(subject['name']);
     final title = nameCn ?? name;
     if (title == null) continue;
 
-    final imageUrl = BgmUtils.pickImageUrl(subject['images']) ?? '';
-    final rating = subject['rating'];
+    final imageUrl = (subject['images'] as Map)['large'] as String;
+    final rating = subject['rating'] as Map;
     final converted = <String, dynamic>{
       if (!compact) 'id': id,
       'title': title,
@@ -101,7 +100,7 @@ List<Map<String, dynamic>> convertBgmSubjectsToAppFormat(
       if (!compact) 'time': trimmed(subject['date']) ?? '',
       'bgmId': id,
       'score': BgmUtils.extractScore(rating) ?? 0.0,
-      if (!compact) 'rank': toInt(rating is Map ? rating['rank'] : null) ?? 0,
+      if (!compact) 'rank': rating['rank'] as int,
       if (!compact) 'summary': trimmed(subject['summary']) ?? '',
       if (!compact) 'eps': subject['eps'] ?? subject['total_episodes'] ?? 0,
       'source': 'bgm',

@@ -1,4 +1,3 @@
-import 'package:baka/utils/reg_utils.dart';
 import 'package:baka/models/bgm.dart';
 import 'package:baka/utils/json_values.dart';
 import 'package:flutter/foundation.dart';
@@ -357,7 +356,7 @@ String? _scoreCacheKey(String bgmId, String title) {
   if (subjectId != null && subjectId > 0) return 'bgm_score_$subjectId';
 
   final clean = title.replaceAll(_spaces, ' ').trim();
-  final normalized = keepTitleUnits(RegUtils.extractBaseTitle(clean));
+  final normalized = keepTitleUnits(extractBaseTitle(clean));
   if (normalized.isEmpty) return null;
   final season = extractSeason(clean);
   return season == null

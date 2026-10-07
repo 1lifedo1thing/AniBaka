@@ -41,7 +41,7 @@ Baka 是使用 Flutter 开发的多端媒体客户端，通过规则驱动的视
 - 本地播放历史及登录后的历史同步
 - Windows、Android、macOS、iOS 和 Android TV 界面
 - Windows Anime4K 实时画质增强
-- Windows [DLSS 5 实验性视频增强](docs/dlss5-video-enhancement.md)，实验室开关可为所有内置播放启用 NVIDIA 神经渲染、2 倍超分与帧生成，并支持独立窗口和离线转换
+- Windows [DLSS 5 实验性视频增强](docs/dlss5-video-enhancement.md)，实验室开关可为所有内置播放启用 NVIDIA 神经渲染、2 倍超分与帧生成，仅作用于内置播放器
 
 内置规则随应用打包，社区规则由
 [AniBakaRule](https://github.com/AniBakaBaka/AniBakaRule) 维护并通过规则中心获取。
@@ -131,6 +131,17 @@ fvm flutter build ios --release --no-codesign
 `fvm flutter pub get`，同时提交锁文件。两个仓库保留上游 fork 关系。
 
 ### 检查
+
+内置源与规则库使用相同的 `anx-rulehub/2` 整数 `rev`，独立于 App 版本。
+更新内置源时，从规则库同时同步规则文件和版本清单，不要单独修改版本号：
+
+```bash
+dart run tool/sync_bundled_rules.dart ../AniBakaRule
+dart run tool/sync_bundled_rules.dart ../AniBakaRule --check
+```
+
+同步结果保存在 `assets/rules/`；`index.json` 记录对应版本及内容摘要，
+测试会检查版本清单与打包内容是否匹配。规则库未登记的内置源使用 `rev: 0`。
 
 ```bash
 fvm flutter analyze

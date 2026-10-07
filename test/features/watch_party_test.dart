@@ -30,41 +30,32 @@ const _invite = WatchPartyInvite(
 class Party extends WatchPartyService {
   Party(AccountSession session) : super(session: session);
   final joined = <String>[];
+  final joining = Completer<void>();
   @override
   Future<void> joinInvite(String code, {String? nickname}) async {
     joined.add(code);
+    joining.complete();
   }
 }
 
-class _PermissionPlayer extends PlaybackController {
-  final permissions = <bool>[];
-  @override
-  Future<void> configureWatchParty({
-    required bool connected,
-    required bool canControl,
-  }) async {
-    permissions.add(canControl);
-    await super.configureWatchParty(
-      connected: connected,
-      canControl: canControl,
-    );
-  }
-}
-
-const _snapshotEnvelope = <String, dynamic>{
+Map<String, dynamic> _snapshot({
+  int revision = 1,
+  bool canControl = true,
+  int position = 0,
+}) => <String, dynamic>{
   'v': 1,
   'type': 'room.snapshot',
-  'revision': 1,
+  'revision': revision,
   'payload': <String, dynamic>{
     'roomId': 'room-1',
     'inviteCode': 'invite-1',
     'syncplayRoom': '1234567890',
     'ownerId': 'member-1',
     'selfId': 'member-1',
-    'revision': 1,
-    'serverTime': 1700000000000,
-    'playback': <String, dynamic>{'position': 0, 'paused': true},
-    'media': <String, dynamic>{
+    'revision': revision,
+    'serverTime': 0,
+    'playback': <String, dynamic>{'position': position, 'paused': true},
+    'media': const <String, dynamic>{
       'bgmSubjectId': 1,
       'episodeIndex': 0,
       'title': 'Show',
@@ -76,7 +67,7 @@ const _snapshotEnvelope = <String, dynamic>{
         'name': 'Tester',
         'protocol': 'anibaka',
         'verified': true,
-        'controller': true,
+        'controller': canControl,
         'ready': false,
       },
     ],
@@ -85,10 +76,29 @@ const _snapshotEnvelope = <String, dynamic>{
 };
 
 class _Player extends PlaybackController {
+  _Player() {
+    timeline.value = timeline.value.copyWith(
+      duration: const Duration(hours: 1),
+    );
+  }
+
   int seeks = 0;
   bool failSeek = false;
   Completer<void>? seekGate;
   final seeking = Completer<void>();
+  final permissions = <bool>[];
+
+  @override
+  Future<void> configureWatchParty({
+    required bool connected,
+    required bool canControl,
+  }) async {
+    permissions.add(canControl);
+    await super.configureWatchParty(
+      connected: connected,
+      canControl: canControl,
+    );
+  }
 
   @override
   Future<void> play({bool remote = false}) async {
@@ -114,46 +124,6 @@ class _Player extends PlaybackController {
   }
 }
 
-// The service and socket are real. Only native player I/O is replaced by a
-// deterministic gate so every run receives the same burst while seek is busy.
-class _BurstPlayer extends PlaybackController {
-  final entered = Completer<void>();
-  final release = Completer<void>();
-  final finished = Completer<void>();
-  @override
-  Future<void> seek(
-    Duration position, {
-    bool remote = false,
-    bool fromSlider = false,
-  }) async {
-    if (!entered.isCompleted) {
-      entered.complete();
-      await release.future;
-    }
-    await super.seek(position, remote: remote);
-    if (position.inSeconds == 30 && !finished.isCompleted) {
-      finished.complete();
-    }
-  }
-}
-
-String _snapshot(int revision) => jsonEncode({
-  'type': 'room.snapshot',
-  'payload': {
-    'roomId': 'room',
-    'inviteCode': 'code',
-    'syncplayRoom': 'room',
-    'ownerId': 'owner',
-    'selfId': 'viewer',
-    'revision': revision,
-    'serverTime': 0,
-    'playback': {'position': revision * 10, 'paused': true, 'doSeek': false},
-    'media': {'episodeIndex': 0, 'title': 'Show', 'duration': 7200},
-    'members': [],
-    'chat': [],
-  },
-});
-
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -161,7 +131,6 @@ void main() {
     setUp(() async {
       SharedPreferences.setMockInitialValues({});
       Instances.sp = await SharedPreferences.getInstance();
-      configureTestServices();
     });
 
     test(
@@ -289,7 +258,6 @@ void main() {
         );
 
         final joining = service.joinInvite('invite-1', nickname: 'Tester');
-        await Future<void>.delayed(Duration.zero);
         expect(
           service.state.value.status,
           WatchPartyConnectionStatus.connecting,
@@ -308,6 +276,7 @@ void main() {
     );
 
     test('disposing an old player cannot detach its replacement', () async {
+      configurePlaybackServices();
       final service = WatchPartyService(
         session: AccountSession(Instances.sp, refreshTokens: (_) async => null),
       );
@@ -344,10 +313,10 @@ void main() {
       );
 
       service.detachPlayer(oldController);
-      expect(service.hasAttachedPlayer, isTrue);
+      expect(service.currentMedia, isNotNull);
 
       service.detachPlayer(newController);
-      expect(service.hasAttachedPlayer, isFalse);
+      expect(service.currentMedia, isNull);
       oldContent.dispose();
       newContent.dispose();
       await oldController.dispose();
@@ -363,7 +332,7 @@ void main() {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
       party = Party(AccountSession(prefs, refreshTokens: (_) async => null));
-      stream = StreamController<Uri>();
+      stream = StreamController<Uri>(sync: true);
       links = WatchPartyLinks(party, incoming: stream.stream)
         ..initializeLinks();
     });
@@ -374,10 +343,9 @@ void main() {
     });
     test('a cold link waits for navigation readiness', () async {
       stream.add(Uri.parse('anibaka://watch/invite-1'));
-      await Future<void>.delayed(Duration.zero);
       expect(party.joined, isEmpty);
       links.markReady();
-      await Future<void>.delayed(Duration.zero);
+      await party.joining.future;
       expect(party.joined, ['invite-1']);
     });
     test('closing cancels queued and future links', () async {
@@ -385,7 +353,6 @@ void main() {
       await links.close();
       links.markReady();
       stream.add(Uri.parse('anibaka://watch/invite-2'));
-      await Future<void>.delayed(Duration.zero);
       expect(party.joined, isEmpty);
     });
   });
@@ -397,13 +364,13 @@ void main() {
       HttpOverrides.global = null;
       SharedPreferences.setMockInitialValues({});
       Instances.sp = await SharedPreferences.getInstance();
-      configureTestServices();
     });
     tearDownAll(() => HttpOverrides.global = testHttpOverrides);
 
     test(
       'permissions update only on change and restore after reconnect',
       () async {
+        configurePlaybackServices();
         final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
         addTearDown(() => server.close(force: true));
         final ready = [Completer<void>(), Completer<void>()];
@@ -415,7 +382,7 @@ void main() {
           socket.listen((raw) {
             final message = jsonDecode(raw as String);
             if (message['type'] == 'ping') {
-              socket.add(jsonEncode(_snapshotEnvelope));
+              socket.add(jsonEncode(_snapshot()));
             }
             if (message['type'] == 'ready.set') ready[index].complete();
           });
@@ -429,7 +396,7 @@ void main() {
           joinRoomRequest: (_, _) async =>
               'ws://${server.address.address}:${server.port}/room',
         );
-        final player = _PermissionPlayer();
+        final player = _Player();
         final content = PlaybackContent(
           sources: sourceRepository,
           collections: collections,
@@ -453,10 +420,6 @@ void main() {
           (3, false),
           (4, true),
         ]) {
-          final message =
-              jsonDecode(jsonEncode(_snapshotEnvelope)) as Map<String, dynamic>;
-          message['payload']['revision'] = revision;
-          message['payload']['members'][0]['controller'] = canControl;
           final received = Completer<void>();
           void onState() {
             if (service.state.value.snapshot?.revision == revision &&
@@ -466,10 +429,11 @@ void main() {
           }
 
           service.state.addListener(onState);
-          sockets[0].add(jsonEncode(message));
+          sockets[0].add(
+            jsonEncode(_snapshot(revision: revision, canControl: canControl)),
+          );
           await received.future.timeout(const Duration(seconds: 5));
           service.state.removeListener(onState);
-          await Future<void>.delayed(Duration.zero);
         }
         expect(player.permissions, [true, false, true]);
         await sockets[0].close();
@@ -535,7 +499,7 @@ void main() {
     setUp(() async {
       SharedPreferences.setMockInitialValues({});
       Instances.sp = await SharedPreferences.getInstance();
-      configureTestServices();
+      configurePlaybackServices();
       service = WatchPartyService(
         session: AccountSession(Instances.sp, refreshTokens: (_) async => null),
       );
@@ -549,9 +513,6 @@ void main() {
         }),
       );
       player = _Player();
-      player.timeline.value = player.timeline.value.copyWith(
-        duration: const Duration(hours: 1),
-      );
       addTearDown(() async {
         await service.dispose();
         await player.dispose();
@@ -584,38 +545,40 @@ void main() {
     }
 
     for (final seconds in [0.25, 0.3, 10.0]) {
-      test('paused drift $seconds seeks at most once', () async {
+      testWidgets('paused drift $seconds seeks at most once', (tester) async {
         attach(position: seconds);
-        await Future<void>.delayed(Duration.zero);
+        await tester.pump();
         expect(player.seeks, seconds > 0.25 ? 1 : 0);
         expect(player.core.value.playing, isFalse);
       });
     }
-    test('explicit seek applies even below the drift threshold', () async {
+    testWidgets('explicit seek applies even below the drift threshold', (
+      tester,
+    ) async {
       attach(position: 0.1, doSeek: true);
-      await Future<void>.delayed(Duration.zero);
+      await tester.pump();
       expect(player.seeks, 1);
       expect(player.timeline.value.position.inMilliseconds, 100);
     });
-    test(
+    testWidgets(
       'hard seek resumes at normal speed instead of correcting stale drift',
-      () async {
+      (tester) async {
         attach(paused: false);
-        await Future<void>.delayed(Duration.zero);
+        await tester.pump();
         expect(player.seeks, 1);
         expect(player.core.value.playing, isTrue);
         expect(player.core.value.playbackRate, 1.0);
       },
     );
     for (final localPosition in [0, 4]) {
-      test(
+      testWidgets(
         'small playing drift from $localPosition adjusts rate without seeking',
-        () async {
+        (tester) async {
           player.timeline.value = player.timeline.value.copyWith(
             position: Duration(seconds: localPosition),
           );
           attach(position: 2, paused: false);
-          await Future<void>.delayed(Duration.zero);
+          await tester.pump();
           expect(player.seeks, 0);
           expect(
             player.core.value.playbackRate,
@@ -652,9 +615,6 @@ void main() {
         attach(paused: false);
         await oldPlayer.seeking.future;
         player = _Player();
-        player.timeline.value = player.timeline.value.copyWith(
-          duration: const Duration(hours: 1),
-        );
         attach(position: 20);
         oldPlayer.seekGate!.complete();
         await Future<void>.delayed(Duration.zero);
@@ -675,7 +635,7 @@ void main() {
         addTearDown(() => HttpOverrides.global = overrides);
         SharedPreferences.setMockInitialValues({});
         Instances.sp = await SharedPreferences.getInstance();
-        configureTestServices();
+        configurePlaybackServices();
         final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
         addTearDown(() => server.close(force: true));
         final connected = Completer<WebSocket>();
@@ -684,7 +644,7 @@ void main() {
           connected.complete(socket);
           socket.listen((raw) {
             if (jsonDecode(raw as String)['type'] == 'ping') {
-              socket.add(_snapshot(1));
+              socket.add(jsonEncode(_snapshot(position: 10)));
             }
           });
         });
@@ -693,20 +653,17 @@ void main() {
             Instances.sp,
             refreshTokens: (_) async => null,
           ),
-          getInviteRequest: (_) async => const WatchPartyInvite(
-            roomId: 'room',
-            inviteCode: 'code',
-            inviteUrl: '',
-            syncplayHost: '',
-            syncplayPort: 0,
-            syncplayRoom: 'room',
-            title: 'Show',
-            episodeIndex: 0,
-          ),
+          getInviteRequest: (_) async => _invite,
           joinRoomRequest: (_, _) async =>
               'ws://${server.address.address}:${server.port}',
         );
-        final player = _BurstPlayer();
+        final player = _Player()..seekGate = Completer<void>();
+        final finished = Completer<void>();
+        player.timeline.addListener(() {
+          if (player.timeline.value.position.inSeconds == 30) {
+            finished.complete();
+          }
+        });
         player.timeline.value = player.timeline.value.copyWith(
           duration: const Duration(hours: 2),
         );
@@ -726,7 +683,7 @@ void main() {
           await content.dispose();
         });
         await service.joinInvite('code');
-        await player.entered.future;
+        await player.seeking.future;
         final received = Completer<void>();
         service.state.addListener(() {
           if (service.state.value.snapshot?.revision == 3 &&
@@ -736,11 +693,11 @@ void main() {
         });
         final socket = await connected.future;
         for (var i = 2; i <= 3; i++) {
-          socket.add(_snapshot(i));
+          socket.add(jsonEncode(_snapshot(revision: i, position: i * 10)));
         }
         await received.future.timeout(const Duration(seconds: 10));
-        player.release.complete();
-        await player.finished.future.timeout(const Duration(seconds: 10));
+        player.seekGate!.complete();
+        await finished.future.timeout(const Duration(seconds: 10));
         expect(player.timeline.value.position.inSeconds, 30);
       },
     );

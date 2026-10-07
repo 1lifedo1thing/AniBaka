@@ -150,6 +150,9 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      Get.find<AppRuntime>().checkSourceUpdates();
+    }
     if (state == AppLifecycleState.detached) {
       _clearCacheOnExit();
     }

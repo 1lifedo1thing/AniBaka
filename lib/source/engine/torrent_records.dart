@@ -7,8 +7,8 @@ import 'package:baka/source/models/series.dart';
 import 'package:baka/source/models/source.dart';
 
 /// A normalized release row from an HTML torrent catalogue.
-class TorrentReleaseRecord {
-  const TorrentReleaseRecord({
+class _TorrentReleaseRecord {
+  const _TorrentReleaseRecord({
     required this.title,
     required this.resourceId,
     required this.animeName,
@@ -35,6 +35,15 @@ class TorrentReleaseRecord {
   final int order;
 }
 
+class _SeriesSummary {
+  _SeriesSummary(this.first);
+
+  final _TorrentReleaseRecord first;
+  final Set<String> fansubs = {};
+  String image = '';
+  int count = 0;
+}
+
 /// Rule-configured parser used by the `torrentRecords` pipeline operation.
 class TorrentRecordParser {
   TorrentRecordParser._();
@@ -58,7 +67,6 @@ class TorrentRecordParser {
     required String html,
     required Map<String, dynamic> params,
     required String baseUrl,
-    String contextUrl = '',
   }) {
     if (html.trim().isEmpty) return const <Series>[];
     final config = _configFor(params);
@@ -73,7 +81,7 @@ class TorrentRecordParser {
       needScore: false,
     );
 
-    final grouped = <String, List<TorrentReleaseRecord>>{};
+    final grouped = <String, _SeriesSummary>{};
     for (final record in records) {
       if (record.excluded ||
           (config.requireEpisodeNumber && record.episode == null)) {
@@ -84,19 +92,18 @@ class TorrentRecordParser {
           : record.title;
       final key = _normalizeKey(name);
       if (key.isEmpty) continue;
-      (grouped[key] ??= <TorrentReleaseRecord>[]).add(record);
+      final group = grouped.putIfAbsent(key, () => _SeriesSummary(record));
+      group.count++;
+      if (record.fansub.isNotEmpty) group.fansubs.add(record.fansub);
+      if (group.image.isEmpty && record.image.isNotEmpty) {
+        group.image = record.image;
+      }
     }
 
     final results = <Series>[];
-    for (final records in grouped.values) {
-      final first = records.first;
+    for (final group in grouped.values) {
+      final first = group.first;
       final name = first.animeName.isNotEmpty ? first.animeName : first.title;
-      final fansubs = <String>{};
-      var image = '';
-      for (final record in records) {
-        if (record.fansub.isNotEmpty) fansubs.add(record.fansub);
-        if (image.isEmpty && record.image.isNotEmpty) image = record.image;
-      }
       final id = config.seriesIdTemplate.isEmpty
           ? first.resourceId
           : _render(
@@ -104,8 +111,8 @@ class TorrentRecordParser {
               first,
               baseUrl,
               animeName: name,
-              count: records.length,
-              fansubs: fansubs,
+              count: group.count,
+              fansubs: group.fansubs,
             );
       if (id.trim().isEmpty) continue;
       final description = config.descriptionTemplate.isEmpty
@@ -115,15 +122,15 @@ class TorrentRecordParser {
               first,
               baseUrl,
               animeName: name,
-              count: records.length,
-              fansubs: fansubs,
+              count: group.count,
+              fansubs: group.fansubs,
             );
       results.add(
         Series(
           _absolute(id, baseUrl, base),
           name,
           description: description.isEmpty ? null : description,
-          image: image.isEmpty ? null : image,
+          image: group.image.isEmpty ? null : group.image,
         ),
       );
     }
@@ -184,13 +191,13 @@ class TorrentRecordParser {
       needScore: config.episodeIndexMode == 'number' && config.dedupeByEpisode,
       needImage: false,
     );
-    final grouped = <String, List<TorrentReleaseRecord>>{};
+    final grouped = <String, List<_TorrentReleaseRecord>>{};
     for (final record in records) {
       final name = record.sourceName.isNotEmpty
           ? record.sourceName
           : config.unknownSourceName;
       final key = _normalizeKey(name);
-      (grouped[key] ??= <TorrentReleaseRecord>[]).add(record);
+      (grouped[key] ??= <_TorrentReleaseRecord>[]).add(record);
     }
 
     final results = <Source>[];
@@ -208,22 +215,6 @@ class TorrentRecordParser {
     return results;
   }
 
-  static List<TorrentReleaseRecord> parseRecords({
-    required String html,
-    required Map<String, dynamic> params,
-    required String baseUrl,
-  }) {
-    if (html.trim().isEmpty) return const <TorrentReleaseRecord>[];
-    final config = _configFor(params);
-    final document = html_parser.parse(html);
-    return _recordsFromRows(
-      _selectRows(document, config.rowSelectors),
-      config: config,
-      baseUrl: baseUrl,
-      base: Uri.tryParse(baseUrl),
-    ).toList();
-  }
-
   static List<Element> _selectRows(dynamic root, List<String> selectors) {
     for (final selector in selectors) {
       try {
@@ -234,7 +225,7 @@ class TorrentRecordParser {
     return const <Element>[];
   }
 
-  static Iterable<TorrentReleaseRecord> _recordsFromRows(
+  static Iterable<_TorrentReleaseRecord> _recordsFromRows(
     List<Element> rows, {
     required _TorrentRecordConfig config,
     required String baseUrl,
@@ -279,7 +270,7 @@ class TorrentRecordParser {
       final sourceName = explicitSourceName.isNotEmpty
           ? explicitSourceName
           : parts.fansub;
-      yield TorrentReleaseRecord(
+      yield _TorrentReleaseRecord(
         title: title,
         resourceId: resourceId,
         animeName: parts.animeName,
@@ -377,14 +368,14 @@ class TorrentRecordParser {
   }
 
   static Source? _buildSource(
-    Iterable<TorrentReleaseRecord> records, {
+    Iterable<_TorrentReleaseRecord> records, {
     required String sourceName,
     required String expectedAnimeKey,
     required _TorrentRecordConfig config,
     required String baseUrl,
   }) {
     if (config.episodeIndexMode == 'number') {
-      final selected = <int, TorrentReleaseRecord>{};
+      final selected = <int, _TorrentReleaseRecord>{};
       for (final record in records) {
         if (record.excluded || record.resourceId.isEmpty) continue;
         if (expectedAnimeKey.isNotEmpty &&
@@ -421,7 +412,7 @@ class TorrentRecordParser {
       return Source(episodes, sourceName);
     }
 
-    final filtered = <TorrentReleaseRecord>[];
+    final filtered = <_TorrentReleaseRecord>[];
     for (final record in records) {
       if (record.excluded || record.resourceId.isEmpty) continue;
       if (config.requireEpisodeNumber && record.episode == null) continue;
@@ -444,8 +435,8 @@ class TorrentRecordParser {
   }
 
   static int _compareRecords(
-    TorrentReleaseRecord a,
-    TorrentReleaseRecord b,
+    _TorrentReleaseRecord a,
+    _TorrentReleaseRecord b,
     bool descending,
   ) {
     final ae = a.episode;
@@ -465,7 +456,7 @@ class TorrentRecordParser {
   }
 
   static String _episodeName(
-    TorrentReleaseRecord record,
+    _TorrentReleaseRecord record,
     int index,
     _TorrentRecordConfig config,
     String baseUrl,
@@ -524,7 +515,7 @@ class TorrentRecordParser {
 
   static String _render(
     String template,
-    TorrentReleaseRecord record,
+    _TorrentReleaseRecord record,
     String baseUrl, {
     String? animeName,
     int? episodeIndex,

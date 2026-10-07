@@ -1,10 +1,12 @@
 import 'dart:io';
+import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
 import 'package:test/test.dart';
 
+import 'package:baka/models/custom_source_config.dart';
 import 'package:baka/services/source/source_codec.dart';
 import 'package:baka/source/engine/rule_validator.dart';
-import 'package:baka/source/models/source_rule.dart';
 import 'package:baka/source/store/bundled_rule_store.dart';
 
 void main() {
@@ -12,7 +14,11 @@ void main() {
   final assetFiles = assetDirectory
       .listSync()
       .whereType<File>()
-      .where((file) => file.path.toLowerCase().endsWith('.json'))
+      .where(
+        (file) =>
+            file.path.toLowerCase().endsWith('.json') &&
+            file.uri.pathSegments.last != 'index.json',
+      )
       .toList(growable: false);
 
   test('all built-in assets contain valid v2 pipeline rules', () {
@@ -22,9 +28,9 @@ void main() {
       expect(decoded, isA<Map>(), reason: '$name must contain a JSON object');
 
       // Use the same parser as BundledRuleStore, without import normalization.
-      final rule = SourceRule.fromJson(
+      final rule = CustomSourceConfig.fromJson(
         Map<String, dynamic>.from(decoded as Map),
-      );
+      ).rule;
       expect(
         BundledRuleStore.builtinAssets[rule.id],
         file.path.replaceAll(r'\', '/'),
@@ -41,6 +47,29 @@ void main() {
         isTrue,
         reason: '$name invalid: ${validation.errors.join('; ')}',
       );
+    }
+  });
+
+  test('bundled revisions identify the exact shipped rule contents', () {
+    final index =
+        jsonDecode(File(BundledRuleStore.indexAsset).readAsStringSync()) as Map;
+    expect(index['format'], 'anx-rulehub/2');
+    final entries = (index['entries'] as List).cast<Map>();
+    expect(
+      entries.map((entry) => entry['key']).toSet(),
+      BundledRuleStore.builtinAssets.keys.toSet(),
+    );
+    expect(entries.length, BundledRuleStore.builtinAssets.length);
+    for (final entry in entries) {
+      final path = BundledRuleStore.builtinAssets[entry['key']]!;
+      expect(path, 'assets/rules/${entry['ref']}');
+      final body = File(path).readAsStringSync().replaceAll('\r\n', '\n');
+      expect(
+        sha256.convert(utf8.encode(body)).toString(),
+        entry['sha256'],
+        reason: '${entry['key']}: sync content and rev together',
+      );
+      expect(entry['rev'], isNonNegative);
     }
   });
 }

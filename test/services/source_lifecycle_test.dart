@@ -6,6 +6,7 @@ import 'package:baka/source/runtime/source_operation.dart';
 import 'package:baka/source/runtime/request_scheduler.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../support/ts_prefix_fixtures.dart';
 
 const _manifest =
     '#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nsegment.ts\n#EXT-X-ENDLIST\n';
@@ -72,7 +73,6 @@ void main() {
     ), filterHlsAds: false);
     releaseA.complete();
     await rejected;
-    await Future<void>.delayed(const Duration(milliseconds: 30));
     final text = (await dio.get<String>(b.url)).data!;
     final segment = text
         .split('\n')
@@ -186,8 +186,115 @@ void main() {
       await started.future;
       operation.cancel();
       await failure;
-      await Future<void>.delayed(const Duration(milliseconds: 30));
       expect(requests, 1);
+    },
+  );
+
+  test(
+    'image-named HLS serves clean TS and preserves key byte ranges',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final base = 'http://127.0.0.1:${server.port}';
+      final wrapped = [
+        137,
+        80,
+        78,
+        71,
+        13,
+        10,
+        26,
+        10,
+        ...List.filled(459, 0),
+        ...contentPrefixBytes,
+      ];
+      final requests = <({String path, String? range, String? referer})>[];
+      server.listen((request) async {
+        requests.add((
+          path: request.uri.path,
+          range: request.headers.value('range'),
+          referer: request.headers.value('referer'),
+        ));
+        final response = request.response;
+        response.headers.contentType = ContentType('image', 'webp');
+        if (request.uri.path.startsWith('/index/listres/')) {
+          response.write(
+            '#EXTM3U\n#EXT-X-TARGETDURATION:4\n'
+            '#EXT-X-KEY:METHOD=AES-128,URI="$base/key.bin"\n'
+            '#EXTINF:4,\n$base/segment.webp\n#EXT-X-ENDLIST\n',
+          );
+        } else if (request.uri.path == '/key.bin') {
+          response.statusCode = 206;
+          response.headers.set('content-range', 'bytes 2-5/16');
+          response.add([2, 3, 4, 5]);
+        } else {
+          response.contentLength = wrapped.length;
+          response.headers.set('etag', 'original-image');
+          response.add(wrapped);
+        }
+        await response.close();
+      });
+      final adapter = PipelineSourceAdapter(
+        SourceRule(
+          id: 'wrapped-ts',
+          name: 'Wrapped TS',
+          baseUrl: base,
+          directConnection: true,
+          play: [
+            const PipelineStep('template', {
+              'value': '{episodeId:raw}',
+              'stripHlsTsPrefix': true,
+            }),
+          ],
+        ),
+      );
+      final dio = Dio();
+      addTearDown(() async {
+        adapter.dispose();
+        dio.close(force: true);
+        await server.close(force: true);
+      });
+      final media = await adapter.preparePlaybackMedia((
+        url: '$base/index/listres/sample.webp?user=guest',
+        httpHeaders: {'Referer': '$base/player/'},
+      ), filterHlsAds: false);
+      expect(media.url, endsWith('/manifest.m3u8'));
+      final manifest = (await dio.get<String>(media.url)).data!;
+      final segment = manifest
+          .split('\n')
+          .firstWhere((s) => s.startsWith('http'));
+      final key = RegExp(r'URI="([^"]+)"').firstMatch(manifest)!.group(1)!;
+      final segmentResponse = await dio.get<List<int>>(
+        segment,
+        options: Options(
+          responseType: ResponseType.bytes,
+          headers: {'Range': 'bytes=10-', 'If-Range': 'original-image'},
+        ),
+      );
+      expect(segmentResponse.statusCode, 200);
+      expect(segmentResponse.headers.value('content-type'), 'video/mp2t');
+      expect(segmentResponse.headers.value('content-length'), isNull);
+      expect(segmentResponse.headers.value('content-range'), isNull);
+      expect(segmentResponse.headers.value('etag'), isNull);
+      expect(segmentResponse.data, contentPrefixBytes);
+      final keyResponse = await dio.get<List<int>>(
+        key,
+        options: Options(
+          responseType: ResponseType.bytes,
+          headers: {'Range': 'bytes=2-5'},
+        ),
+      );
+      expect(keyResponse.statusCode, 206);
+      expect(keyResponse.headers.value('content-range'), 'bytes 2-5/16');
+      expect(keyResponse.data, [2, 3, 4, 5]);
+      expect(
+        requests.firstWhere((r) => r.path == '/segment.webp').range,
+        isNull,
+      );
+      expect(
+        requests.firstWhere((r) => r.path == '/key.bin').range,
+        'bytes=2-5',
+      );
+      expect(requests.every((r) => r.referer == '$base/player/'), isTrue);
     },
   );
 }

@@ -1,7 +1,6 @@
 #pragma once
 #include <memory>
 #include <string>
-#include <vector>
 #include <cstdint>
 #include <windows.h>
 
@@ -12,27 +11,23 @@ struct RealtimeSharedTextures {
 };
 
 // Owns persistent NR/SR/FG features and a three-slot D3D12 submission ring.
-// Decoded NV12 enters once; enhanced pixels never return to system memory.
+// media_kit supplies BGRA textures; enhanced pixels stay in GPU memory.
 class RealtimeGpu {
  public:
-  RealtimeGpu(HWND window, unsigned width, unsigned height,
+  RealtimeGpu(unsigned width, unsigned height,
               const std::wstring& runtime, const std::wstring& cache,
               float intensity, unsigned scale, const std::wstring& fgRuntime,
-              double fps, const LUID* adapter = nullptr,
-              const RealtimeSharedTextures* shared = nullptr);
+              double fps, bool neuralRendering, const LUID& adapter,
+              const RealtimeSharedTextures& shared);
   ~RealtimeGpu();
   // Prepare once, then present the midpoint and real image at their deadlines.
-  bool Prepare(const std::vector<unsigned char>& nv12, bool reset, bool original);
+  bool Prepare(bool reset);
   void SetIntensity(float intensity);
   void SetFrameGenerationEnabled(bool enabled);
   void SetNeuralRenderingEnabled(bool enabled);
   bool Prepared();
   void WaitPrepared();
   bool InterpolationAllowed();
-  void Present(bool generated);
-  void Flush();
-  uint64_t CompletedFrames();
-  uint64_t PresentedFrames();
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

@@ -19,7 +19,7 @@ import 'package:baka/services/playback/danmaku_controller.dart';
 import 'package:baka/widgets/danmaku/view.dart';
 import 'package:baka/widgets/common/value_selector.dart';
 import 'controller.dart';
-import 'package:baka/utils/duration_utils.dart';
+import 'package:baka/utils/format_utils.dart';
 import 'package:ios_orientation/ios_orientation.dart';
 import 'package:screen_brightness/screen_brightness.dart';
 import 'widgets/bottom_control.dart';

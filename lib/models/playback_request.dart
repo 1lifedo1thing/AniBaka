@@ -1,3 +1,5 @@
+import 'dart:collection';
+
 import 'package:baka/models/playback_episode.dart';
 
 /// Shared handoff between matching, navigation and a playback session.
@@ -15,22 +17,21 @@ class PlaybackRequest {
     Map<String, dynamic> metadata = const {},
   }) : metadata = Map.unmodifiable(metadata);
 
-  factory PlaybackRequest.fromMap(Map data) => PlaybackRequest(
-    source: data['source'] as String? ?? '',
-    episodes: PlaybackEpisodeCatalog.episodesOf(
-      data,
-      mergeDuplicateTitles: true,
-    ),
-    episodeIndex: int.tryParse('${data['currPlayIndex']}'),
-    lineIndex: int.tryParse('${data['currUrl']}'),
-    sourceNames: (data['sourceNames'] as List?)?.cast<String>(),
-    prefetched: data['_prefetchedPlayback'] as PrefetchedMedia?,
-    httpHeaders: (data['httpHeaders'] as Map?)?.cast<String, String>(),
-    metadata: {
-      for (final key in data.keys.cast<String>())
-        if (!_typedKeys.contains(key)) key: data[key],
-    },
-  );
+  PlaybackRequest.fromMap(Map data)
+    : source = data['source'] as String? ?? '',
+      episodes = PlaybackEpisodeCatalog.episodesOf(
+        data,
+        mergeDuplicateTitles: true,
+      ),
+      episodeIndex = data['currPlayIndex'] as int?,
+      lineIndex = data['currUrl'] as int?,
+      sourceNames = (data['sourceNames'] as List?)?.cast<String>(),
+      prefetched = data['_prefetchedPlayback'] as PrefetchedMedia?,
+      httpHeaders = (data['httpHeaders'] as Map?)?.cast<String, String>(),
+      metadata = UnmodifiableMapView({
+        for (final key in data.keys.cast<String>())
+          if (!_typedKeys.contains(key)) key: data[key],
+      });
 
   /// Older cloud history stored a Bangumi ID in `id` without a source marker.
   /// It must be matched to a source instead of being queried as a site post.
